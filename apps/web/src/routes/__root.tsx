@@ -6,6 +6,10 @@ import {
 	createRootRoute,
 } from "@tanstack/react-router"
 import type { ReactNode } from "react"
+import { useEffect } from "react"
+import { initPostHog } from "~/lib/posthog"
+import { useThemeStore } from "~/stores/theme"
+import "~/styles.css"
 
 export const Route = createRootRoute({
 	head: () => ({
@@ -54,6 +58,16 @@ function RootDocument({ children }: { children: ReactNode }) {
 }
 
 function RootComponent() {
+	const dark = useThemeStore((s) => s.dark)
+
+	useEffect(() => {
+		initPostHog()
+	}, [])
+
+	useEffect(() => {
+		document.documentElement.classList.toggle("dark", dark)
+	}, [dark])
+
 	return (
 		<RootDocument>
 			<div className="min-h-screen flex flex-col">

@@ -1,0 +1,172 @@
+import { Hono } from "hono"
+import { zValidator } from "@hono/zod-validator"
+import { z } from "zod"
+import { prisma } from "@nwords/db"
+import { getCefrLevel } from "@nwords/shared"
+import { authMiddleware } from "../middleware/auth.ts"
+
+export const progressRoute = new Hono()
+	.use("*", authMiddleware)
+
+	// Get current scores and CEFR level
+	.get("/current", async (c) => {
+		const user = c.get("user")
+
+		const latestScore = await prisma.scoreHistory.findFirst({
+			where: { userId: user.id },
+			orderBy: { recordedAt: "desc" },
+		})
+
+		if (!latestScore) {
+			return c.json({
+				actualScore: 0,
+				targetScore: 0,
+				cefrLevel: null,
+				wordsToVerify: 0,
+			})
+		}
+
+		return c.json({
+			actualScore: latestScore.actualScore,
+			targetScore: latestScore.targetScore,
+			cefrLevel: getCefrLevel(latestScore.actualScore),
+			wordsToVerify: latestScore.targetScore - latestScore.actualScore,
+		})
+	})
+
+	// Get score history over time
+	.get(
+		"/history",
+		zValidator(
+			"query",
+			z.object({
+				days: z.coerce.number().min(1).max(365).default(30),
+			}),
+		),
+		async (c) => {
+			const user = c.get("user")
+			const { days } = c.req.valid("query")
+
+			const since = new Date()
+			since.setDate(since.getDate() - days)
+
+			const scores = await prisma.scoreHistory.findMany({
+				where: {
+					userId: user.id,
+					recordedAt: { gte: since },
+				},
+				orderBy: { recordedAt: "asc" },
+			})
+
+			return c.json({
+				scores: scores.map((s) => ({
+					actualScore: s.actualScore,
+					targetScore: s.targetScore,
+					cefrLevel: s.cefrLevel,
+					recordedAt: s.recordedAt.toISOString(),
+				})),
+			})
+		},
+	)
+
+	// Get vocabulary knowledge summary for a user
+	.get("/knowledge-summary", async (c) => {
+		const user = c.get("user")
+
+		const dbUser = await prisma.user.findUnique({
+			where: { id: user.id },
+			select: { targetLanguageId: true },
+		})
+
+		if (!dbUser?.targetLanguageId) {
+			return c.json({ error: "No target language set" }, 400)
+		}
+
+		// Get knowledge counts by status
+		const [knownCount, totalTested, uncertainWords] = await Promise.all([
+			prisma.userWordKnowledge.count({
+				where: { userId: user.id, known: true },
+			}),
+			prisma.userWordKnowledge.count({
+				where: { userId: user.id },
+			}),
+			prisma.userWordKnowledge.count({
+				where: {
+					userId: user.id,
+					known: false,
+					probability: { gte: 0.3, lte: 0.7 },
+				},
+			}),
+		])
+
+		return c.json({
+			knownWords: knownCount,
+			totalTested: totalTested,
+			uncertainWords,
+			targetLanguageId: dbUser.targetLanguageId,
+		})
+	})
+
+	// Get the heatmap data — knowledge state for words ranked 1-10000
+	.get(
+		"/heatmap",
+		zValidator(
+			"query",
+			z.object({
+				from: z.coerce.number().min(1).default(1),
+				to: z.coerce.number().min(1).max(10000).default(1000),
+			}),
+		),
+		async (c) => {
+			const user = c.get("user")
+			const { from, to } = c.req.valid("query")
+
+			const dbUser = await prisma.user.findUnique({
+				where: { id: user.id },
+				select: { targetLanguageId: true },
+			})
+
+			if (!dbUser?.targetLanguageId) {
+				return c.json({ error: "No target language set" }, 400)
+			}
+
+			// Get words in the rank range
+			const words = await prisma.word.findMany({
+				where: {
+					languageId: dbUser.targetLanguageId,
+					rank: { gte: from, lte: to },
+					isOffensive: false,
+				},
+				orderBy: { rank: "asc" },
+				select: { id: true, rank: true, lemma: true },
+			})
+
+			// Get user knowledge for these words
+			const wordIds = words.map((w) => w.id)
+			const knowledge = await prisma.userWordKnowledge.findMany({
+				where: {
+					userId: user.id,
+					wordId: { in: wordIds },
+				},
+				select: {
+					wordId: true,
+					known: true,
+					probability: true,
+				},
+			})
+
+			const knowledgeMap = new Map(knowledge.map((k) => [k.wordId, k]))
+
+			const cells = words.map((w) => {
+				const k = knowledgeMap.get(w.id)
+				return {
+					rank: w.rank,
+					lemma: w.lemma,
+					status: k ? (k.known ? "known" : "unknown") : "untested",
+					probability: k?.probability ?? null,
+				}
+			})
+
+			return c.json({ from, to, cells })
+		},
+	)

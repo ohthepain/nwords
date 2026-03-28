@@ -9,7 +9,25 @@
       "Bash(node -e \"const p = require\\(''/Users/paulwilkinson/projects/claude/nwords/node_modules/.pnpm/@tanstack+react-start@1.167.12_react-dom@19.2.4_react@19.2.4__react@19.2.4_vite@6.4.1_@types+_fa7nmef3fjz6s7jlhnpafm7ymq/node_modules/@tanstack/react-start/package.json''\\); console.log\\(Object.keys\\(p.exports\\).join\\(''\\\\n''\\)\\)\")",
       "Bash(node -e \"const p = require\\(''''/Users/paulwilkinson/projects/claude/nwords/node_modules/.pnpm/@tanstack+react-start@1.167.12_react-dom@19.2.4_react@19.2.4__react@19.2.4_vite@6.4.1_@types+_fa7nmef3fjz6s7jlhnpafm7ymq/node_modules/@tanstack/react-start/package.json''''\\); console.log\\(JSON.stringify\\(p.dependencies || {}, null, 2\\)\\)\")",
       "Bash(timeout 20 pnpm dev)",
-      "Bash(git remote:*)"
+      "Bash(git remote:*)",
+      "Bash(npx shadcn@latest add button input label card select separator --yes)",
+      "Bash(timeout 20 pnpm --filter @nwords/web dev)",
+      "Bash(npx dotenv:*)",
+      "Bash(timeout 15 pnpm --filter @nwords/web dev)",
+      "Bash(find /Users/paulwilkinson/projects/claude/nwords/apps/api/src/routes -type f -name *.ts)",
+      "Bash(find /Users/paulwilkinson/projects/claude/nwords/packages/auth/src -type f -name *.ts)",
+      "Bash(find /Users/paulwilkinson/projects/claude/nwords/apps/web/src/components -type f -name *.tsx)",
+      "Bash(find /Users/paulwilkinson/projects/claude/nwords/apps/web/src/routes -type f -name *.tsx)",
+      "Bash(find /Users/paulwilkinson/projects/claude/nwords/apps/web/src/lib -type f -name *.ts)",
+      "Bash(find /Users/paulwilkinson/projects/claude/nwords/apps/web/src/stores -type f -name *.ts)",
+      "Bash(find /Users/paulwilkinson/projects/claude/nwords/apps -name .env* -o -name vite.config* -o -name tsconfig*)",
+      "Bash(pnpm --filter @nwords/api test)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(ls /Users/paulwilkinson/projects/claude/nwords/apps/web/node_modules/@tanstack/react-start/dist/esm/server*)",
+      "Bash(node -e \"const m = require\\(''''@tanstack/react-start/server''''\\); console.log\\(Object.keys\\(m\\)\\)\")",
+      "Bash(find /Users/paulwilkinson/projects/claude/nwords/node_modules/@tanstack/react-start-server -name *.d.ts)",
+      "Bash(find /Users/paulwilkinson/projects/claude/nwords -path */node_modules/@tanstack/react-start-server -maxdepth 5)",
+      "Bash(find /Users/paulwilkinson/projects/claude/nwords/node_modules/.pnpm -path *start-server-core* -name *.d.ts)"
     ]
   }
 }

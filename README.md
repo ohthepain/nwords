@@ -33,6 +33,12 @@ pnpm dev
 
 Copy `.env.example` to `.env` and adjust values before the first run.
 
+### Google sign-in (optional)
+
+1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials) create an OAuth 2.0 Client ID (Web application).
+2. Under **Authorized redirect URIs**, add `http://localhost:3000/api/auth/callback/google` (and your production URL + `/api/auth/callback/google` when you deploy). It must match `BETTER_AUTH_URL`.
+3. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_AUTH_ENABLED=true` in `.env` at the repo root, then restart `pnpm dev`.
+
 ## Project Structure
 
 ```

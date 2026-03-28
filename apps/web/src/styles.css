@@ -13,7 +13,7 @@
 	--color-secondary-foreground: #171717;
 	--color-muted: #f5f5f5;
 	--color-muted-foreground: #737373;
-	--color-accent: #f5f5f5;
+	--color-accent: #f0f0f0;
 	--color-accent-foreground: #171717;
 	--color-destructive: #ef4444;
 	--color-destructive-foreground: #fafafa;
@@ -25,33 +25,40 @@
 	--color-known: #22c55e;
 	--color-unknown: #ef4444;
 	--color-uncertain: #f59e0b;
+
+	/* Brand accent — a subtle steel blue for the "precision tool" feel */
+	--color-brand: #64748b;
+	--color-brand-foreground: #ffffff;
 }
 
 @layer base {
 	.dark {
-		--color-background: #0a0a0a;
+		--color-background: #09090b;
 		--color-foreground: #fafafa;
-		--color-card: #171717;
+		--color-card: #111113;
 		--color-card-foreground: #fafafa;
-		--color-popover: #171717;
+		--color-popover: #111113;
 		--color-popover-foreground: #fafafa;
 		--color-primary: #fafafa;
-		--color-primary-foreground: #0a0a0a;
-		--color-secondary: #262626;
+		--color-primary-foreground: #09090b;
+		--color-secondary: #1a1a1e;
 		--color-secondary-foreground: #fafafa;
-		--color-muted: #262626;
-		--color-muted-foreground: #a3a3a3;
-		--color-accent: #262626;
+		--color-muted: #1a1a1e;
+		--color-muted-foreground: #a1a1aa;
+		--color-accent: #1a1a1e;
 		--color-accent-foreground: #fafafa;
 		--color-destructive: #dc2626;
 		--color-destructive-foreground: #fafafa;
-		--color-border: #262626;
-		--color-input: #262626;
-		--color-ring: #d4d4d4;
+		--color-border: #1e1e22;
+		--color-input: #1e1e22;
+		--color-ring: #d4d4d8;
 
 		--color-known: #16a34a;
 		--color-unknown: #dc2626;
 		--color-uncertain: #d97706;
+
+		--color-brand: #94a3b8;
+		--color-brand-foreground: #09090b;
 	}
 }
 
@@ -59,8 +66,70 @@
 	* {
 		@apply border-border;
 	}
+
+	html {
+		scroll-behavior: smooth;
+	}
+
 	body {
 		@apply bg-background text-foreground antialiased;
 		font-family: "Inter", system-ui, -apple-system, sans-serif;
+		font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+	}
+
+	/* Mono elements get JetBrains Mono */
+	.font-mono {
+		font-family: "JetBrains Mono", ui-monospace, monospace;
+	}
+
+	/* Selection highlight */
+	::selection {
+		background-color: var(--color-brand);
+		color: var(--color-brand-foreground);
+	}
+}
+
+/* Smooth theme transitions */
+@layer utilities {
+	.transition-theme {
+		transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+	}
+}
+
+/* Subtle gradient for hero sections */
+@layer utilities {
+	.gradient-subtle {
+		background: radial-gradient(
+			ellipse 80% 60% at 50% 0%,
+			color-mix(in srgb, var(--color-brand) 6%, transparent),
+			transparent
+		);
+	}
+}
+
+/* Score number animation */
+@keyframes countUp {
+	from {
+		opacity: 0;
+		transform: translateY(8px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+.animate-count-up {
+	animation: countUp 0.5s ease-out;
+}
+
+/* Stat card hover */
+@layer utilities {
+	.stat-card {
+		transition: transform 0.15s ease, box-shadow 0.15s ease;
+	}
+	.stat-card:hover {
+		transform: translateY(-1px);
+		box-shadow: 0 4px 12px color-mix(in srgb, var(--color-foreground) 5%, transparent);
 	}
 }
