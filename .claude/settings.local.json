@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm install:*)",
+      "Bash(pnpm --filter @nwords/db exec prisma generate)",
+      "Bash(docker compose:*)",
+      "Bash(pnpm --filter @nwords/db exec prisma db push)",
+      "Bash(timeout 15 pnpm dev)",
+      "Bash(node -e \"const p = require\\(''/Users/paulwilkinson/projects/claude/nwords/node_modules/.pnpm/@tanstack+react-start@1.167.12_react-dom@19.2.4_react@19.2.4__react@19.2.4_vite@6.4.1_@types+_fa7nmef3fjz6s7jlhnpafm7ymq/node_modules/@tanstack/react-start/package.json''\\); console.log\\(Object.keys\\(p.exports\\).join\\(''\\\\n''\\)\\)\")",
+      "Bash(node -e \"const p = require\\(''''/Users/paulwilkinson/projects/claude/nwords/node_modules/.pnpm/@tanstack+react-start@1.167.12_react-dom@19.2.4_react@19.2.4__react@19.2.4_vite@6.4.1_@types+_fa7nmef3fjz6s7jlhnpafm7ymq/node_modules/@tanstack/react-start/package.json''''\\); console.log\\(JSON.stringify\\(p.dependencies || {}, null, 2\\)\\)\")",
+      "Bash(timeout 20 pnpm dev)",
+      "Bash(git remote:*)"
+    ]
+  }
+}

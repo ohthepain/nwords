@@ -1,0 +1,323 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Better Auth Models ─────────────────────────────────
+
+model User {
+  id            String   @id @default(uuid()) @db.Uuid
+  name          String
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  image         String?
+  role          Role     @default(USER)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  nativeLanguageId String?   @db.Uuid
+  targetLanguageId String?   @db.Uuid
+  nativeLanguage   Language? @relation("NativeLanguage", fields: [nativeLanguageId], references: [id])
+  targetLanguage   Language? @relation("TargetLanguage", fields: [targetLanguageId], references: [id])
+
+  sessions      Session[]
+  accounts      Account[]
+  verifications Verification[]
+  wordKnowledge UserWordKnowledge[]
+  scoreHistory  ScoreHistory[]
+  testSessions  TestSession[]
+
+  @@map("user")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+model Session {
+  id        String   @id @default(uuid()) @db.Uuid
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id @default(uuid()) @db.Uuid
+  accountId             String
+  providerId            String
+  userId                String    @db.Uuid
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id @default(uuid()) @db.Uuid
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  userId     String?  @db.Uuid
+  user       User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("verification")
+}
+
+// ─── Language ───────────────────────────────────────────
+
+model Language {
+  id        String   @id @default(uuid()) @db.Uuid
+  code      String   @unique
+  code3     String?
+  name      String
+  enabled   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  words          Word[]
+  sentences      Sentence[]      @relation("SentenceLanguage")
+  nativeSpeakers User[]          @relation("NativeLanguage")
+  targetLearners User[]          @relation("TargetLanguage")
+  frequencyLists FrequencyList[]
+
+  @@map("language")
+}
+
+// ─── Words ──────────────────────────────────────────────
+
+model Word {
+  id          String       @id @default(uuid()) @db.Uuid
+  languageId  String       @db.Uuid
+  language    Language     @relation(fields: [languageId], references: [id])
+  lemma       String
+  pos         PartOfSpeech
+  rank        Int
+  definitions Json
+  isOffensive Boolean      @default(false)
+  cefrLevel   CefrLevel?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  sentenceWords SentenceWord[]
+  userKnowledge UserWordKnowledge[]
+
+  @@unique([languageId, lemma, pos])
+  @@index([languageId, rank])
+  @@index([languageId, cefrLevel])
+  @@map("word")
+}
+
+enum PartOfSpeech {
+  NOUN
+  VERB
+  ADJECTIVE
+  ADVERB
+}
+
+enum CefrLevel {
+  A1
+  A2
+  B1
+  B2
+  C1
+  C2
+}
+
+// ─── Frequency Lists ────────────────────────────────────
+
+model FrequencyList {
+  id         String   @id @default(uuid()) @db.Uuid
+  languageId String   @db.Uuid
+  language   Language @relation(fields: [languageId], references: [id])
+  source     String
+  version    String?
+  importedAt DateTime @default(now())
+
+  @@unique([languageId, source])
+  @@map("frequency_list")
+}
+
+// ─── Sentences ──────────────────────────────────────────
+
+model Sentence {
+  id         String   @id @default(uuid()) @db.Uuid
+  tatoebaId  Int?     @unique
+  languageId String   @db.Uuid
+  language   Language @relation("SentenceLanguage", fields: [languageId], references: [id])
+  text       String
+  hasAudio   Boolean  @default(false)
+  audioS3Key String?
+  createdAt  DateTime @default(now())
+
+  translations  SentenceTranslation[] @relation("OriginalSentence")
+  translatedBy  SentenceTranslation[] @relation("TranslatedSentence")
+  sentenceWords SentenceWord[]
+
+  @@index([languageId])
+  @@map("sentence")
+}
+
+model SentenceTranslation {
+  id                   String   @id @default(uuid()) @db.Uuid
+  originalSentenceId   String   @db.Uuid
+  translatedSentenceId String   @db.Uuid
+  originalSentence     Sentence @relation("OriginalSentence", fields: [originalSentenceId], references: [id])
+  translatedSentence   Sentence @relation("TranslatedSentence", fields: [translatedSentenceId], references: [id])
+
+  @@unique([originalSentenceId, translatedSentenceId])
+  @@map("sentence_translation")
+}
+
+model SentenceWord {
+  id         String   @id @default(uuid()) @db.Uuid
+  sentenceId String   @db.Uuid
+  wordId     String   @db.Uuid
+  sentence   Sentence @relation(fields: [sentenceId], references: [id], onDelete: Cascade)
+  word       Word     @relation(fields: [wordId], references: [id], onDelete: Cascade)
+  position   Int
+
+  @@unique([sentenceId, wordId])
+  @@index([wordId])
+  @@map("sentence_word")
+}
+
+// ─── User Word Knowledge ────────────────────────────────
+
+model UserWordKnowledge {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @db.Uuid
+  wordId       String    @db.Uuid
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  word         Word      @relation(fields: [wordId], references: [id], onDelete: Cascade)
+  known        Boolean   @default(false)
+  probability  Float     @default(0.5)
+  timesTested  Int       @default(0)
+  timesCorrect Int       @default(0)
+  lastTestedAt DateTime?
+  nextReviewAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([userId, wordId])
+  @@index([userId, known])
+  @@index([userId, nextReviewAt])
+  @@map("user_word_knowledge")
+}
+
+// ─── Scores ─────────────────────────────────────────────
+
+model ScoreHistory {
+  id          String     @id @default(uuid()) @db.Uuid
+  userId      String     @db.Uuid
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  actualScore Int
+  targetScore Int
+  cefrLevel   CefrLevel?
+  recordedAt  DateTime   @default(now())
+
+  @@index([userId, recordedAt])
+  @@map("score_history")
+}
+
+// ─── Test Sessions ──────────────────────────────────────
+
+model TestSession {
+  id                String     @id @default(uuid()) @db.Uuid
+  userId            String     @db.Uuid
+  user              User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mode              TestMode
+  startedAt         DateTime   @default(now())
+  endedAt           DateTime?
+  wordsTestedCount  Int        @default(0)
+  wordsCorrectCount Int        @default(0)
+
+  answers TestAnswer[]
+
+  @@index([userId, startedAt])
+  @@map("test_session")
+}
+
+enum TestMode {
+  MULTIPLE_CHOICE
+  TRANSLATION
+  VOICE
+  MIXED
+}
+
+model TestAnswer {
+  id            String      @id @default(uuid()) @db.Uuid
+  testSessionId String      @db.Uuid
+  testSession   TestSession @relation(fields: [testSessionId], references: [id], onDelete: Cascade)
+  wordId        String      @db.Uuid
+  sentenceId    String?     @db.Uuid
+  answerType    AnswerType
+  userAnswer    String?
+  correct       Boolean
+  wasTypo       Boolean     @default(false)
+  timeTakenMs   Int?
+  answeredAt    DateTime    @default(now())
+
+  @@index([testSessionId])
+  @@map("test_answer")
+}
+
+enum AnswerType {
+  MULTIPLE_CHOICE
+  TRANSLATION_TYPED
+  VOICE_TRANSCRIPTION
+}
+
+// ─── Ingestion Jobs ─────────────────────────────────────
+
+model IngestionJob {
+  id             String          @id @default(uuid()) @db.Uuid
+  type           IngestionType
+  languageId     String          @db.Uuid
+  status         IngestionStatus @default(PENDING)
+  totalItems     Int             @default(0)
+  processedItems Int             @default(0)
+  errorCount     Int             @default(0)
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime        @default(now())
+  metadata       Json?
+
+  @@index([status])
+  @@map("ingestion_job")
+}
+
+enum IngestionType {
+  KAIKKI_WORDS
+  FREQUENCY_LIST
+  TATOEBA_SENTENCES
+  AUDIO_FILES
+}
+
+enum IngestionStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}

@@ -1,0 +1,15 @@
+node_modules
+dist
+.output
+.env
+.env.local
+.env.*.local
+*.log
+.turbo
+.prisma
+packages/db/src/generated
+*.tsbuildinfo
+.DS_Store
+coverage
+playwright-report
+test-results

@@ -1,0 +1,31 @@
+{
+  "name": "@nwords/api",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "tsx watch src/standalone.ts",
+    "build": "tsc",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.14.0",
+    "@hono/zod-validator": "^0.4.2",
+    "@nwords/auth": "workspace:*",
+    "@nwords/db": "workspace:*",
+    "@nwords/shared": "workspace:*",
+    "dotenv": "^16.4.7",
+    "hono": "^4.6.0",
+    "pg-boss": "^10.1.5",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.0"
+  }
+}
