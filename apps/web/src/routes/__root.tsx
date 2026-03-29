@@ -1,10 +1,4 @@
-import {
-	HeadContent,
-	Outlet,
-	Scripts,
-	ScrollRestoration,
-	createRootRoute,
-} from "@tanstack/react-router"
+import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router"
 import type { ReactNode } from "react"
 import { useEffect } from "react"
 import { initPostHog } from "~/lib/posthog"
@@ -50,7 +44,6 @@ function RootDocument({ children }: { children: ReactNode }) {
 			</head>
 			<body>
 				{children}
-				<ScrollRestoration />
 				<Scripts />
 			</body>
 		</html>

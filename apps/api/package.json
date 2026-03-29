@@ -21,6 +21,7 @@
     "dotenv": "^16.4.7",
     "hono": "^4.6.0",
     "pg-boss": "^10.1.5",
+    "unbzip2-stream": "^1.4.3",
     "zod": "^3.24.1"
   },
   "devDependencies": {

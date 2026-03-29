@@ -1,5 +1,5 @@
-import { hc } from "hono/client"
 import type { AppType } from "@nwords/api"
+import { hc } from "hono/client"
 
 /**
  * Type-safe Hono RPC client.

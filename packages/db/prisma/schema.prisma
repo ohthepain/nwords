@@ -88,12 +88,14 @@ model Verification {
 // ─── Language ───────────────────────────────────────────
 
 model Language {
-  id        String   @id @default(uuid()) @db.Uuid
-  code      String   @unique
-  code3     String?
-  name      String
-  enabled   Boolean  @default(false)
-  createdAt DateTime @default(now())
+  id                   String   @id @default(uuid()) @db.Uuid
+  code                 String   @unique
+  code3                String?
+  name                 String
+  /// Slug for kaikki.org URLs (e.g. "Finnish"). Defaults to `name` when starting ingestion.
+  kaikkiDictionaryName String?
+  enabled              Boolean  @default(false)
+  createdAt            DateTime @default(now())
 
   words          Word[]
   sentences      Sentence[]      @relation("SentenceLanguage")
@@ -107,17 +109,19 @@ model Language {
 // ─── Words ──────────────────────────────────────────────
 
 model Word {
-  id          String       @id @default(uuid()) @db.Uuid
-  languageId  String       @db.Uuid
-  language    Language     @relation(fields: [languageId], references: [id])
-  lemma       String
-  pos         PartOfSpeech
-  rank        Int
-  definitions Json
-  isOffensive Boolean      @default(false)
-  cefrLevel   CefrLevel?
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id              String       @id @default(uuid()) @db.Uuid
+  languageId      String       @db.Uuid
+  language        Language     @relation(fields: [languageId], references: [id])
+  lemma           String
+  pos             PartOfSpeech
+  rank            Int
+  definitions     Json
+  isOffensive     Boolean      @default(false)
+  cefrLevel       CefrLevel?
+  /// Curated sentence UUIDs suitable for vocabulary tests (ranked by quality).
+  testSentenceIds String[]     @default([])
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
 
   sentenceWords SentenceWord[]
   userKnowledge UserWordKnowledge[]
@@ -168,6 +172,9 @@ model Sentence {
   text       String
   hasAudio   Boolean  @default(false)
   audioS3Key String?
+  /// Heuristic 0–1 quality for use in translation / cloze tests.
+  testQualityScore Float?
+  isTestCandidate  Boolean  @default(false)
   createdAt  DateTime @default(now())
 
   translations  SentenceTranslation[] @relation("OriginalSentence")

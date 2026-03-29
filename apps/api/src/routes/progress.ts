@@ -1,8 +1,8 @@
-import { Hono } from "hono"
 import { zValidator } from "@hono/zod-validator"
-import { z } from "zod"
 import { prisma } from "@nwords/db"
 import { getCefrLevel } from "@nwords/shared"
+import { Hono } from "hono"
+import { z } from "zod"
 import { authMiddleware } from "../middleware/auth.ts"
 
 export const progressRoute = new Hono()

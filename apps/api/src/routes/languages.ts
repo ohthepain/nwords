@@ -1,5 +1,5 @@
-import { Hono } from "hono"
 import { prisma } from "@nwords/db"
+import { Hono } from "hono"
 
 export const languagesRoute = new Hono()
 	// List all languages (public)

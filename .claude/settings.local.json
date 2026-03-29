@@ -27,7 +27,13 @@
       "Bash(node -e \"const m = require\\(''''@tanstack/react-start/server''''\\); console.log\\(Object.keys\\(m\\)\\)\")",
       "Bash(find /Users/paulwilkinson/projects/claude/nwords/node_modules/@tanstack/react-start-server -name *.d.ts)",
       "Bash(find /Users/paulwilkinson/projects/claude/nwords -path */node_modules/@tanstack/react-start-server -maxdepth 5)",
-      "Bash(find /Users/paulwilkinson/projects/claude/nwords/node_modules/.pnpm -path *start-server-core* -name *.d.ts)"
+      "Bash(find /Users/paulwilkinson/projects/claude/nwords/node_modules/.pnpm -path *start-server-core* -name *.d.ts)",
+      "Bash(grep -E \"\\\\.\\(ts|js\\)$\")",
+      "Bash(xargs ls:*)",
+      "Bash(npx tsc:*)",
+      "Bash(find /Users/paulwilkinson/projects/claude/nwords/node_modules -path */pg-boss/*.d.ts -maxdepth 4)",
+      "Bash(find /Users/paulwilkinson/projects/claude/nwords -path */pg-boss/src/index.d.ts)",
+      "Bash(find /Users/paulwilkinson/projects/claude/nwords -path *pg-boss* -name *.d.ts)"
     ]
   }
 }

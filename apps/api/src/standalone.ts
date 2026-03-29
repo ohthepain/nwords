@@ -9,6 +9,10 @@ config({ path: path.join(dir, "../../../packages/db/.env") })
 
 const { serve } = await import("@hono/node-server")
 const { app } = await import("./index.js")
+const { getBoss } = await import("./lib/boss.js")
+
+// Pg-boss + ingestion workers start inside getBoss()
+await getBoss()
 
 const port = Number(process.env.PORT) || 3001
 
@@ -26,3 +30,14 @@ server.on("error", (err: NodeJS.ErrnoException) => {
 	}
 	process.exit(1)
 })
+
+// Graceful shutdown
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+	process.on(signal, async () => {
+		console.log(`\n${signal} received, shutting down...`)
+		const { stopBoss } = await import("./lib/boss.js")
+		await stopBoss()
+		server.close()
+		process.exit(0)
+	})
+}

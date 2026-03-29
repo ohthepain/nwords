@@ -3,6 +3,7 @@ import { prisma } from "@nwords/db"
 import { Link, Outlet, createFileRoute, redirect } from "@tanstack/react-router"
 import { createServerFn } from "@tanstack/react-start"
 import { getRequest } from "@tanstack/react-start/server"
+import { ChevronLeft } from "lucide-react"
 
 const checkAdmin = createServerFn({ method: "GET" }).handler(async () => {
 	const request = getRequest()
@@ -28,34 +29,19 @@ export const Route = createFileRoute("/_authed/_admin")({
 
 function AdminLayout() {
 	return (
-		<div className="flex-1 flex">
-			<aside className="w-52 border-r border-border/50 bg-muted/30">
-				<div className="p-4 space-y-1">
-					<div className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] mb-4 px-2 flex items-center gap-2">
-						<span className="size-1.5 rounded-full bg-brand" />
-						Admin
-					</div>
-					<AdminNavLink to="/admin/languages">Languages</AdminNavLink>
-					<AdminNavLink to="/admin/vocabulary">Vocabulary</AdminNavLink>
-					<AdminNavLink to="/admin/sentences">Sentences</AdminNavLink>
-					<AdminNavLink to="/admin/jobs">Jobs</AdminNavLink>
-					<AdminNavLink to="/admin/users">Users</AdminNavLink>
-				</div>
-			</aside>
+		<div className="flex-1 flex flex-col min-h-0">
+			<header className="shrink-0 border-b border-border bg-muted/30 px-6 py-3">
+				<Link
+					to="/admin"
+					className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+				>
+					<ChevronLeft className="size-4 shrink-0" />
+					Admin home
+				</Link>
+			</header>
 			<div className="flex-1 overflow-auto">
 				<Outlet />
 			</div>
 		</div>
-	)
-}
-
-function AdminNavLink({ to, children }: { to: string; children: React.ReactNode }) {
-	return (
-		<Link
-			to={to}
-			className="block text-sm px-2 py-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors [&.active]:text-foreground [&.active]:bg-accent [&.active]:font-medium"
-		>
-			{children}
-		</Link>
 	)
 }

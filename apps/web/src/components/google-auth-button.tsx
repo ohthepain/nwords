@@ -33,9 +33,7 @@ type GoogleAuthButtonProps = {
 	label?: string
 }
 
-export function GoogleAuthButton({
-	label = "Continue with Google",
-}: GoogleAuthButtonProps) {
+export function GoogleAuthButton({ label = "Continue with Google" }: GoogleAuthButtonProps) {
 	if (!isGoogleAuthEnabled()) {
 		return null
 	}
@@ -69,9 +67,7 @@ export function GoogleAuthSection() {
 			<GoogleAuthButton />
 			<div className="flex items-center gap-3">
 				<Separator className="flex-1" />
-				<span className="text-xs text-muted-foreground uppercase tracking-wide">
-					or
-				</span>
+				<span className="text-xs text-muted-foreground uppercase tracking-wide">or</span>
 				<Separator className="flex-1" />
 			</div>
 		</div>

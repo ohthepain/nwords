@@ -97,20 +97,12 @@ function DashboardPage() {
 	return (
 		<div className="max-w-4xl mx-auto px-6 py-8 space-y-8">
 			{/* Header */}
-			<div className="flex items-start justify-between">
-				<div>
-					<h1 className="text-2xl font-bold">Dashboard</h1>
-					<p className="text-sm text-muted-foreground mt-1 flex items-center gap-2">
-						<span>{data.user.nativeLanguage?.name}</span>
-						<span className="text-xs font-mono opacity-50">→</span>
-						<span className="font-medium text-foreground">{data.user.targetLanguage?.name}</span>
-					</p>
-				</div>
-				{data.user.role === "ADMIN" && (
-					<Button variant="outline" size="sm" asChild>
-						<Link to="/admin/languages">Admin</Link>
-					</Button>
-				)}
+			<div>
+				<p className="text-sm text-muted-foreground flex items-center gap-2">
+					<span>{data.user.nativeLanguage?.name}</span>
+					<span className="text-xs font-mono opacity-50">→</span>
+					<span className="font-medium text-foreground">{data.user.targetLanguage?.name}</span>
+				</p>
 			</div>
 
 			{/* Stats grid */}

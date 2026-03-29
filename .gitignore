@@ -13,3 +13,4 @@ packages/db/src/generated
 coverage
 playwright-report
 test-results
+uploads

@@ -14,7 +14,6 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "~/components/ui/select"
-import { Separator } from "~/components/ui/separator"
 import { UI_STYLES, useThemeStore } from "~/stores/theme"
 
 const getSettingsData = createServerFn({ method: "GET" }).handler(async () => {
@@ -74,7 +73,7 @@ export const Route = createFileRoute("/_authed/settings")({
 
 function SettingsPage() {
 	const data = Route.useLoaderData()
-	const { dark, toggleDark, uiStyle, setUiStyle } = useThemeStore()
+	const { uiStyle, setUiStyle } = useThemeStore()
 
 	const [nativeId, setNativeId] = useState(data?.nativeLanguageId ?? "")
 	const [targetId, setTargetId] = useState(data?.targetLanguageId ?? "")
@@ -112,7 +111,6 @@ function SettingsPage() {
 	return (
 		<div className="max-w-2xl mx-auto px-6 py-8 space-y-6">
 			<div>
-				<h1 className="text-2xl font-bold">Settings</h1>
 				<p className="text-sm text-muted-foreground mt-1">
 					Configure your languages and appearance
 				</p>
@@ -199,20 +197,9 @@ function SettingsPage() {
 					<CardDescription>Customize how nwords looks</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-5">
-					<div className="flex items-center justify-between">
-						<div>
-							<Label>Dark mode</Label>
-							<p className="text-xs text-muted-foreground mt-0.5">
-								{dark ? "Currently using dark theme" : "Currently using light theme"}
-							</p>
-						</div>
-						<Button variant="outline" size="sm" onClick={toggleDark} className="font-mono text-xs">
-							{dark ? "Switch to light" : "Switch to dark"}
-						</Button>
-					</div>
-
-					<Separator />
-
+					<p className="text-xs text-muted-foreground">
+						Light and dark theme is toggled from the header.
+					</p>
 					<div className="space-y-2">
 						<Label className="text-xs font-mono text-muted-foreground uppercase tracking-wider">
 							UI Style

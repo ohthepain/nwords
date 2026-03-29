@@ -1,6 +1,6 @@
-import type { Context, Next } from "hono"
-import { createMiddleware } from "hono/factory"
 import { auth } from "@nwords/auth/server"
+import { prisma } from "@nwords/db"
+import { createMiddleware } from "hono/factory"
 
 export type AuthUser = {
 	id: string
@@ -19,6 +19,9 @@ type AuthEnv = {
  * Auth middleware — validates the session from the request headers.
  * Sets `c.get("user")` with the authenticated user.
  * Returns 401 if no valid session.
+ *
+ * Role comes from the database: better-auth session payloads do not include our Prisma `User.role`,
+ * so admin routes would otherwise see everyone as USER and return 403.
  */
 export const authMiddleware = createMiddleware<AuthEnv>(async (c, next) => {
 	const session = await auth.api.getSession({ headers: c.req.raw.headers })
@@ -27,11 +30,16 @@ export const authMiddleware = createMiddleware<AuthEnv>(async (c, next) => {
 		return c.json({ error: "Unauthorized" }, 401)
 	}
 
+	const dbUser = await prisma.user.findUnique({
+		where: { id: session.user.id },
+		select: { role: true },
+	})
+
 	c.set("user", {
 		id: session.user.id,
 		name: session.user.name,
 		email: session.user.email,
-		role: (session.user as unknown as { role?: string }).role ?? "USER",
+		role: dbUser?.role ?? "USER",
 	})
 
 	await next()
@@ -44,11 +52,15 @@ export const optionalAuth = createMiddleware<AuthEnv>(async (c, next) => {
 	try {
 		const session = await auth.api.getSession({ headers: c.req.raw.headers })
 		if (session?.user) {
+			const dbUser = await prisma.user.findUnique({
+				where: { id: session.user.id },
+				select: { role: true },
+			})
 			c.set("user", {
 				id: session.user.id,
 				name: session.user.name,
 				email: session.user.email,
-				role: (session.user as unknown as { role?: string }).role ?? "USER",
+				role: dbUser?.role ?? "USER",
 			})
 		}
 	} catch {

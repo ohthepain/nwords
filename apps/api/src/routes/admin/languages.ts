@@ -1,9 +1,10 @@
-import { Hono } from "hono"
 import { zValidator } from "@hono/zod-validator"
-import { z } from "zod"
 import { prisma } from "@nwords/db"
-import { authMiddleware } from "../../middleware/auth.ts"
+import { Hono } from "hono"
+import { z } from "zod"
+import { enqueueLanguageIngestionPipeline } from "../../lib/language-pipeline.ts"
 import { adminMiddleware } from "../../middleware/admin.ts"
+import { authMiddleware } from "../../middleware/auth.ts"
 
 export const adminLanguagesRoute = new Hono()
 	.use("*", authMiddleware, adminMiddleware)
@@ -46,19 +47,55 @@ export const adminLanguagesRoute = new Hono()
 			const { id } = c.req.param()
 			const { enabled } = c.req.valid("json")
 
+			const prev = await prisma.language.findUnique({ where: { id } })
+			if (!prev) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+
 			const language = await prisma.language.update({
 				where: { id },
 				data: { enabled },
 			})
+
+			let pipelineJobId: string | null = null
+			if (enabled && !prev.enabled) {
+				const wordCount = await prisma.word.count({ where: { languageId: id } })
+				if (wordCount === 0) {
+					const started = await enqueueLanguageIngestionPipeline(id)
+					pipelineJobId = started?.jobId ?? null
+				}
+			}
 
 			return c.json({
 				id: language.id,
 				code: language.code,
 				name: language.name,
 				enabled: language.enabled,
+				pipelineJobId,
 			})
 		},
 	)
+
+	/** Dev / admin: enqueue full Kaikki → frequency → Tatoeba chain regardless of word count or prior enable state. */
+	.post("/:id/run-pipeline", async (c) => {
+		const { id } = c.req.param()
+		const lang = await prisma.language.findUnique({ where: { id } })
+		if (!lang) {
+			return c.json({ error: "Language not found" }, 404)
+		}
+
+		const started = await enqueueLanguageIngestionPipeline(id)
+		if (!started) {
+			return c.json({ error: "Failed to start pipeline" }, 500)
+		}
+
+		return c.json({
+			id: lang.id,
+			code: lang.code,
+			name: lang.name,
+			pipelineJobId: started.jobId,
+		})
+	})
 
 	// Get details about a specific language's vocabulary coverage
 	.get("/:id/stats", async (c) => {
