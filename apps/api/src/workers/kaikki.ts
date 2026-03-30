@@ -181,7 +181,7 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 				errors += result.errors
 				batch = []
 				batchFlushCount++
-				if (batchFlushCount === 1 || batchFlushCount % 25 === 0) {
+				if (batchFlushCount === 1 || batchFlushCount % 5 === 0) {
 					await appendJobLog(
 						jobId,
 						"out",

@@ -51,8 +51,8 @@ export async function appendJobLog(
 	const text = message.replace(/\s+/g, " ").trim().slice(0, JOB_LOG_LINE_MAX_CHARS)
 	if (!text) return
 
-	await runIngestJobMetaSerial(jobId, async () => {
-		const job = await prisma.ingestionJob.findUnique({
+	await runIngestJobMetaSerial(jobId, async (tx) => {
+		const job = await tx.ingestionJob.findUnique({
 			where: { id: jobId },
 			select: { metadata: true },
 		})
@@ -63,7 +63,7 @@ export async function appendJobLog(
 		const line: JobLogLine = { t: new Date().toISOString(), s: stream, m: text }
 		const nextLines = truncateLines([...existing, line])
 
-		await prisma.ingestionJob.update({
+		await tx.ingestionJob.update({
 			where: { id: jobId },
 			data: {
 				metadata: {

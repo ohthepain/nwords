@@ -1,29 +1,26 @@
 /**
- * Serialize metadata read-merge-write for a single ingestion job so concurrent
- * `appendJobLog` + `updateIngestionProgress` cannot clobber each other's JSON.
+ * Serialize metadata read-merge-write per ingestion job row.
+ *
+ * In-process chaining alone is not enough when **multiple Node processes** share the same DB
+ * (e.g. `turbo dev`: API workers + Vite serving Hono via `app.fetch`) — concurrent Prisma
+ * updates can clobber `metadata` and drop `jobLogLines`. We take a row lock so only one
+ * updater merges at a time, across processes.
  */
 
-function createPerJobChain() {
-	let chain: Promise<unknown> = Promise.resolve()
-	return (fn: () => Promise<void>): Promise<void> => {
-		const run = chain.then(() => fn(), () => fn())
-		chain = run
-		return run
-	}
-}
+import { prisma } from "@nwords/db"
 
-const jobChains = new Map<string, ReturnType<typeof createPerJobChain>>()
+export type IngestJobMetaTx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0]
 
-function getJobChain(jobId: string): ReturnType<typeof createPerJobChain> {
-	let ch = jobChains.get(jobId)
-	if (!ch) {
-		ch = createPerJobChain()
-		jobChains.set(jobId, ch)
-	}
-	return ch
-}
-
-/** Run `fn` after any prior metadata work for this job finishes (FIFO per job id). */
-export function runIngestJobMetaSerial(jobId: string, fn: () => Promise<void>): Promise<void> {
-	return getJobChain(jobId)(fn)
+/** Lock the job row, then run `fn` inside the same transaction (short critical section). */
+export function runIngestJobMetaSerial(
+	jobId: string,
+	fn: (tx: IngestJobMetaTx) => Promise<void>,
+): Promise<void> {
+	return prisma.$transaction(async (tx) => {
+		const row = await tx.$queryRaw<{ id: string }[]>`
+			SELECT id FROM ingestion_job WHERE id = ${jobId}::uuid FOR UPDATE
+		`
+		if (row.length === 0) return
+		await fn(tx)
+	})
 }

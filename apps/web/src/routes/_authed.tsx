@@ -7,6 +7,7 @@ import {
 	useNavigate,
 } from "@tanstack/react-router"
 import { Bug, LogOut, UserRound } from "lucide-react"
+import { AppHeaderBrand } from "~/components/header"
 import { ThemeToggleButton } from "~/components/theme-toggle-button"
 import { Button } from "~/components/ui/button"
 import {
@@ -49,10 +50,11 @@ function AuthedLayout() {
 	}
 
 	return (
-		<div className="flex-1 flex flex-col">
-			<header className="border-b border-border/50 backdrop-blur-sm sticky top-0 z-10 bg-background/80">
-				<div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center gap-4">
-					<h1 className="text-base sm:text-lg font-semibold tracking-tight shrink-0 min-w-0 truncate mr-auto">
+		<div className="flex-1 flex flex-col min-h-0">
+			<header className="shrink-0 border-b border-border/50 backdrop-blur-sm sticky top-0 z-10 bg-background/80">
+				<div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center gap-3 sm:gap-4">
+					<AppHeaderBrand compact />
+					<h1 className="text-base sm:text-lg font-semibold tracking-tight min-w-0 truncate flex-1">
 						{pageTitle}
 					</h1>
 					<div className="flex items-center gap-1 sm:gap-2 shrink-0">
@@ -115,7 +117,7 @@ function AuthedLayout() {
 					</div>
 				</div>
 			</header>
-			<main className="flex-1">
+			<main className="flex-1 min-h-0 flex flex-col">
 				<Outlet />
 			</main>
 		</div>

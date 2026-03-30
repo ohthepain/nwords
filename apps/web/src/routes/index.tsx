@@ -1,4 +1,5 @@
 import { Link, createFileRoute } from "@tanstack/react-router"
+import { AppHeaderBrand } from "~/components/header"
 
 export const Route = createFileRoute("/")({
 	component: HomePage,
@@ -9,13 +10,8 @@ function HomePage() {
 		<div className="flex-1 flex flex-col">
 			{/* Nav */}
 			<header className="border-b border-border/50 backdrop-blur-sm sticky top-0 z-10 bg-background/80">
-				<div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-					<Link to="/" className="flex items-center gap-1.5 group">
-						<span className="text-xl font-bold tracking-tight">nwords</span>
-						<span className="text-xs text-muted-foreground font-mono opacity-60 group-hover:opacity-100 transition-opacity">
-							.live
-						</span>
-					</Link>
+				<div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between gap-4">
+					<AppHeaderBrand />
 					<nav className="flex items-center gap-4">
 						<Link
 							to="/auth/login"

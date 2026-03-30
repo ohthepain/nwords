@@ -13,6 +13,9 @@ type AdminJobDetail = {
 	id: string
 	type: string
 	status: string
+	processedItems: number
+	totalItems: number
+	errorCount: number
 	metadata: unknown
 }
 
@@ -72,6 +75,9 @@ export function JobOutputViewer({
 						id: body.id ?? resolvedJobId,
 						type: body.type ?? "UNKNOWN",
 						status: body.status ?? "UNKNOWN",
+						processedItems: typeof body.processedItems === "number" ? body.processedItems : 0,
+						totalItems: typeof body.totalItems === "number" ? body.totalItems : 0,
+						errorCount: typeof body.errorCount === "number" ? body.errorCount : 0,
 						metadata: body.metadata ?? null,
 					})
 					setLoadError(null)
@@ -206,12 +212,35 @@ export function JobOutputViewer({
 						className="flex-1 min-h-[200px] overflow-auto rounded-md border border-border/80 bg-muted/30 px-3 py-2 text-[11px] font-mono leading-relaxed text-foreground whitespace-pre-wrap break-all"
 					>
 						{shownLines.length === 0 ? (
-							<span className="text-muted-foreground">
-								{tab === "out"
-									? "No output lines yet. Progress messages appear as the worker runs."
-									: summaryError
-										? "No additional stderr-style lines; see metadata.error above if present."
-										: "No error lines yet."}
+							<span className="text-muted-foreground space-y-2 block">
+								{tab === "out" ? (
+									<>
+										<span className="block">
+											No output lines yet. Progress messages appear as the worker runs.
+										</span>
+										{detail &&
+										(detail.status === "RUNNING" || detail.status === "PENDING") &&
+										(detail.processedItems > 0 || detail.errorCount > 0) ? (
+											<span className="block mt-2 text-foreground/85">
+												Latest job row: {detail.processedItems.toLocaleString()} processed
+												{detail.totalItems > 0
+													? ` · ${detail.totalItems.toLocaleString()} total`
+													: ""}
+												{detail.errorCount > 0
+													? ` · ${detail.errorCount.toLocaleString()} errors`
+													: ""}
+												. If this stays empty while counts move, metadata merges were racing
+												(update deployed — or run only one ingest worker process via{" "}
+												<span className="font-mono">DISABLE_INGEST_WORKERS</span> on the app that
+												should not host workers).
+											</span>
+										) : null}
+									</>
+								) : summaryError ? (
+									"No additional stderr-style lines; see metadata.error above if present."
+								) : (
+									"No error lines yet."
+								)}
 							</span>
 						) : (
 							shownLines.map((l, i) => (

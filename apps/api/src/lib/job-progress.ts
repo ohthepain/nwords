@@ -15,8 +15,8 @@ export async function updateIngestionProgress(
 		extraMetadata?: Record<string, unknown>
 	},
 ): Promise<void> {
-	await runIngestJobMetaSerial(jobId, async () => {
-		const job = await prisma.ingestionJob.findUnique({
+	await runIngestJobMetaSerial(jobId, async (tx) => {
+		const job = await tx.ingestionJob.findUnique({
 			where: { id: jobId },
 			select: { metadata: true, processedItems: true },
 		})
@@ -43,7 +43,7 @@ export async function updateIngestionProgress(
 			[LAST_WORKER_ACTIVITY_AT_KEY]: new Date().toISOString(),
 		}
 
-		await prisma.ingestionJob.update({
+		await tx.ingestionJob.update({
 			where: { id: jobId },
 			data: {
 				...(partial.processedItems !== undefined ? { processedItems: partial.processedItems } : {}),
