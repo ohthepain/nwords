@@ -450,9 +450,16 @@ async function flushRankBatch(
 			}
 		}
 
-		if (updates.length > 0) {
-			await prisma.$transaction(updates)
-			updated += updates.length
+		/** Many lemmas × several POS can build thousands of updates; one huge tx hits Prisma tx timeout / pool wait. */
+		const TX_CHUNK = 150
+		for (let i = 0; i < updates.length; i += TX_CHUNK) {
+			const slice = updates.slice(i, i + TX_CHUNK)
+			try {
+				await prisma.$transaction(slice)
+				updated += slice.length
+			} catch {
+				errors += slice.length
+			}
 		}
 	} catch {
 		errors += batch.length

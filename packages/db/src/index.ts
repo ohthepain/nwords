@@ -11,9 +11,21 @@ function createPrismaClient(): PrismaClient {
 	if (!connectionString) {
 		throw new Error("DATABASE_URL is not set")
 	}
-	const pool = new pg.Pool({ connectionString })
+	const poolMax = Math.min(
+		100,
+		Math.max(5, Number.parseInt(process.env.DATABASE_POOL_MAX ?? "20", 10) || 20),
+	)
+	const pool = new pg.Pool({ connectionString, max: poolMax })
 	const adapter = new PrismaPg(pool)
-	return new PrismaClient({ adapter })
+	const maxWait = Number.parseInt(process.env.PRISMA_TX_MAX_WAIT_MS ?? "20000", 10) || 20_000
+	const timeout = Number.parseInt(process.env.PRISMA_TX_TIMEOUT_MS ?? "120000", 10) || 120_000
+	return new PrismaClient({
+		adapter,
+		transactionOptions: {
+			maxWait,
+			timeout,
+		},
+	})
 }
 
 export const prisma = globalForPrisma.prisma ?? createPrismaClient()
