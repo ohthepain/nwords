@@ -3,7 +3,7 @@ import { prisma } from "@nwords/db"
 import { getCefrLevel } from "@nwords/shared"
 import { Hono } from "hono"
 import { z } from "zod"
-import { authMiddleware } from "../middleware/auth.ts"
+import { authMiddleware } from "../middleware/auth"
 
 export const progressRoute = new Hono()
 	.use("*", authMiddleware)

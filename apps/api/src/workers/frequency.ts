@@ -1,9 +1,13 @@
 import { createReadStream } from "node:fs"
+import type { Prisma } from "@nwords/db"
 import { prisma } from "@nwords/db"
 import type PgBoss from "pg-boss"
-import { updateIngestionProgress } from "../lib/job-progress.ts"
-import { nodeReadableFromWeb, readLinesFromReadable } from "../lib/node-streams.ts"
-import { chainTatoebaFromFrequency } from "../lib/pipeline-chain.ts"
+import { cefrLevelForFrequencyRank } from "@nwords/shared"
+import { isIngestionJobCancelled, tryMarkIngestionJobRunning } from "../lib/ingestion-job-cancel"
+import { appendJobLog, snapshotJobMetadata } from "../lib/job-logs"
+import { updateIngestionProgress } from "../lib/job-progress"
+import { nodeReadableFromWeb, readLinesFromReadable } from "../lib/node-streams"
+import { chainTatoebaFromFrequency } from "../lib/pipeline-chain"
 
 /**
  * Frequency list importer: TSV/CSV (rank ↔ lemma) or bnpd/freqListsLemmatized (lemma first, rank = line #).
@@ -65,10 +69,15 @@ export async function processFrequencyJob(job: PgBoss.Job<FrequencyJobData>) {
 		return
 	}
 
-	await prisma.ingestionJob.update({
-		where: { id: jobId },
-		data: { status: "RUNNING", startedAt: new Date() },
-	})
+	const started = await tryMarkIngestionJobRunning(jobId)
+	if (!started) return
+
+	await appendJobLog(jobId, "out", "Frequency list: job started.")
+	await appendJobLog(
+		jobId,
+		"out",
+		`Frequency (${format}): applying ranks — ${filePath ? "local file" : "download"}`,
+	)
 
 	let processed = 0
 	let errors = 0
@@ -86,6 +95,7 @@ export async function processFrequencyJob(job: PgBoss.Job<FrequencyJobData>) {
 		if (format === "hermitdave") {
 			let lineRank = 0
 			let batchH: Array<{ lemma: string; rank: number }> = []
+			let hermitFlush = 0
 
 			for await (const line of lines) {
 				processed++
@@ -107,11 +117,20 @@ export async function processFrequencyJob(job: PgBoss.Job<FrequencyJobData>) {
 					notFound += r.notFound
 					errors += r.errors
 					batchH = []
+					hermitFlush++
+					if (hermitFlush === 1 || hermitFlush % 20 === 0) {
+						await appendJobLog(
+							jobId,
+							"out",
+							`Frequency hermitdave: flush ${hermitFlush}, lines scanned ${processed}, ranks applied ${updated}`,
+						)
+					}
 					await updateIngestionProgress(jobId, {
 						processedItems: processed,
 						errorCount: errors,
 						extraMetadata: { updated, notFound, format: "hermitdave" },
 					})
+					if (await isIngestionJobCancelled(jobId)) return
 				}
 			}
 
@@ -122,23 +141,38 @@ export async function processFrequencyJob(job: PgBoss.Job<FrequencyJobData>) {
 				errors += r.errors
 			}
 
+			if (await isIngestionJobCancelled(jobId)) return
+
 			await prisma.frequencyList.upsert({
 				where: { languageId_source: { languageId, source } },
 				create: { languageId, source },
 				update: { importedAt: new Date() },
 			})
 
-			await prisma.ingestionJob.update({
-				where: { id: jobId },
+			await appendJobLog(
+				jobId,
+				"out",
+				`Frequency hermitdave: complete — ${updated} rank updates, ${notFound} lemmas not in dictionary`,
+			)
+			const prevH = await snapshotJobMetadata(jobId)
+			const doneH = await prisma.ingestionJob.updateMany({
+				where: { id: jobId, status: "RUNNING" },
 				data: {
 					status: "COMPLETED",
 					processedItems: processed,
 					totalItems: processed,
 					errorCount: errors,
 					completedAt: new Date(),
-					metadata: { updated, notFound, format: "hermitdave", lines: processed },
+					metadata: {
+						...prevH,
+						updated,
+						notFound,
+						format: "hermitdave",
+						lines: processed,
+					} as Prisma.InputJsonValue,
 				},
 			})
+			if (doneH.count === 0) return
 
 			console.log(
 				`[frequency/hermitdave] Done: ${updated} ranks applied, ${notFound} missing lemmas`,
@@ -153,6 +187,7 @@ export async function processFrequencyJob(job: PgBoss.Job<FrequencyJobData>) {
 		if (format === "bnpd") {
 			let lineRank = 0
 			let batch: Array<{ lemma: string; rank: number }> = []
+			let bnpdFlush = 0
 
 			for await (const line of lines) {
 				processed++
@@ -171,11 +206,20 @@ export async function processFrequencyJob(job: PgBoss.Job<FrequencyJobData>) {
 					notFound += r.notFound
 					errors += r.errors
 					batch = []
+					bnpdFlush++
+					if (bnpdFlush === 1 || bnpdFlush % 20 === 0) {
+						await appendJobLog(
+							jobId,
+							"out",
+							`Frequency bnpd: flush ${bnpdFlush}, lines ${processed}, ranks applied ${updated}`,
+						)
+					}
 					await updateIngestionProgress(jobId, {
 						processedItems: processed,
 						errorCount: errors,
 						extraMetadata: { updated, notFound, format: "bnpd" },
 					})
+					if (await isIngestionJobCancelled(jobId)) return
 				}
 			}
 
@@ -186,23 +230,38 @@ export async function processFrequencyJob(job: PgBoss.Job<FrequencyJobData>) {
 				errors += r.errors
 			}
 
+			if (await isIngestionJobCancelled(jobId)) return
+
 			await prisma.frequencyList.upsert({
 				where: { languageId_source: { languageId, source } },
 				create: { languageId, source },
 				update: { importedAt: new Date() },
 			})
 
-			await prisma.ingestionJob.update({
-				where: { id: jobId },
+			await appendJobLog(
+				jobId,
+				"out",
+				`Frequency bnpd: complete — ${updated} updates, ${notFound} lemmas missing`,
+			)
+			const prevB = await snapshotJobMetadata(jobId)
+			const doneB = await prisma.ingestionJob.updateMany({
+				where: { id: jobId, status: "RUNNING" },
 				data: {
 					status: "COMPLETED",
 					processedItems: processed,
 					totalItems: processed,
 					errorCount: errors,
 					completedAt: new Date(),
-					metadata: { updated, notFound, format: "bnpd", lines: processed },
+					metadata: {
+						...prevB,
+						updated,
+						notFound,
+						format: "bnpd",
+						lines: processed,
+					} as Prisma.InputJsonValue,
 				},
 			})
+			if (doneB.count === 0) return
 
 			console.log(`[frequency/bnpd] Done: ${updated} ranks applied, ${notFound} missing lemmas`)
 
@@ -222,12 +281,14 @@ export async function processFrequencyJob(job: PgBoss.Job<FrequencyJobData>) {
 			where: { id: jobId },
 			data: { totalItems: totalLines },
 		})
+		await appendJobLog(jobId, "out", `Frequency TSV: counted ${totalLines} lines, applying ranks…`)
 
 		const lines2 = filePath ? linesFromFile(filePath) : linesFromUrl(url as string)
 
 		let batch: Array<{ lemma: string; rank: number }> = []
 		let detectedFormat: "rank_word" | "word_rank" | null = null
 		let processed2 = 0
+		let tsvFlush = 0
 
 		for await (const line of lines2) {
 			processed2++
@@ -265,11 +326,20 @@ export async function processFrequencyJob(job: PgBoss.Job<FrequencyJobData>) {
 				notFound += result.notFound
 				errors += result.errors
 				batch = []
+				tsvFlush++
+				if (tsvFlush === 1 || tsvFlush % 20 === 0) {
+					await appendJobLog(
+						jobId,
+						"out",
+						`Frequency TSV: flush ${tsvFlush}, lines ${processed2}/${totalLines}, ranks applied ${updated}`,
+					)
+				}
 
 				await updateIngestionProgress(jobId, {
 					processedItems: processed2,
 					errorCount: errors,
 				})
+				if (await isIngestionJobCancelled(jobId)) return
 			}
 		}
 
@@ -280,22 +350,37 @@ export async function processFrequencyJob(job: PgBoss.Job<FrequencyJobData>) {
 			errors += result.errors
 		}
 
+		if (await isIngestionJobCancelled(jobId)) return
+
 		await prisma.frequencyList.upsert({
 			where: { languageId_source: { languageId, source } },
 			create: { languageId, source },
 			update: { importedAt: new Date() },
 		})
 
-		await prisma.ingestionJob.update({
-			where: { id: jobId },
+		await appendJobLog(
+			jobId,
+			"out",
+			`Frequency TSV: complete — ${updated} updates, ${notFound} lemmas missing`,
+		)
+		const prevT = await snapshotJobMetadata(jobId)
+		const doneT = await prisma.ingestionJob.updateMany({
+			where: { id: jobId, status: "RUNNING" },
 			data: {
 				status: "COMPLETED",
 				processedItems: processed2,
 				errorCount: errors,
 				completedAt: new Date(),
-				metadata: { updated, notFound, totalLines, format: "tsv" },
+				metadata: {
+					...prevT,
+					updated,
+					notFound,
+					totalLines,
+					format: "tsv",
+				} as Prisma.InputJsonValue,
 			},
 		})
+		if (doneT.count === 0) return
 
 		console.log(`[frequency] Done: ${updated} updated, ${notFound} not found, ${errors} errors`)
 
@@ -304,6 +389,8 @@ export async function processFrequencyJob(job: PgBoss.Job<FrequencyJobData>) {
 		}
 	} catch (err) {
 		console.error("[frequency] Fatal error:", err)
+		if (await isIngestionJobCancelled(jobId)) return
+		await appendJobLog(jobId, "err", String(err))
 		const snap = await prisma.ingestionJob.findUnique({
 			where: { id: jobId },
 			select: { processedItems: true, metadata: true },
@@ -316,7 +403,12 @@ export async function processFrequencyJob(job: PgBoss.Job<FrequencyJobData>) {
 				processedItems: snap?.processedItems ?? 0,
 				errorCount: errors,
 				completedAt: new Date(),
-				metadata: { ...prevMeta, error: String(err), updated, notFound },
+				metadata: {
+					...prevMeta,
+					error: String(err),
+					updated,
+					notFound,
+				} as Prisma.InputJsonValue,
 			},
 		})
 		throw err
@@ -352,8 +444,9 @@ async function flushRankBatch(
 				notFound++
 				continue
 			}
+			const cefrLevel = cefrLevelForFrequencyRank(rank)
 			for (const id of wordIds) {
-				updates.push(prisma.word.update({ where: { id }, data: { rank } }))
+				updates.push(prisma.word.update({ where: { id }, data: { rank, cefrLevel } }))
 			}
 		}
 

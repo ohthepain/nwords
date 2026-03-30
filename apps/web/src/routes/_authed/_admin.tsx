@@ -30,12 +30,18 @@ export const Route = createFileRoute("/_authed/_admin")({
 function AdminLayout() {
 	return (
 		<div className="flex-1 flex flex-col min-h-0">
-			<header className="shrink-0 border-b border-border bg-muted/30 px-6 py-3">
+			<header className="shrink-0 border-b border-border bg-muted/30 px-6 py-3 flex items-center justify-between gap-4">
 				<Link
-					to="/admin"
+					to="/dashboard"
 					className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
 				>
 					<ChevronLeft className="size-4 shrink-0" />
+					Dashboard
+				</Link>
+				<Link
+					to="/admin"
+					className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+				>
 					Admin home
 				</Link>
 			</header>

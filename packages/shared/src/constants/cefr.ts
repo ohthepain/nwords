@@ -19,6 +19,20 @@ export function getCefrLevel(vocabularySize: number): CefrLevel {
 	return "C2"
 }
 
+/**
+ * Rough CEFR band from **corpus frequency rank** (1 = most common), using {@link CEFR_WORD_RANGES}.
+ * Used after frequency-list import; returns null for rank ≤ 0 (not ranked yet).
+ */
+export function cefrLevelForFrequencyRank(rank: number): CefrLevel | null {
+	if (!Number.isFinite(rank) || rank <= 0) return null
+	if (rank <= CEFR_WORD_RANGES.A1.max) return "A1"
+	if (rank <= CEFR_WORD_RANGES.A2.max) return "A2"
+	if (rank <= CEFR_WORD_RANGES.B1.max) return "B1"
+	if (rank <= CEFR_WORD_RANGES.B2.max) return "B2"
+	if (rank <= CEFR_WORD_RANGES.C1.max) return "C1"
+	return "C2"
+}
+
 export const CEFR_DESCRIPTIONS: Record<CefrLevel, string> = {
 	A1: "Beginner",
 	A2: "Elementary",

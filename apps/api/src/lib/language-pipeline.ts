@@ -1,9 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { prisma } from "@nwords/db"
-import { getBoss } from "./boss.ts"
-import { INGEST_QUEUE } from "./ingestion-queues.ts"
-import { resolveKaikkiDownloadPlan } from "./ingestion-urls.ts"
+import { getBoss } from "./boss"
+import { INGEST_QUEUE } from "./ingestion-queues"
+import { resolveKaikkiDownloadPlan } from "./ingestion-urls"
 
 const UPLOAD_DIR = path.join(process.cwd(), "uploads")
 
@@ -16,6 +16,19 @@ export async function enqueueLanguageIngestionPipeline(
 ): Promise<{ jobId: string } | null> {
 	const lang = await prisma.language.findUnique({ where: { id: languageId } })
 	if (!lang) return null
+
+	// Drop finished / queued rows. Then cancel any RUNNING workers for this language so Re-import
+	// does not leave duplicate Tatoeba (etc.) jobs streaming the same export.
+	await prisma.ingestionJob.deleteMany({
+		where: {
+			languageId,
+			status: { in: ["COMPLETED", "FAILED", "CANCELLED", "PENDING"] },
+		},
+	})
+	await prisma.ingestionJob.updateMany({
+		where: { languageId, status: "RUNNING" },
+		data: { status: "CANCELLED", completedAt: new Date() },
+	})
 
 	const dictionaryLabel = (lang.kaikkiDictionaryName ?? lang.name).trim()
 	const { downloadUrls, mode } = await resolveKaikkiDownloadPlan(dictionaryLabel)

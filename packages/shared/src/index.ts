@@ -1,3 +1,3 @@
-export * from "./constants/cefr.ts"
-export * from "./constants/languages.ts"
-export * from "./constants/scoring.ts"
+export * from "./constants/cefr"
+export * from "./constants/languages"
+export * from "./constants/scoring"

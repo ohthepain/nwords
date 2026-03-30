@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { app } from "../index.ts"
+import { app } from "../index"
 
 describe("Languages route", () => {
 	it("lists all languages", async () => {

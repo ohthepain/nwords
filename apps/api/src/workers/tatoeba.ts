@@ -1,11 +1,14 @@
+/// <reference path="../types/unbzip2-stream.d.ts" />
 import { createReadStream } from "node:fs"
 import { createInterface } from "node:readline"
-import { prisma } from "@nwords/db"
+import { prisma, type Prisma } from "@nwords/db"
 import type PgBoss from "pg-boss"
 import bz2 from "unbzip2-stream"
-import { updateIngestionProgress } from "../lib/job-progress.ts"
-import { nodeReadableFromWeb } from "../lib/node-streams.ts"
-import { linkSentencesAndAssignTests } from "./sentence-link.ts"
+import { isIngestionJobCancelled, tryMarkIngestionJobRunning } from "../lib/ingestion-job-cancel"
+import { appendJobLog, snapshotJobMetadata } from "../lib/job-logs"
+import { updateIngestionProgress } from "../lib/job-progress"
+import { nodeReadableFromWeb } from "../lib/node-streams"
+import { linkSentencesAndAssignTests, type LinkingProgressEvent } from "./sentence-link"
 
 /**
  * Tatoeba sentence import: plain TSV (upload) or .tsv.bz2 per-language export (HTTP).
@@ -73,10 +76,17 @@ export async function processTatoebaJob(job: PgBoss.Job<TatoebaJobData>) {
 		return
 	}
 
-	await prisma.ingestionJob.update({
-		where: { id: jobId },
-		data: { status: "RUNNING", startedAt: new Date() },
-	})
+	const started = await tryMarkIngestionJobRunning(jobId)
+	if (!started) return
+
+	await appendJobLog(jobId, "out", "Tatoeba sentences: job started.")
+	await appendJobLog(
+		jobId,
+		"out",
+		filePath
+			? "Tatoeba: importing from local TSV"
+			: "Tatoeba: streaming bzip2 export (line count unknown until done)",
+	)
 
 	let totalLines = 0
 	let processed = 0
@@ -84,6 +94,7 @@ export async function processTatoebaJob(job: PgBoss.Job<TatoebaJobData>) {
 	let inserted = 0
 	let skipped = 0
 	let translationsLinked = 0
+	let sentenceFlush = 0
 	const BATCH_SIZE = 500
 
 	try {
@@ -96,6 +107,7 @@ export async function processTatoebaJob(job: PgBoss.Job<TatoebaJobData>) {
 				where: { id: jobId },
 				data: { totalItems: totalLines },
 			})
+			await appendJobLog(jobId, "out", `Tatoeba: file has ${totalLines.toLocaleString()} lines (all langs)`)
 		}
 		// HTTP downloads: total line count unknown up front (no double-fetch of multi‑GB bz2).
 
@@ -148,11 +160,23 @@ export async function processTatoebaJob(job: PgBoss.Job<TatoebaJobData>) {
 				errors += result.errors
 				batch = []
 
+				sentenceFlush++
+				if (sentenceFlush === 1 || sentenceFlush % 15 === 0) {
+					await appendJobLog(
+						jobId,
+						"out",
+						`Tatoeba import: batch ${sentenceFlush}, lines scanned ${processed.toLocaleString()}, sentences inserted ${inserted}`,
+					)
+				}
 				await updateIngestionProgress(jobId, {
 					processedItems: processed,
 					errorCount: errors,
 					extraMetadata: { inserted, skipped, phase: "import" },
 				})
+				if (await isIngestionJobCancelled(jobId)) {
+					console.log(`[tatoeba] Job ${jobId} cancelled, stopping import loop`)
+					return
+				}
 			}
 		}
 
@@ -162,25 +186,82 @@ export async function processTatoebaJob(job: PgBoss.Job<TatoebaJobData>) {
 			errors += result.errors
 		}
 
+		if (await isIngestionJobCancelled(jobId)) {
+			console.log(`[tatoeba] Job ${jobId} cancelled before translation / linking`)
+			return
+		}
+
+		await appendJobLog(
+			jobId,
+			"out",
+			`Tatoeba: sentence import pass done — ${inserted} inserted, ${skipped} skipped, ${errors} row errors`,
+		)
+
 		if (translationLinksPath) {
+			await appendJobLog(jobId, "out", "Tatoeba: processing translation links file…")
 			translationsLinked = await processTranslationLinks(translationLinksPath)
+			await appendJobLog(jobId, "out", `Tatoeba: linked ${translationsLinked} translation pairs`)
 		}
 
 		let linkStats = { sentencesProcessed: 0, linksCreated: 0, candidates: 0 }
 		if (chainPipeline !== false) {
-			linkStats = await linkSentencesAndAssignTests(languageId, async () => {
-				await updateIngestionProgress(jobId, {
-					extraMetadata: { phase: "linking" },
-				})
-			})
+			await appendJobLog(jobId, "out", "Tatoeba: linking sentences to lemmas / test assignments…")
+			const LINK_DETAIL_LOG_MS = 5000
+			let lastDetailLogAt = 0
+			let linkBatchCount = 0
+
+			const maybeLogLinking = async (msg: string, force: boolean) => {
+				const t = Date.now()
+				if (force || t - lastDetailLogAt >= LINK_DETAIL_LOG_MS) {
+					lastDetailLogAt = t
+					await appendJobLog(jobId, "out", msg)
+				}
+			}
+
+			linkStats = await linkSentencesAndAssignTests(
+				languageId,
+				async (ev: LinkingProgressEvent) => {
+					if (ev.kind === "link_batch") {
+						linkBatchCount++
+						await updateIngestionProgress(jobId, {
+							extraMetadata: {
+								phase: "linking",
+								linkingSentencesProcessed: ev.sentencesProcessed,
+								linkingLinksCreated: ev.linksCreated,
+								linkingCandidates: ev.candidates,
+							},
+						})
+						const detail = `Tatoeba linking: ${ev.sentencesProcessed} sentences scored, ${ev.linksCreated} word–sentence links, ${ev.candidates} candidates (+${ev.batchSentenceCount} in batch)`
+						await maybeLogLinking(detail, linkBatchCount === 1)
+						return
+					}
+					await updateIngestionProgress(jobId, {
+						extraMetadata: {
+							phase: "assign_test_sentences",
+							assignWordsDone: ev.wordsProcessed,
+							assignWordsTotal: ev.wordsTotal,
+						},
+					})
+					if (ev.wordsTotal === 0) return
+					const detail =
+						ev.wordsProcessed === 0
+							? `Tatoeba: picking test sentences for up to ${ev.wordsTotal.toLocaleString()} dictionary words…`
+							: `Tatoeba assign-tests: ${ev.wordsProcessed.toLocaleString()}/${ev.wordsTotal.toLocaleString()} words`
+					await maybeLogLinking(detail, ev.wordsProcessed === 0)
+				},
+			)
 		}
 
-		const prevMeta = ((
-			await prisma.ingestionJob.findUnique({ where: { id: jobId }, select: { metadata: true } })
-		)?.metadata ?? {}) as Record<string, unknown>
+		await appendJobLog(
+			jobId,
+			"out",
+			`Tatoeba complete: ${linkStats.linksCreated} links, ${linkStats.candidates} candidates`,
+		)
 
-		await prisma.ingestionJob.update({
-			where: { id: jobId },
+		const prevMeta = await snapshotJobMetadata(jobId)
+
+		const finished = await prisma.ingestionJob.updateMany({
+			where: { id: jobId, status: "RUNNING" },
 			data: {
 				status: "COMPLETED",
 				processedItems: processed,
@@ -197,15 +278,19 @@ export async function processTatoebaJob(job: PgBoss.Job<TatoebaJobData>) {
 					phase: "done",
 					linking: linkStats,
 					downloadUrl: downloadUrl ?? null,
-				},
+				} as Prisma.InputJsonValue,
 			},
 		})
+		if (finished.count === 0) return
 
 		console.log(
 			`[tatoeba] Done: ${inserted} sentences, link ${linkStats.linksCreated}, candidates ${linkStats.candidates}`,
 		)
 	} catch (err) {
 		console.error("[tatoeba] Fatal error:", err)
+		if (await isIngestionJobCancelled(jobId)) return
+		await appendJobLog(jobId, "err", String(err))
+		const prevFail = await snapshotJobMetadata(jobId)
 		await prisma.ingestionJob.update({
 			where: { id: jobId },
 			data: {
@@ -213,7 +298,12 @@ export async function processTatoebaJob(job: PgBoss.Job<TatoebaJobData>) {
 				processedItems: processed,
 				errorCount: errors,
 				completedAt: new Date(),
-				metadata: { error: String(err), inserted, skipped },
+				metadata: {
+					...prevFail,
+					error: String(err),
+					inserted,
+					skipped,
+				} as Prisma.InputJsonValue,
 			},
 		})
 		throw err

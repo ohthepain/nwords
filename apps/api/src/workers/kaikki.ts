@@ -3,10 +3,12 @@ import { createInterface } from "node:readline"
 import type { Prisma } from "@nwords/db"
 import { prisma } from "@nwords/db"
 import type PgBoss from "pg-boss"
-import type { KaikkiIngestMode } from "../lib/ingestion-urls.ts"
-import { updateIngestionProgress } from "../lib/job-progress.ts"
-import { nodeReadableFromWeb } from "../lib/node-streams.ts"
-import { chainFrequencyFromKaikki } from "../lib/pipeline-chain.ts"
+import type { KaikkiIngestMode } from "../lib/ingestion-urls"
+import { isIngestionJobCancelled, tryMarkIngestionJobRunning } from "../lib/ingestion-job-cancel"
+import { appendJobLog } from "../lib/job-logs"
+import { updateIngestionProgress } from "../lib/job-progress"
+import { nodeReadableFromWeb } from "../lib/node-streams"
+import { chainFrequencyFromKaikki } from "../lib/pipeline-chain"
 
 /**
  * Kaikki.org dictionary dump worker (JSON lines).
@@ -92,15 +94,23 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 		return
 	}
 
-	await prisma.ingestionJob.update({
-		where: { id: jobId },
-		data: { status: "RUNNING", startedAt: new Date() },
-	})
+	const started = await tryMarkIngestionJobRunning(jobId)
+	if (!started) return
+
+	await appendJobLog(jobId, "out", "Kaikki dictionary: job started.")
+	await appendJobLog(
+		jobId,
+		"out",
+		filePath
+			? `Kaikki: importing from file`
+			: `Kaikki: streaming ${downloadUrls.length} URL(s), mode ${kaikkiMode ?? "default"}`,
+	)
 
 	let processed = 0
 	let errors = 0
 	let inserted = 0
 	let skipped = 0
+	let batchFlushCount = 0
 	const BATCH_SIZE = 500
 	const totalParts = !filePath ? downloadUrls.length : 1
 
@@ -113,9 +123,10 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 		isOffensive: boolean
 	}> = []
 
-	async function handleLine(line: string, partIndex: number) {
+	async function handleLine(line: string, partIndex: number): Promise<boolean> {
+		if (await isIngestionJobCancelled(jobId)) return false
 		processed++
-		if (!line.trim()) return
+		if (!line.trim()) return true
 
 		try {
 			const entry: KaikkiEntry = JSON.parse(line)
@@ -123,13 +134,13 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 			const mappedPos = POS_MAP[entry.pos?.toLowerCase() ?? ""]
 			if (!mappedPos) {
 				skipped++
-				return
+				return true
 			}
 
 			const lemma = entry.word?.trim()?.toLowerCase()
 			if (!lemma) {
 				skipped++
-				return
+				return true
 			}
 
 			const definitions: string[] = []
@@ -147,12 +158,12 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 
 			if (isOffensive) {
 				skipped++
-				return
+				return true
 			}
 
 			if (definitions.length === 0) {
 				skipped++
-				return
+				return true
 			}
 
 			batch.push({
@@ -169,6 +180,14 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 				inserted += result.inserted
 				errors += result.errors
 				batch = []
+				batchFlushCount++
+				if (batchFlushCount === 1 || batchFlushCount % 25 === 0) {
+					await appendJobLog(
+						jobId,
+						"out",
+						`Kaikki flush ${batchFlushCount}: part ${partIndex}/${totalParts}, lines ${processed}, inserted ${inserted}`,
+					)
+				}
 				await updateIngestionProgress(jobId, {
 					processedItems: processed,
 					errorCount: errors,
@@ -181,24 +200,28 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 						kaikkiMode: kaikkiMode ?? null,
 					},
 				})
+				if (await isIngestionJobCancelled(jobId)) return false
 			}
 		} catch {
 			errors++
 		}
+		return true
 	}
 
 	try {
 		if (filePath) {
 			for await (const line of linesFromFile(filePath)) {
-				await handleLine(line, 1)
+				if (!(await handleLine(line, 1))) return
 			}
 		} else {
 			for (let p = 0; p < downloadUrls.length; p++) {
 				const url = downloadUrls[p]
 				const partIndex = p + 1
+				await appendJobLog(jobId, "out", `Kaikki: downloading part ${partIndex}/${downloadUrls.length}…`)
 				for await (const line of linesFromUrl(url)) {
-					await handleLine(line, partIndex)
+					if (!(await handleLine(line, partIndex))) return
 				}
+				await appendJobLog(jobId, "out", `Kaikki: finished part ${partIndex}/${downloadUrls.length}`)
 			}
 		}
 
@@ -208,8 +231,22 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 			errors += result.errors
 		}
 
-		await prisma.ingestionJob.update({
+		if (await isIngestionJobCancelled(jobId)) return
+
+		await appendJobLog(
+			jobId,
+			"out",
+			`Kaikki complete: ${inserted} inserted, ${skipped} skipped, ${errors} parse errors`,
+		)
+
+		const metaSnap = await prisma.ingestionJob.findUnique({
 			where: { id: jobId },
+			select: { metadata: true },
+		})
+		const prevCompleteMeta = (metaSnap?.metadata ?? {}) as Record<string, unknown>
+
+		const done = await prisma.ingestionJob.updateMany({
+			where: { id: jobId, status: "RUNNING" },
 			data: {
 				status: "COMPLETED",
 				processedItems: processed,
@@ -217,6 +254,7 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 				errorCount: errors,
 				completedAt: new Date(),
 				metadata: {
+					...prevCompleteMeta,
 					inserted,
 					skipped,
 					lines: processed,
@@ -224,9 +262,10 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 					downloadUrl: downloadUrl ?? null,
 					downloadUrls: filePath ? null : downloadUrls,
 					kaikkiMode: kaikkiMode ?? null,
-				} as object,
+				} as Prisma.InputJsonValue,
 			},
 		})
+		if (done.count === 0) return
 
 		console.log(`[kaikki] Done: ${inserted} inserted, ${skipped} skipped, ${errors} parse errors`)
 
@@ -235,6 +274,13 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 		}
 	} catch (err) {
 		console.error("[kaikki] Fatal error:", err)
+		if (await isIngestionJobCancelled(jobId)) return
+		await appendJobLog(jobId, "err", String(err))
+		const failSnap = await prisma.ingestionJob.findUnique({
+			where: { id: jobId },
+			select: { metadata: true },
+		})
+		const prevFailMeta = (failSnap?.metadata ?? {}) as Record<string, unknown>
 		await prisma.ingestionJob.update({
 			where: { id: jobId },
 			data: {
@@ -242,7 +288,12 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 				processedItems: processed,
 				errorCount: errors,
 				completedAt: new Date(),
-				metadata: { error: String(err), inserted, skipped },
+				metadata: {
+					...prevFailMeta,
+					error: String(err),
+					inserted,
+					skipped,
+				} as Prisma.InputJsonValue,
 			},
 		})
 		throw err

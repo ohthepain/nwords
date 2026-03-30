@@ -1,4 +1,4 @@
-import { Link, createFileRoute, useNavigate } from "@tanstack/react-router"
+import { Link, createFileRoute } from "@tanstack/react-router"
 import { ArrowRight, Eye, EyeOff, Lock, Mail } from "lucide-react"
 import { useState } from "react"
 import { GoogleAuthSection } from "~/components/google-auth-button"
@@ -13,7 +13,6 @@ export const Route = createFileRoute("/auth/login")({
 })
 
 function LoginPage() {
-	const navigate = useNavigate()
 	const [email, setEmail] = useState("")
 	const [password, setPassword] = useState("")
 	const [error, setError] = useState<string | null>(null)
@@ -36,7 +35,8 @@ function LoginPage() {
 				return
 			}
 
-			navigate({ to: "/dashboard" })
+			// Full page navigation ensures we land on /dashboard (avoids SPA routing quirks after auth).
+			window.location.assign("/dashboard")
 		} catch {
 			setError("An unexpected error occurred")
 		} finally {

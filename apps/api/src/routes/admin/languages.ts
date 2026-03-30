@@ -2,9 +2,9 @@ import { zValidator } from "@hono/zod-validator"
 import { prisma } from "@nwords/db"
 import { Hono } from "hono"
 import { z } from "zod"
-import { enqueueLanguageIngestionPipeline } from "../../lib/language-pipeline.ts"
-import { adminMiddleware } from "../../middleware/admin.ts"
-import { authMiddleware } from "../../middleware/auth.ts"
+import { enqueueLanguageIngestionPipeline } from "../../lib/language-pipeline"
+import { adminMiddleware } from "../../middleware/admin"
+import { authMiddleware } from "../../middleware/auth"
 
 export const adminLanguagesRoute = new Hono()
 	.use("*", authMiddleware, adminMiddleware)

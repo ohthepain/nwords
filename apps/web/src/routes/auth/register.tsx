@@ -1,4 +1,4 @@
-import { Link, createFileRoute, useNavigate } from "@tanstack/react-router"
+import { Link, createFileRoute } from "@tanstack/react-router"
 import { ArrowRight, Eye, EyeOff, Lock, Mail } from "lucide-react"
 import { useState } from "react"
 import { GoogleAuthSection } from "~/components/google-auth-button"
@@ -13,7 +13,6 @@ export const Route = createFileRoute("/auth/register")({
 })
 
 function RegisterPage() {
-	const navigate = useNavigate()
 	const [name, setName] = useState("")
 	const [email, setEmail] = useState("")
 	const [password, setPassword] = useState("")
@@ -50,7 +49,7 @@ function RegisterPage() {
 				return
 			}
 
-			navigate({ to: "/dashboard" })
+			window.location.assign("/dashboard")
 		} catch {
 			setError("An unexpected error occurred")
 		} finally {

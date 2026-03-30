@@ -2,15 +2,23 @@ import { prisma } from "@nwords/db"
 import { createFileRoute, useRouter } from "@tanstack/react-router"
 import { createServerFn } from "@tanstack/react-start"
 import { useEffect, useRef, useState } from "react"
+import { JobOutputViewer } from "~/components/job-output-viewer"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
+import {
+	JOB_TYPE_LABELS,
+	STATUS_STYLES,
+	formatJobRelativeTime,
+	jobMetadataError,
+	stripJobLogsFromMetadata,
+} from "~/lib/admin-ingest-jobs"
 
 // ─── Server Functions ────────────────────────────────────
 
 const getJobs = createServerFn({ method: "GET" }).handler(async () => {
 	const jobs = await prisma.ingestionJob.findMany({
-		orderBy: { createdAt: "desc" },
+		orderBy: [{ createdAt: "desc" }, { id: "desc" }],
 		take: 50,
 	})
 
@@ -29,6 +37,7 @@ const getJobs = createServerFn({ method: "GET" }).handler(async () => {
 		const progressPct =
 			j.totalItems > 0 ? Math.round((j.processedItems / j.totalItems) * 100) : null
 
+		const metadata = stripJobLogsFromMetadata(j.metadata) as Record<string, object> | null
 		return {
 			id: j.id,
 			type: j.type,
@@ -44,7 +53,8 @@ const getJobs = createServerFn({ method: "GET" }).handler(async () => {
 			startedAt: j.startedAt?.toISOString() ?? null,
 			completedAt: j.completedAt?.toISOString() ?? null,
 			createdAt: j.createdAt.toISOString(),
-			metadata: j.metadata as Record<string, unknown> | null,
+			metadata,
+			errorMessage: jobMetadataError(j.metadata),
 		}
 	})
 })
@@ -67,23 +77,6 @@ export const Route = createFileRoute("/_authed/_admin/admin/jobs")({
 	},
 	component: AdminJobsPage,
 })
-
-// ─── Types ───────────────────────────────────────────────
-
-const JOB_TYPE_LABELS: Record<string, string> = {
-	KAIKKI_WORDS: "Kaikki Dictionary",
-	FREQUENCY_LIST: "Frequency List",
-	TATOEBA_SENTENCES: "Tatoeba Sentences",
-	AUDIO_FILES: "Audio Files",
-}
-
-const STATUS_STYLES: Record<string, string> = {
-	PENDING: "bg-muted text-muted-foreground",
-	RUNNING: "bg-brand/15 text-brand",
-	COMPLETED: "bg-known/15 text-known",
-	FAILED: "bg-destructive/15 text-destructive",
-	CANCELLED: "bg-muted text-muted-foreground",
-}
 
 // ─── Speedometer ─────────────────────────────────────────
 
@@ -150,6 +143,7 @@ function AdminJobsPage() {
 	const [uploadError, setUploadError] = useState<string | null>(null)
 	const [retryError, setRetryError] = useState<string | null>(null)
 	const [retryingJobId, setRetryingJobId] = useState<string | null>(null)
+	const [outputJob, setOutputJob] = useState<{ id: string; title: string } | null>(null)
 	const fileInputRef = useRef<HTMLInputElement>(null)
 
 	// Auto-refresh when jobs are running
@@ -227,7 +221,13 @@ function AdminJobsPage() {
 	}
 
 	return (
-		<div className="p-6 space-y-6">
+		<div className="p-6 space-y-6 relative">
+			<JobOutputViewer
+				jobId={outputJob?.id ?? null}
+				title={outputJob?.title ?? ""}
+				open={outputJob !== null}
+				onClose={() => setOutputJob(null)}
+			/>
 			<div className="flex items-center justify-between gap-4">
 				<p className="text-sm text-muted-foreground">
 					Import vocabulary, frequency lists, and sentences
@@ -349,8 +349,18 @@ function AdminJobsPage() {
 											{job.languageCode}
 										</span>
 										<span className="text-muted-foreground/50">·</span>
-										<span className="text-muted-foreground/70">{formatTime(job.createdAt)}</span>
+										<span className="text-muted-foreground/70">
+											{formatJobRelativeTime(job.createdAt)}
+										</span>
 									</div>
+									{job.errorMessage ? (
+										<p
+											className="mt-1 text-[11px] text-destructive/90 font-mono leading-snug break-all line-clamp-2 max-w-xl"
+											title={job.errorMessage}
+										>
+											{job.errorMessage}
+										</p>
+									) : null}
 								</div>
 								<div>
 									<span
@@ -408,6 +418,19 @@ function AdminJobsPage() {
 									)}
 								</div>
 								<div className="flex flex-col items-end gap-1">
+									<Button
+										variant="outline"
+										size="sm"
+										className="h-7 text-xs px-2 font-mono"
+										onClick={() =>
+											setOutputJob({
+												id: job.id,
+												title: JOB_TYPE_LABELS[job.type] ?? job.type,
+											})
+										}
+									>
+										Output
+									</Button>
 									{(job.status === "PENDING" || job.status === "RUNNING") && (
 										<Button
 											variant="ghost"
@@ -455,16 +478,4 @@ function StatDot({ color, label, value }: { color: string; label: string; value:
 			</span>
 		</div>
 	)
-}
-
-function formatTime(iso: string) {
-	const d = new Date(iso)
-	const now = new Date()
-	const diffMs = now.getTime() - d.getTime()
-	const diffMin = Math.floor(diffMs / 60000)
-
-	if (diffMin < 1) return "just now"
-	if (diffMin < 60) return `${diffMin}m ago`
-	if (diffMin < 1440) return `${Math.floor(diffMin / 60)}h ago`
-	return d.toLocaleDateString()
 }

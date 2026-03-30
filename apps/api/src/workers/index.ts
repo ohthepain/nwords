@@ -1,11 +1,11 @@
 import type PgBoss from "pg-boss"
-import { INGEST_QUEUE } from "../lib/ingestion-queues.ts"
-import type { FrequencyJobData } from "./frequency.ts"
-import { processFrequencyJob } from "./frequency.ts"
-import type { KaikkiJobData } from "./kaikki.ts"
-import { processKaikkiJob } from "./kaikki.ts"
-import type { TatoebaJobData } from "./tatoeba.ts"
-import { processTatoebaJob } from "./tatoeba.ts"
+import { INGEST_QUEUE } from "../lib/ingestion-queues"
+import type { FrequencyJobData } from "./frequency"
+import { processFrequencyJob } from "./frequency"
+import type { KaikkiJobData } from "./kaikki"
+import { processKaikkiJob } from "./kaikki"
+import type { TatoebaJobData } from "./tatoeba"
+import { processTatoebaJob } from "./tatoeba"
 
 export { INGEST_QUEUE as QUEUE }
 

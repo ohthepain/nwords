@@ -1,6 +1,6 @@
 import { Hono } from "hono"
-import { adminMiddleware } from "../../middleware/admin.ts"
-import { authMiddleware } from "../../middleware/auth.ts"
+import { adminMiddleware } from "../../middleware/admin"
+import { authMiddleware } from "../../middleware/auth"
 
 export const adminCheckRoute = new Hono()
 	.use("*", authMiddleware, adminMiddleware)

@@ -1,13 +1,14 @@
 import { access, mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { zValidator } from "@hono/zod-validator"
-import { prisma } from "@nwords/db"
+import { prisma, type Prisma } from "@nwords/db"
 import { Hono } from "hono"
 import { z } from "zod"
-import { getBoss } from "../../lib/boss.ts"
-import { INGEST_QUEUE } from "../../lib/ingestion-queues.ts"
-import { adminMiddleware } from "../../middleware/admin.ts"
-import { authMiddleware } from "../../middleware/auth.ts"
+import { getBoss } from "../../lib/boss"
+import { INGEST_QUEUE } from "../../lib/ingestion-queues"
+import { adminMiddleware } from "../../middleware/admin"
+import { authMiddleware } from "../../middleware/auth"
+import { jobMetadataForRetry } from "../../lib/job-logs"
 
 const UPLOAD_DIR = path.join(process.cwd(), "uploads")
 
@@ -221,7 +222,7 @@ export const adminJobsRoute = new Hono()
 			const [jobs, total] = await Promise.all([
 				prisma.ingestionJob.findMany({
 					where,
-					orderBy: { createdAt: "desc" },
+					orderBy: [{ createdAt: "desc" }, { id: "desc" }],
 					take: limit,
 					skip: offset,
 				}),
@@ -377,21 +378,26 @@ export const adminJobsRoute = new Hono()
 			return c.json({ error: "Internal retry routing mismatch" }, 500)
 		}
 
-		const prevMeta = asMetaRecord(old.metadata)
+		const rawMeta = asMetaRecord(old.metadata)
+		const {
+			retriedFromJobId: _retriedFrom,
+			retriedAt: _retriedAt,
+			...prevMeta
+		}: Record<string, unknown> = rawMeta
+		const cleanMeta = jobMetadataForRetry(prevMeta)
+
 		const newJob = await prisma.ingestionJob.create({
 			data: {
 				type: old.type,
 				languageId: old.languageId,
-				metadata: {
-					...prevMeta,
-					retriedFromJobId: old.id,
-					retriedAt: new Date().toISOString(),
-				} satisfies Record<string, unknown>,
+				metadata: cleanMeta as Prisma.InputJsonValue,
 			},
 		})
 
 		const boss = await getBoss()
 		await boss.send(queueName, { ...plan.payload, jobId: newJob.id })
+
+		await prisma.ingestionJob.delete({ where: { id: sourceJobId } })
 
 		return c.json(serializeJob(newJob), 201)
 	})

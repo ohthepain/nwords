@@ -26,21 +26,44 @@ export function scoreSentenceQuality(
 	return { score, isCandidate: score >= 0.2 }
 }
 
+export type LinkingLinkBatchProgress = {
+	kind: "link_batch"
+	batchSentenceCount: number
+	sentencesProcessed: number
+	linksCreated: number
+	candidates: number
+}
+
+export type LinkingAssignTestProgress = {
+	kind: "assign_test_sentences"
+	wordsProcessed: number
+	wordsTotal: number
+}
+
+export type LinkingProgressEvent = LinkingLinkBatchProgress | LinkingAssignTestProgress
+
 /**
  * Token-match sentences to dictionary lemmas, score usefulness for tests, then pick top sentences per word.
  */
 export async function linkSentencesAndAssignTests(
 	languageId: string,
-	onBatch: (processedSentences: number) => Promise<void>,
+	onProgress: (event: LinkingProgressEvent) => Promise<void>,
 ): Promise<{ sentencesProcessed: number; linksCreated: number; candidates: number }> {
 	const LINK_BATCH = 100
 	let sentencesProcessed = 0
 	let linksCreated = 0
 	let candidates = 0
 
+	// Tatoeba creates sentences with `testQualityScore: null`. Only those need linking.
+	// If a batch yields zero `SentenceWord` rows (e.g. dictionary empty / no token matches),
+	// we must still advance: without `testQualityScore: null` the same rows would match forever.
 	while (true) {
 		const sentences = await prisma.sentence.findMany({
-			where: { languageId, sentenceWords: { none: {} } },
+			where: {
+				languageId,
+				sentenceWords: { none: {} },
+				testQualityScore: null,
+			},
 			select: { id: true, text: true },
 			take: LINK_BATCH,
 		})
@@ -109,24 +132,39 @@ export async function linkSentencesAndAssignTests(
 			linksCreated += res.count
 		}
 
-		await onBatch(sentences.length)
+		await onProgress({
+			kind: "link_batch",
+			batchSentenceCount: sentences.length,
+			sentencesProcessed,
+			linksCreated,
+			candidates,
+		})
 	}
 
-	await assignTopTestSentencesForLanguage(languageId)
+	await assignTopTestSentencesForLanguage(languageId, onProgress)
 
 	return { sentencesProcessed, linksCreated, candidates }
 }
 
 const MAX_WORDS_TO_ASSIGN = 50_000
 
-async function assignTopTestSentencesForLanguage(languageId: string): Promise<void> {
+const ASSIGN_PROGRESS_EVERY = 200
+
+async function assignTopTestSentencesForLanguage(
+	languageId: string,
+	onProgress: (event: LinkingProgressEvent) => Promise<void>,
+): Promise<void> {
 	const words = await prisma.word.findMany({
 		where: { languageId },
 		select: { id: true },
 		take: MAX_WORDS_TO_ASSIGN,
 	})
 
-	for (const { id: wordId } of words) {
+	const wordsTotal = words.length
+	await onProgress({ kind: "assign_test_sentences", wordsProcessed: 0, wordsTotal })
+
+	for (let i = 0; i < words.length; i++) {
+		const wordId = words[i].id
 		const links = await prisma.sentenceWord.findMany({
 			where: {
 				wordId,
@@ -147,6 +185,11 @@ async function assignTopTestSentencesForLanguage(languageId: string): Promise<vo
 				where: { id: wordId },
 				data: { testSentenceIds },
 			})
+		}
+
+		const done = i + 1
+		if (done % ASSIGN_PROGRESS_EVERY === 0 || done === wordsTotal) {
+			await onProgress({ kind: "assign_test_sentences", wordsProcessed: done, wordsTotal })
 		}
 	}
 }

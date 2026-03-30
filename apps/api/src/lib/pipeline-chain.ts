@@ -1,11 +1,11 @@
 import { prisma } from "@nwords/db"
-import { getBoss } from "./boss.ts"
-import { INGEST_QUEUE } from "./ingestion-queues.ts"
+import { getBoss } from "./boss"
+import { INGEST_QUEUE } from "./ingestion-queues"
 import {
 	bnpdFreqListUrl,
 	resolveHermitDaveFrequencyUrl,
 	tatoebaPerLanguageSentencesUrl,
-} from "./ingestion-urls.ts"
+} from "./ingestion-urls"
 
 export async function chainFrequencyFromKaikki(languageId: string): Promise<void> {
 	const lang = await prisma.language.findUnique({ where: { id: languageId } })
@@ -100,24 +100,48 @@ export async function chainTatoebaFromFrequency(
 	}
 
 	const downloadUrl = tatoebaPerLanguageSentencesUrl(lang.code3)
-	const job = await prisma.ingestionJob.create({
-		data: {
-			type: "TATOEBA_SENTENCES",
-			languageId,
-			metadata: {
-				downloadUrl,
-				chainPipeline: true,
-				languageCode: lang.code,
-				languageName: lang.name,
-				tatoebaLangCode: lang.code3,
-				...extraMeta,
+
+	// Only one Tatoeba job should ingest the same export per language at a time. Double chain calls
+	// (e.g. races, retries) or a lingering RUNNING row would otherwise enqueue duplicates.
+	const job = await prisma.$transaction(async (tx) => {
+		const existing = await tx.ingestionJob.findFirst({
+			where: {
+				languageId,
+				type: "TATOEBA_SENTENCES",
+				status: { in: ["PENDING", "RUNNING"] },
 			},
-		},
+			select: { id: true, status: true },
+		})
+		if (existing) {
+			return { kind: "skip" as const, existingId: existing.id, status: existing.status }
+		}
+		const created = await tx.ingestionJob.create({
+			data: {
+				type: "TATOEBA_SENTENCES",
+				languageId,
+				metadata: {
+					downloadUrl,
+					chainPipeline: true,
+					languageCode: lang.code,
+					languageName: lang.name,
+					tatoebaLangCode: lang.code3,
+					...extraMeta,
+				},
+			},
+		})
+		return { kind: "created" as const, row: created }
 	})
+
+	if (job.kind === "skip") {
+		console.warn(
+			`[pipeline] Tatoeba already ${job.status} for language ${languageId} (${job.existingId}); skipping duplicate chain enqueue`,
+		)
+		return
+	}
 
 	const boss = await getBoss()
 	await boss.send(INGEST_QUEUE.TATOEBA, {
-		jobId: job.id,
+		jobId: job.row.id,
 		languageId,
 		downloadUrl,
 		langCode: lang.code3,

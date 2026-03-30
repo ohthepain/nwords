@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { app } from "../index.ts"
+import { app } from "../index"
 
 describe("Health route", () => {
 	it("returns ok status", async () => {

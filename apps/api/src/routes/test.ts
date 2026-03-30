@@ -2,7 +2,7 @@ import { zValidator } from "@hono/zod-validator"
 import { prisma } from "@nwords/db"
 import { Hono } from "hono"
 import { z } from "zod"
-import { authMiddleware } from "../middleware/auth.ts"
+import { authMiddleware } from "../middleware/auth"
 
 export const testRoute = new Hono()
 	.use("*", authMiddleware)

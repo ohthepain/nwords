@@ -3,18 +3,60 @@ import { prisma } from "@nwords/db"
 import { Link, createFileRoute, useRouter } from "@tanstack/react-router"
 import { createServerFn } from "@tanstack/react-start"
 import { getRequest } from "@tanstack/react-start/server"
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { JobOutputViewer } from "~/components/job-output-viewer"
 import { Button } from "~/components/ui/button"
+import {
+	JOB_TYPE_LABELS,
+	STATUS_STYLES,
+	formatJobRelativeTime,
+	jobMetadataError,
+} from "~/lib/admin-ingest-jobs"
 import { forwardedAdminApiHeaders } from "~/lib/server-admin-api"
 
-const getLanguages = createServerFn({ method: "GET" }).handler(async () => {
-	const languages = await prisma.language.findMany({
+const JOBS_PER_LANGUAGE = 20
+const MAX_JOB_FETCH = 400
+
+type LanguageAdminRow = {
+	id: string
+	code: string
+	name: string
+	enabled: boolean
+	wordCount: number
+	sentenceCount: number
+}
+
+type LanguageIngestJobRow = {
+	id: string
+	type: string
+	status: string
+	totalItems: number
+	processedItems: number
+	errorCount: number
+	progress: number | null
+	createdAt: string
+	/** Populated from `metadata.error` when the worker records a failure. */
+	errorMessage: string | null
+}
+
+/** Newest first; break ties by id so list order is stable across refreshes. */
+function compareIngestJobsForDisplay(a: LanguageIngestJobRow, b: LanguageIngestJobRow): number {
+	if (a.createdAt > b.createdAt) return -1
+	if (a.createdAt < b.createdAt) return 1
+	if (a.id > b.id) return -1
+	if (a.id < b.id) return 1
+	return 0
+}
+
+const loadAdminLanguagesPage = createServerFn({ method: "GET" }).handler(async () => {
+	const languagesRaw = await prisma.language.findMany({
 		orderBy: { name: "asc" },
 		include: {
 			_count: { select: { words: true, sentences: true } },
 		},
 	})
-	return languages.map((l) => ({
+
+	const languages: LanguageAdminRow[] = languagesRaw.map((l) => ({
 		id: l.id,
 		code: l.code,
 		name: l.name,
@@ -22,6 +64,47 @@ const getLanguages = createServerFn({ method: "GET" }).handler(async () => {
 		wordCount: l._count.words,
 		sentenceCount: l._count.sentences,
 	}))
+
+	const enabledIds = languages.filter((l) => l.enabled).map((l) => l.id)
+	const jobsByLanguageId: Record<string, LanguageIngestJobRow[]> = {}
+	for (const id of enabledIds) {
+		jobsByLanguageId[id] = []
+	}
+
+	if (enabledIds.length > 0) {
+		const jobs = await prisma.ingestionJob.findMany({
+			where: { languageId: { in: enabledIds } },
+			orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+			take: MAX_JOB_FETCH,
+		})
+
+		const counts: Record<string, number> = {}
+		for (const id of enabledIds) counts[id] = 0
+
+		for (const j of jobs) {
+			if (counts[j.languageId] >= JOBS_PER_LANGUAGE) continue
+			counts[j.languageId]++
+			const progressPct =
+				j.totalItems > 0 ? Math.round((j.processedItems / j.totalItems) * 100) : null
+			jobsByLanguageId[j.languageId].push({
+				id: j.id,
+				type: j.type,
+				status: j.status,
+				totalItems: j.totalItems,
+				processedItems: j.processedItems,
+				errorCount: j.errorCount,
+				progress: progressPct,
+				createdAt: j.createdAt.toISOString(),
+				errorMessage: jobMetadataError(j.metadata),
+			})
+		}
+
+		for (const id of enabledIds) {
+			jobsByLanguageId[id].sort(compareIngestJobsForDisplay)
+		}
+	}
+
+	return { languages, jobsByLanguageId }
 })
 
 const toggleLanguage = createServerFn({ method: "POST" })
@@ -75,16 +158,40 @@ const runLanguagePipeline = createServerFn({ method: "POST" })
 	})
 
 export const Route = createFileRoute("/_authed/_admin/admin/languages")({
-	loader: () => getLanguages(),
+	loader: () => loadAdminLanguagesPage(),
 	component: AdminLanguagesPage,
 })
 
 function AdminLanguagesPage() {
 	const router = useRouter()
-	const languages = Route.useLoaderData()
+	const { languages, jobsByLanguageId } = Route.useLoaderData()
 	const [toggling, setToggling] = useState<string | null>(null)
 	const [runningPipeline, setRunningPipeline] = useState<string | null>(null)
 	const [notice, setNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null)
+	const [jobActionError, setJobActionError] = useState<string | null>(null)
+	const [retryingJobId, setRetryingJobId] = useState<string | null>(null)
+	const [outputJob, setOutputJob] = useState<{ id: string; title: string } | null>(null)
+
+	const enabledJobsFlat = useMemo(() => {
+		const out: LanguageIngestJobRow[] = []
+		for (const lang of languages) {
+			if (!lang.enabled) continue
+			out.push(...(jobsByLanguageId[lang.id] ?? []))
+		}
+		return out
+	}, [languages, jobsByLanguageId])
+
+	const hasActiveIngestJobs = enabledJobsFlat.some(
+		(j) => j.status === "RUNNING" || j.status === "PENDING",
+	)
+
+	useEffect(() => {
+		if (!hasActiveIngestJobs) return
+		const interval = setInterval(() => {
+			router.invalidate()
+		}, 3000)
+		return () => clearInterval(interval)
+	}, [hasActiveIngestJobs, router])
 
 	const enabledCount = languages.filter((l) => l.enabled).length
 	const withWords = languages.filter((l) => l.wordCount > 0).length
@@ -97,7 +204,7 @@ function AdminLanguagesPage() {
 			if (out.pipelineJobId) {
 				setNotice({
 					kind: "ok",
-					text: `Ingestion started — job ${out.pipelineJobId.slice(0, 8)}… Open Jobs to track.`,
+					text: `Ingestion started — job ${out.pipelineJobId.slice(0, 8)}… See jobs below (when this language is on) or the full list on Jobs.`,
 				})
 			}
 		} catch (e) {
@@ -115,7 +222,9 @@ function AdminLanguagesPage() {
 			const out = await runLanguagePipeline({ data: { id } })
 			setNotice({
 				kind: "ok",
-				text: `Pipeline queued — job ${out.pipelineJobId.slice(0, 8)}… Open Jobs for progress.`,
+				text: out.pipelineJobId
+					? `Pipeline queued — job ${out.pipelineJobId.slice(0, 8)}… Progress appears below and on Jobs.`
+					: "Pipeline queued. Progress appears below and on Jobs.",
 			})
 		} catch (e) {
 			setNotice({ kind: "err", text: e instanceof Error ? e.message : "Pipeline failed" })
@@ -125,15 +234,56 @@ function AdminLanguagesPage() {
 		await router.invalidate()
 	}
 
+	async function handleJobCancel(jobId: string) {
+		setJobActionError(null)
+		await fetch(`/api/admin/jobs/${jobId}/cancel`, {
+			method: "POST",
+			credentials: "include",
+		})
+		await router.invalidate()
+	}
+
+	async function handleJobRetry(jobId: string) {
+		setJobActionError(null)
+		setRetryingJobId(jobId)
+		try {
+			const res = await fetch(`/api/admin/jobs/${jobId}/retry`, {
+				method: "POST",
+				credentials: "include",
+			})
+			const body = (await res.json().catch(() => ({}))) as { error?: string }
+			if (!res.ok) {
+				setJobActionError(body.error ?? `Retry failed (${res.status})`)
+				return
+			}
+			await router.invalidate()
+		} finally {
+			setRetryingJobId(null)
+		}
+	}
+
 	return (
-		<div className="p-6 space-y-6">
+		<div className="p-6 space-y-6 relative">
+			<JobOutputViewer
+				jobId={outputJob?.id ?? null}
+				title={outputJob?.title ?? ""}
+				open={outputJob !== null}
+				onClose={() => setOutputJob(null)}
+			/>
 			<div className="text-sm text-muted-foreground space-y-1">
 				<p>Manage which languages are available to users.</p>
 				<p className="text-xs">
-					Turning a language <strong className="text-foreground font-medium">on</strong> (from off)
-					with no words yet starts the pipeline automatically. Use{" "}
-					<strong className="text-foreground font-medium">Re-import</strong> to run it again any
-					time (updates existing lemmas). Track progress under Jobs.
+					When a language is <strong className="text-foreground font-medium">on</strong>, recent{" "}
+					<strong className="text-foreground font-medium">ingestion jobs</strong> for that language
+					appear below the row (Output / Cancel / Retry). For a full list see{" "}
+					<Link
+						to="/admin/jobs"
+						className="underline underline-offset-2 hover:text-foreground font-medium text-foreground/90"
+					>
+						Jobs
+					</Link>
+					. Turning a language on with no words starts the pipeline automatically; use{" "}
+					<strong className="text-foreground font-medium">Re-import</strong> to run it again.
 				</p>
 				<p className="text-xs">
 					Pipeline: Kaikki.org (four{" "}
@@ -145,16 +295,8 @@ function AdminLanguagesPage() {
 					>
 						pos-noun
 					</a>
-					-style JSONL streams when available, else one full dump) →{" "}
-					<a
-						href="https://github.com/bnpd/freqListsLemmatized"
-						target="_blank"
-						rel="noreferrer"
-						className="underline underline-offset-2 hover:text-foreground"
-					>
-						bnpd/freqListsLemmatized
-					</a>{" "}
-					ranks → Tatoeba sentences (ISO 639-3 required).
+					-style JSONL streams when available, else one full dump) → frequency ranks (HermitDave or
+					bnpd) → Tatoeba sentences (ISO 639-3 required).
 				</p>
 			</div>
 
@@ -168,6 +310,12 @@ function AdminLanguagesPage() {
 				>
 					{notice.text}
 				</output>
+			) : null}
+
+			{jobActionError ? (
+				<div className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-3 py-2">
+					{jobActionError}
+				</div>
 			) : null}
 
 			{/* Summary stats */}
@@ -202,76 +350,179 @@ function AdminLanguagesPage() {
 					<span className="text-right">Import</span>
 				</div>
 				<div className="divide-y divide-border">
-					{languages.map((lang) => (
-						<div
-							key={lang.id}
-							className="grid grid-cols-[1fr_90px_90px_100px_108px] gap-4 items-center px-4 py-2.5 hover:bg-muted/30 transition-colors"
-						>
-							<div className="flex flex-col gap-1 min-w-0">
-								<div className="flex items-center gap-3 min-w-0">
-									<span className="text-sm font-medium truncate">{lang.name}</span>
-									<span className="text-xs font-mono text-muted-foreground bg-muted rounded px-1.5 py-0.5 shrink-0">
-										{lang.code}
+					{languages.map((lang) => {
+						const langJobs = jobsByLanguageId[lang.id] ?? []
+						return (
+							<div key={lang.id} className="bg-background">
+								<div className="grid grid-cols-[1fr_90px_90px_100px_108px] gap-4 items-center px-4 py-2.5 hover:bg-muted/30 transition-colors">
+									<div className="flex flex-col gap-1 min-w-0">
+										<div className="flex items-center gap-3 min-w-0">
+											<span className="text-sm font-medium truncate">{lang.name}</span>
+											<span className="text-xs font-mono text-muted-foreground bg-muted rounded px-1.5 py-0.5 shrink-0">
+												{lang.code}
+											</span>
+										</div>
+										<div className="flex items-center gap-2 text-[11px]">
+											<Link
+												to="/admin/words"
+												search={{ languageId: lang.id }}
+												className="text-muted-foreground hover:text-foreground underline underline-offset-2"
+											>
+												Words
+											</Link>
+											<span className="text-border select-none">·</span>
+											<Link
+												to="/admin/sentences"
+												search={{ languageId: lang.id }}
+												className="text-muted-foreground hover:text-foreground underline underline-offset-2"
+											>
+												Sentences
+											</Link>
+										</div>
+									</div>
+									<span className="text-sm font-mono text-right tabular-nums">
+										{lang.wordCount > 0 ? (
+											lang.wordCount.toLocaleString()
+										) : (
+											<span className="text-muted-foreground">—</span>
+										)}
 									</span>
+									<span className="text-sm font-mono text-right tabular-nums">
+										{lang.sentenceCount > 0 ? (
+											lang.sentenceCount.toLocaleString()
+										) : (
+											<span className="text-muted-foreground">—</span>
+										)}
+									</span>
+									<div className="flex justify-end">
+										<Button
+											variant={lang.enabled ? "default" : "outline"}
+											size="sm"
+											className="h-7 text-xs w-20 font-mono"
+											disabled={toggling === lang.id || runningPipeline === lang.id}
+											onClick={() => handleToggle(lang.id, lang.enabled)}
+										>
+											{lang.enabled ? "On" : "Off"}
+										</Button>
+									</div>
+									<div className="flex justify-end">
+										<Button
+											variant="secondary"
+											size="sm"
+											className="h-7 text-xs px-2 font-mono"
+											disabled={runningPipeline === lang.id || toggling === lang.id}
+											onClick={() => handleRunPipeline(lang.id)}
+										>
+											{runningPipeline === lang.id ? "…" : "Re-import"}
+										</Button>
+									</div>
 								</div>
-								<div className="flex items-center gap-2 text-[11px]">
-									<Link
-										to="/admin/words"
-										search={{ languageId: lang.id }}
-										className="text-muted-foreground hover:text-foreground underline underline-offset-2"
-									>
-										Words
-									</Link>
-									<span className="text-border select-none">·</span>
-									<Link
-										to="/admin/sentences"
-										search={{ languageId: lang.id }}
-										className="text-muted-foreground hover:text-foreground underline underline-offset-2"
-									>
-										Sentences
-									</Link>
-								</div>
+
+								{lang.enabled ? (
+									<div className="px-4 py-3 bg-muted/20 border-t border-border/70">
+										<p className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] mb-2">
+											Ingestion jobs (latest {JOBS_PER_LANGUAGE})
+										</p>
+										{langJobs.length === 0 ? (
+											<p className="text-xs text-muted-foreground">
+												No jobs yet for this language.
+											</p>
+										) : (
+											<ul className="space-y-2">
+												{langJobs.map((job) => (
+													<li
+														key={job.id}
+														className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs rounded-md border border-border/80 bg-background/60 px-3 py-2"
+													>
+														<span className="font-medium text-foreground">
+															{JOB_TYPE_LABELS[job.type] ?? job.type}
+														</span>
+														<span
+															className={`inline-flex items-center gap-1 font-mono px-2 py-0.5 rounded-full ${STATUS_STYLES[job.status] ?? ""}`}
+														>
+															{job.status === "RUNNING" && (
+																<span className="size-1.5 rounded-full bg-current animate-pulse" />
+															)}
+															{job.status.toLowerCase()}
+														</span>
+														<span className="text-muted-foreground font-mono tabular-nums">
+															{job.totalItems > 0 && job.progress !== null ? (
+																<>{job.progress}%</>
+															) : job.processedItems > 0 ? (
+																<>{job.processedItems.toLocaleString()} processed</>
+															) : (
+																"—"
+															)}
+														</span>
+														{job.errorCount > 0 ? (
+															<span className="text-destructive font-mono tabular-nums">
+																err {job.errorCount}
+															</span>
+														) : null}
+														<span className="text-muted-foreground/80 ml-auto sm:ml-0">
+															{formatJobRelativeTime(job.createdAt)}
+														</span>
+														{job.errorMessage ? (
+															<p
+																className="w-full text-[11px] text-destructive/90 font-mono leading-snug break-all line-clamp-2"
+																title={job.errorMessage}
+															>
+																{job.errorMessage}
+															</p>
+														) : null}
+														<div className="flex flex-wrap items-center gap-1 w-full sm:w-auto sm:ml-auto justify-end">
+															<Button
+																variant="outline"
+																size="sm"
+																className="h-7 text-[11px] px-2 font-mono"
+																onClick={() =>
+																	setOutputJob({
+																		id: job.id,
+																		title: JOB_TYPE_LABELS[job.type] ?? job.type,
+																	})
+																}
+															>
+																Output
+															</Button>
+															{(job.status === "PENDING" || job.status === "RUNNING") && (
+																<Button
+																	variant="ghost"
+																	size="sm"
+																	className="h-7 text-[11px] px-2 text-muted-foreground hover:text-destructive"
+																	onClick={() => handleJobCancel(job.id)}
+																>
+																	Cancel
+																</Button>
+															)}
+															{(job.status === "FAILED" || job.status === "CANCELLED") && (
+																<Button
+																	variant="secondary"
+																	size="sm"
+																	className="h-7 text-[11px] px-2"
+																	disabled={retryingJobId !== null}
+																	onClick={() => handleJobRetry(job.id)}
+																>
+																	{retryingJobId === job.id ? "…" : "Retry"}
+																</Button>
+															)}
+														</div>
+													</li>
+												))}
+											</ul>
+										)}
+									</div>
+								) : null}
 							</div>
-							<span className="text-sm font-mono text-right tabular-nums">
-								{lang.wordCount > 0 ? (
-									lang.wordCount.toLocaleString()
-								) : (
-									<span className="text-muted-foreground">—</span>
-								)}
-							</span>
-							<span className="text-sm font-mono text-right tabular-nums">
-								{lang.sentenceCount > 0 ? (
-									lang.sentenceCount.toLocaleString()
-								) : (
-									<span className="text-muted-foreground">—</span>
-								)}
-							</span>
-							<div className="flex justify-end">
-								<Button
-									variant={lang.enabled ? "default" : "outline"}
-									size="sm"
-									className="h-7 text-xs w-20 font-mono"
-									disabled={toggling === lang.id || runningPipeline === lang.id}
-									onClick={() => handleToggle(lang.id, lang.enabled)}
-								>
-									{lang.enabled ? "On" : "Off"}
-								</Button>
-							</div>
-							<div className="flex justify-end">
-								<Button
-									variant="secondary"
-									size="sm"
-									className="h-7 text-xs px-2 font-mono"
-									disabled={runningPipeline === lang.id || toggling === lang.id}
-									onClick={() => handleRunPipeline(lang.id)}
-								>
-									{runningPipeline === lang.id ? "…" : "Re-import"}
-								</Button>
-							</div>
-						</div>
-					))}
+						)
+					})}
 				</div>
 			</div>
+
+			{hasActiveIngestJobs ? (
+				<p className="text-xs text-muted-foreground text-center">
+					Auto-refreshing job status every 3 seconds while work is running…
+				</p>
+			) : null}
 		</div>
 	)
 }

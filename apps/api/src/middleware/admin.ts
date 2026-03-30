@@ -1,5 +1,5 @@
 import { createMiddleware } from "hono/factory"
-import type { AuthUser } from "./auth.ts"
+import type { AuthUser } from "./auth"
 
 type AdminEnv = {
 	Variables: {
