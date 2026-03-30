@@ -176,11 +176,31 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 			})
 
 			if (batch.length >= BATCH_SIZE) {
-				const result = await flushBatch(batch)
+				const flushT0 = Date.now()
+				const result = await flushBatch(batch, batchFlushCount + 1)
+				const flushMs = Date.now() - flushT0
 				inserted += result.inserted
 				errors += result.errors
 				batch = []
 				batchFlushCount++
+				const slow = flushMs >= 4000
+				const sample = batchFlushCount <= 2 || batchFlushCount % 40 === 0
+				if (slow || sample || result.flushPath === "upsertFallback") {
+					kaikkiAgentLog({
+						location: "kaikki.ts:handleLine:afterFlush",
+						message: "post-flush timing",
+						hypothesisId: result.flushPath === "upsertFallback" ? "H2" : slow ? "H4" : "H1",
+						data: {
+							batchFlushCount,
+							flushMs,
+							processed,
+							insertedBatch: result.inserted,
+							errorsBatch: result.errors,
+							flushPath: result.flushPath,
+							partIndex,
+						},
+					})
+				}
 				if (batchFlushCount === 1 || batchFlushCount % 5 === 0) {
 					await appendJobLog(
 						jobId,
@@ -188,6 +208,7 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 						`Kaikki flush ${batchFlushCount}: part ${partIndex}/${totalParts}, lines ${processed}, inserted ${inserted}`,
 					)
 				}
+				const progT0 = Date.now()
 				await updateIngestionProgress(jobId, {
 					processedItems: processed,
 					errorCount: errors,
@@ -200,6 +221,15 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 						kaikkiMode: kaikkiMode ?? null,
 					},
 				})
+				const progMs = Date.now() - progT0
+				if (progMs >= 3000) {
+					kaikkiAgentLog({
+						location: "kaikki.ts:handleLine:afterProgress",
+						message: "updateIngestionProgress slow",
+						hypothesisId: "H4",
+						data: { progMs, batchFlushCount, processed },
+					})
+				}
 				if (await isIngestionJobCancelled(jobId)) return false
 			}
 		} catch {
@@ -226,7 +256,7 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 		}
 
 		if (batch.length > 0) {
-			const result = await flushBatch(batch)
+			const result = await flushBatch(batch, batchFlushCount + 1)
 			inserted += result.inserted
 			errors += result.errors
 		}
@@ -309,9 +339,12 @@ async function flushBatch(
 		definitions: Prisma.InputJsonValue
 		isOffensive: boolean
 	}>,
-): Promise<{ inserted: number; errors: number }> {
+	_flushIndex: number,
+): Promise<{ inserted: number; errors: number; flushPath: "createMany" | "upsertFallback" }> {
 	let inserted = 0
 	let errors = 0
+	let flushPath: "createMany" | "upsertFallback" = "createMany"
+	const dbT0 = Date.now()
 
 	try {
 		const result = await prisma.word.createMany({
@@ -319,7 +352,19 @@ async function flushBatch(
 			skipDuplicates: true,
 		})
 		inserted = result.count
-	} catch {
+	} catch (err) {
+		flushPath = "upsertFallback"
+		kaikkiAgentLog({
+			location: "kaikki.ts:flushBatch",
+			message: "createMany failed, upsert fallback",
+			hypothesisId: "H2",
+			data: {
+				flushIndex: _flushIndex,
+				batchLen: batch.length,
+				errName: err instanceof Error ? err.name : "unknown",
+				errMsg: err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200),
+			},
+		})
 		for (const word of batch) {
 			try {
 				await prisma.word.upsert({
@@ -343,5 +388,22 @@ async function flushBatch(
 		}
 	}
 
-	return { inserted, errors }
+	const dbMs = Date.now() - dbT0
+	if (dbMs >= 3500 || flushPath === "upsertFallback") {
+		kaikkiAgentLog({
+			location: "kaikki.ts:flushBatch:end",
+			message: "flushBatch db timing",
+			hypothesisId: flushPath === "upsertFallback" ? "H2" : "H4",
+			data: {
+				flushIndex: _flushIndex,
+				dbMs,
+				flushPath,
+				batchLen: batch.length,
+				inserted,
+				errors,
+			},
+		})
+	}
+
+	return { inserted, errors, flushPath }
 }

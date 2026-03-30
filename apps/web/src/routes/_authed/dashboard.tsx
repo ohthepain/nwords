@@ -97,12 +97,15 @@ function DashboardPage() {
 	return (
 		<div className="max-w-4xl mx-auto px-6 py-8 space-y-8">
 			{/* Header */}
-			<div>
+			<div className="flex flex-wrap items-center gap-x-4 gap-y-2 justify-between">
 				<p className="text-sm text-muted-foreground flex items-center gap-2">
 					<span>{data.user.nativeLanguage?.name}</span>
 					<span className="text-xs font-mono opacity-50">→</span>
 					<span className="font-medium text-foreground">{data.user.targetLanguage?.name}</span>
 				</p>
+				<Button asChild variant="outline" size="sm">
+					<Link to="/practice">Practice (cloze + hint)</Link>
+				</Button>
 			</div>
 
 			{/* Stats grid */}

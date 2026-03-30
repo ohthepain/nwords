@@ -52,12 +52,18 @@ function HomePage() {
 						level with scientific accuracy.
 					</p>
 
-					<div className="flex items-center justify-center gap-3">
+					<div className="flex flex-wrap items-center justify-center gap-3">
 						<Link
 							to="/auth/register"
 							className="bg-primary text-primary-foreground px-6 py-3 rounded-md text-sm font-medium hover:opacity-90 transition-all active:scale-[0.98]"
 						>
 							Start measuring
+						</Link>
+						<Link
+							to="/practice"
+							className="border border-border px-6 py-3 rounded-md text-sm font-medium hover:bg-accent transition-all"
+						>
+							Try practice
 						</Link>
 						<a
 							href="#how-it-works"

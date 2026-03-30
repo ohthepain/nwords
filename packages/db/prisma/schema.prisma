@@ -102,6 +102,8 @@ model Language {
   nativeSpeakers User[]          @relation("NativeLanguage")
   targetLearners User[]          @relation("TargetLanguage")
   frequencyLists FrequencyList[]
+  guestSessionsNative TestSession[] @relation("GuestTestNativeLanguage")
+  guestSessionsTarget TestSession[] @relation("GuestTestTargetLanguage")
 
   @@map("language")
 }
@@ -251,8 +253,13 @@ model ScoreHistory {
 
 model TestSession {
   id                String     @id @default(uuid()) @db.Uuid
-  userId            String     @db.Uuid
-  user              User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId            String?    @db.Uuid
+  user              User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// For guest (logged-out) sessions only — paired with `targetLanguageId`.
+  nativeLanguageId  String?    @db.Uuid
+  nativeLanguage    Language?  @relation("GuestTestNativeLanguage", fields: [nativeLanguageId], references: [id])
+  targetLanguageId  String?    @db.Uuid
+  targetLanguage    Language?  @relation("GuestTestTargetLanguage", fields: [targetLanguageId], references: [id])
   mode              TestMode
   startedAt         DateTime   @default(now())
   endedAt           DateTime?

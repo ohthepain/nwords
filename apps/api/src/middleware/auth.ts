@@ -45,10 +45,16 @@ export const authMiddleware = createMiddleware<AuthEnv>(async (c, next) => {
 	await next()
 })
 
+export type OptionalAuthEnv = {
+	Variables: {
+		user?: AuthUser
+	}
+}
+
 /**
  * Optional auth — sets user if present, but doesn't block.
  */
-export const optionalAuth = createMiddleware<AuthEnv>(async (c, next) => {
+export const optionalAuth = createMiddleware<OptionalAuthEnv>(async (c, next) => {
 	try {
 		const session = await auth.api.getSession({ headers: c.req.raw.headers })
 		if (session?.user) {
