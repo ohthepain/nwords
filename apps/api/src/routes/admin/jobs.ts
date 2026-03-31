@@ -17,6 +17,7 @@ const TYPE_TO_QUEUE: Record<string, string> = {
 	KAIKKI_WORDS: INGEST_QUEUE.KAIKKI,
 	FREQUENCY_LIST: INGEST_QUEUE.FREQUENCY,
 	TATOEBA_SENTENCES: INGEST_QUEUE.TATOEBA,
+	WORD_FORMS: INGEST_QUEUE.WORD_FORMS,
 }
 
 type RetryPlan =
@@ -161,6 +162,50 @@ async function planRetryFromJob(job: {
 			base.downloadUrl = downloadUrl
 			return { ok: true, queue: INGEST_QUEUE.TATOEBA, payload: base }
 		}
+		case "WORD_FORMS": {
+			const filePath = typeof meta.filePath === "string" ? meta.filePath : undefined
+			if (filePath) {
+				try {
+					await access(filePath)
+				} catch {
+					return { ok: false, error: "Original uploaded file is no longer on disk" }
+				}
+				return {
+					ok: true,
+					queue: INGEST_QUEUE.WORD_FORMS,
+					payload: {
+						languageId: job.languageId,
+						filePath,
+						chainPipeline: meta.chainPipeline === true,
+						...(typeof meta.kaikkiMode === "string" ? { kaikkiMode: meta.kaikkiMode } : {}),
+					},
+				}
+			}
+			const rawUrls = meta.downloadUrls
+			const urls = Array.isArray(rawUrls)
+				? rawUrls.filter((u): u is string => typeof u === "string" && u.length > 0)
+				: []
+			const downloadUrl = typeof meta.downloadUrl === "string" ? meta.downloadUrl : undefined
+			if (urls.length === 0 && !downloadUrl) {
+				return {
+					ok: false,
+					error: "Job has no file path or download URLs in metadata; cannot retry",
+				}
+			}
+			const payload: Record<string, unknown> = {
+				languageId: job.languageId,
+				chainPipeline: meta.chainPipeline === true,
+			}
+			if (urls.length > 1) {
+				payload.downloadUrls = urls
+			} else if (urls.length === 1) {
+				payload.downloadUrl = urls[0]
+			} else if (downloadUrl) {
+				payload.downloadUrl = downloadUrl
+			}
+			if (typeof meta.kaikkiMode === "string") payload.kaikkiMode = meta.kaikkiMode
+			return { ok: true, queue: INGEST_QUEUE.WORD_FORMS, payload }
+		}
 		default:
 			return { ok: false, error: "This job type cannot be retried from the admin UI" }
 	}
@@ -278,7 +323,7 @@ export const adminJobsRoute = new Hono()
 			z.object({
 				status: z.enum(["PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"]).optional(),
 				type: z
-					.enum(["KAIKKI_WORDS", "FREQUENCY_LIST", "TATOEBA_SENTENCES", "AUDIO_FILES"])
+					.enum(["KAIKKI_WORDS", "FREQUENCY_LIST", "TATOEBA_SENTENCES", "WORD_FORMS", "AUDIO_FILES"])
 					.optional(),
 				limit: z.coerce.number().min(1).max(100).default(20),
 				offset: z.coerce.number().min(0).default(0),

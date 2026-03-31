@@ -25,6 +25,8 @@ type NextQuestion = {
 	hintText: string
 	hintSentenceId: string | null
 	hintSource: "parallel" | "definition"
+	/** Target word translated to native language via English-gloss pivot (null if unavailable). */
+	inlineHint: string | null
 	answerType: "TRANSLATION_TYPED"
 	sessionMode: string
 }
@@ -342,7 +344,9 @@ function PracticePage() {
 										<Label className="text-xs font-mono text-muted-foreground uppercase tracking-wider">
 											Sentence
 										</Label>
-										<p className="text-lg leading-relaxed font-medium">{question.promptText}</p>
+										<p className="text-lg leading-relaxed font-medium">
+											<ClozePrompt promptText={question.promptText} inlineHint={question.inlineHint} />
+										</p>
 									</div>
 									<div className="space-y-2 rounded-lg border border-border/80 bg-muted/30 p-4">
 										<Label className="text-xs font-mono text-muted-foreground uppercase tracking-wider">
@@ -383,6 +387,29 @@ function PracticePage() {
 				)}
 			</div>
 		</div>
+	)
+}
+
+/** Renders the cloze sentence, replacing `____` with the native-language inline hint (underlined) or a plain blank. */
+function ClozePrompt({ promptText, inlineHint }: { promptText: string; inlineHint: string | null }) {
+	const BLANK = "____"
+	const idx = promptText.indexOf(BLANK)
+
+	if (idx === -1 || !inlineHint) {
+		return <>{promptText}</>
+	}
+
+	const before = promptText.slice(0, idx)
+	const after = promptText.slice(idx + BLANK.length)
+
+	return (
+		<>
+			{before}
+			<span className="underline underline-offset-4 decoration-brand/60 text-brand font-semibold">
+				{inlineHint}
+			</span>
+			{after}
+		</>
 	)
 }
 

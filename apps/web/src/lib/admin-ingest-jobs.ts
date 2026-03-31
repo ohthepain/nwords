@@ -38,6 +38,7 @@ export const JOB_TYPE_LABELS: Record<string, string> = {
 	KAIKKI_WORDS: "Kaikki Dictionary",
 	FREQUENCY_LIST: "Frequency List",
 	TATOEBA_SENTENCES: "Tatoeba Sentences",
+	WORD_FORMS: "Word Forms",
 	AUDIO_FILES: "Audio Files",
 }
 

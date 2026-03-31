@@ -1,7 +1,7 @@
 import type { Prisma } from "@nwords/db"
 import { prisma } from "@nwords/db"
 import { appendJobLog, snapshotJobMetadata } from "./job-logs"
-import { chainFrequencyFromKaikki, chainTatoebaFromFrequency } from "./pipeline-chain"
+import { chainFrequencyFromKaikki, chainTatoebaFromFrequency, chainWordFormsFromTatoeba } from "./pipeline-chain"
 
 function asMetaRecord(metadata: unknown): Record<string, unknown> {
 	if (metadata !== null && typeof metadata === "object" && !Array.isArray(metadata)) {
@@ -79,6 +79,9 @@ export async function skipIngestionJobAndContinuePipeline(jobId: string): Promis
 			await chainTatoebaFromFrequency(languageId, { operatorSkippedFrequencyJob: true })
 			break
 		case "TATOEBA_SENTENCES":
+			await chainWordFormsFromTatoeba(languageId, { operatorSkippedTatoebaJob: true })
+			break
+		case "WORD_FORMS":
 			break
 		default:
 			break

@@ -6,6 +6,8 @@ import type { KaikkiJobData } from "./kaikki"
 import { processKaikkiJob } from "./kaikki"
 import type { TatoebaJobData } from "./tatoeba"
 import { processTatoebaJob } from "./tatoeba"
+import type { WordFormsJobData } from "./word-forms"
+import { processWordFormsJob } from "./word-forms"
 
 export { INGEST_QUEUE as QUEUE }
 
@@ -31,6 +33,9 @@ export async function registerIngestWorkers(boss: PgBoss) {
 	await boss.work(INGEST_QUEUE.TATOEBA, opts, async ([job]) =>
 		processTatoebaJob(job as PgBoss.Job<TatoebaJobData>),
 	)
+	await boss.work(INGEST_QUEUE.WORD_FORMS, opts, async ([job]) =>
+		processWordFormsJob(job as PgBoss.Job<WordFormsJobData>),
+	)
 
-	console.log("[workers] Registered: kaikki, frequency, tatoeba")
+	console.log("[workers] Registered: kaikki, frequency, tatoeba, word-forms")
 }

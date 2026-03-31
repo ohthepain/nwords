@@ -225,6 +225,7 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 				hintText: resolved.hintText,
 				hintSentenceId: resolved.hintSentenceId,
 				hintSource: resolved.hintSource,
+				inlineHint: resolved.inlineHint,
 				answerType: "TRANSLATION_TYPED" as const,
 				sessionMode: session.mode,
 			})

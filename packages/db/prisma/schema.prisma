@@ -98,6 +98,7 @@ model Language {
   createdAt            DateTime @default(now())
 
   words          Word[]
+  wordForms      WordForm[]
   sentences      Sentence[]      @relation("SentenceLanguage")
   nativeSpeakers User[]          @relation("NativeLanguage")
   targetLearners User[]          @relation("TargetLanguage")
@@ -127,11 +128,31 @@ model Word {
 
   sentenceWords SentenceWord[]
   userKnowledge UserWordKnowledge[]
+  forms         WordForm[]
 
   @@unique([languageId, lemma, pos])
   @@index([languageId, rank])
   @@index([languageId, cefrLevel])
   @@map("word")
+}
+
+// ─── Word Forms (inflections / conjugations) ────────────
+
+
+model WordForm {
+  id         String   @id @default(uuid()) @db.Uuid
+  languageId String   @db.Uuid
+  form       String
+  wordId     String   @db.Uuid
+  tags       Json     @default("[]")
+
+  language   Language @relation(fields: [languageId], references: [id])
+  word       Word     @relation(fields: [wordId], references: [id], onDelete: Cascade)
+
+  @@unique([languageId, form, wordId])
+  @@index([languageId, form])
+  @@index([wordId])
+  @@map("word_form")
 }
 
 enum PartOfSpeech {
@@ -327,6 +348,7 @@ enum IngestionType {
   KAIKKI_WORDS
   FREQUENCY_LIST
   TATOEBA_SENTENCES
+  WORD_FORMS
   AUDIO_FILES
 }
 

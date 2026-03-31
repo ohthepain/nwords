@@ -8,6 +8,7 @@ import { isIngestionJobCancelled, tryMarkIngestionJobRunning } from "../lib/inge
 import { appendJobLog, snapshotJobMetadata } from "../lib/job-logs"
 import { updateIngestionProgress } from "../lib/job-progress"
 import { tatoebaPairLinksBz2Url } from "../lib/ingestion-urls"
+import { chainWordFormsFromTatoeba } from "../lib/pipeline-chain"
 import { nodeReadableFromWeb } from "../lib/node-streams"
 import { linkSentencesAndAssignTests, type LinkingProgressEvent } from "./sentence-link"
 
@@ -344,6 +345,10 @@ export async function processTatoebaJob(job: PgBoss.Job<TatoebaJobData>) {
 		console.log(
 			`[tatoeba] Done: ${inserted} sentences, link ${linkStats.linksCreated}, candidates ${linkStats.candidates}`,
 		)
+
+		if (chainPipeline) {
+			await chainWordFormsFromTatoeba(languageId)
+		}
 	} catch (err) {
 		console.error("[tatoeba] Fatal error:", err)
 		if (await isIngestionJobCancelled(jobId)) return

@@ -4,6 +4,7 @@ import { INGEST_QUEUE } from "./ingestion-queues"
 import {
 	bnpdFreqListUrl,
 	resolveHermitDaveFrequencyUrl,
+	resolveKaikkiDownloadPlan,
 	tatoebaPerLanguageSentencesUrl,
 } from "./ingestion-urls"
 
@@ -142,6 +143,63 @@ export async function chainTatoebaFromFrequency(
 		languageId,
 		downloadUrl,
 		langCode: lang.code3,
+		chainPipeline: true,
+	})
+}
+
+export async function chainWordFormsFromTatoeba(
+	languageId: string,
+	extraMeta: Record<string, unknown> = {},
+): Promise<void> {
+	const lang = await prisma.language.findUnique({ where: { id: languageId } })
+	if (!lang) return
+
+	const dictionaryLabel = (lang.kaikkiDictionaryName ?? lang.name).trim()
+	const { downloadUrls, mode } = await resolveKaikkiDownloadPlan(dictionaryLabel)
+
+	const job = await prisma.$transaction(async (tx) => {
+		const existing = await tx.ingestionJob.findFirst({
+			where: {
+				languageId,
+				type: "WORD_FORMS",
+				status: { in: ["PENDING", "RUNNING"] },
+			},
+			select: { id: true, status: true },
+		})
+		if (existing) {
+			return { kind: "skip" as const, existingId: existing.id, status: existing.status }
+		}
+		const created = await tx.ingestionJob.create({
+			data: {
+				type: "WORD_FORMS",
+				languageId,
+				metadata: {
+					downloadUrls,
+					kaikkiMode: mode,
+					chainPipeline: true,
+					kaikkiDictionaryName: dictionaryLabel,
+					source: "kaikki.org",
+					languageCode: lang.code,
+					languageName: lang.name,
+					...extraMeta,
+				},
+			},
+		})
+		return { kind: "created" as const, row: created }
+	})
+
+	if (job.kind === "skip") {
+		console.warn(
+			`[pipeline] Word forms already ${job.status} for language ${languageId} (${job.existingId}); skipping duplicate chain enqueue`,
+		)
+		return
+	}
+
+	await sendIngestJob(INGEST_QUEUE.WORD_FORMS, {
+		jobId: job.row.id,
+		languageId,
+		downloadUrls,
+		kaikkiMode: mode,
 		chainPipeline: true,
 	})
 }
