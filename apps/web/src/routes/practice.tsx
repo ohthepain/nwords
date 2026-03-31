@@ -1,6 +1,7 @@
-import { Link, createFileRoute } from "@tanstack/react-router"
+import { Link, createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useCallback, useEffect, useState } from "react"
 import { AppHeaderBrand } from "~/components/header"
+import { authClient } from "~/lib/auth-client"
 import { ThemeToggleButton } from "~/components/theme-toggle-button"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
@@ -40,11 +41,13 @@ function normalizeAnswer(s: string): string {
 }
 
 function PracticePage() {
+	const navigate = useNavigate()
 	/** `undefined` = loading; `null` = not signed in; object = signed-in profile */
 	const [profile, setProfile] = useState<UserMe | null | undefined>(undefined)
 	const [languageOptions, setLanguageOptions] = useState<LanguageOption[]>([])
-	const [guestNativeId, setGuestNativeId] = useState<string>("")
-	const [guestTargetId, setGuestTargetId] = useState<string>("")
+	/** Practice pair (defaults from account when signed in; editable per session) */
+	const [practiceNativeId, setPracticeNativeId] = useState<string>("")
+	const [practiceTargetId, setPracticeTargetId] = useState<string>("")
 	const [sessionId, setSessionId] = useState<string | null>(null)
 	const [question, setQuestion] = useState<NextQuestion | null>(null)
 	const [answer, setAnswer] = useState("")
@@ -74,29 +77,42 @@ function PracticePage() {
 		}
 	}, [])
 
+	useEffect(() => {
+		if (profile?.nativeLanguage && profile?.targetLanguage) {
+			setPracticeNativeId(profile.nativeLanguage.id)
+			setPracticeTargetId(profile.targetLanguage.id)
+		}
+	}, [profile?.nativeLanguage?.id, profile?.targetLanguage?.id])
+
 	const userMeLoaded = profile !== undefined
 	const isGuest = profile === null
-	const fromProfile = !!(profile?.nativeLanguage && profile?.targetLanguage)
-	const nativeLabel = fromProfile
-		? profile!.nativeLanguage!.name
-		: languageOptions.find((l) => l.id === guestNativeId)?.name
-	const targetLabel = fromProfile
-		? profile!.targetLanguage!.name
-		: languageOptions.find((l) => l.id === guestTargetId)?.name
+	const hasAccountLanguages = !!(profile?.nativeLanguage && profile?.targetLanguage)
+
+	function discardActiveRun() {
+		setSessionId(null)
+		setQuestion(null)
+		setAnswer("")
+		setFeedback(null)
+		setStatus("idle")
+	}
+
+	const nativeLabel = languageOptions.find((l) => l.id === practiceNativeId)?.name
+	const targetLabel = languageOptions.find((l) => l.id === practiceTargetId)?.name
 
 	const startSession = useCallback(async () => {
 		setStatus("loading")
 		setFeedback(null)
 		try {
-			const body: Record<string, unknown> = { mode: "TRANSLATION" }
-			if (!fromProfile) {
-				if (!guestNativeId || !guestTargetId || guestNativeId === guestTargetId) {
-					setFeedback("Choose two different languages (I know / I'm learning).")
-					setStatus("error")
-					return
-				}
-				body.nativeLanguageId = guestNativeId
-				body.targetLanguageId = guestTargetId
+			if (!practiceNativeId || !practiceTargetId || practiceNativeId === practiceTargetId) {
+				setFeedback("Choose two different languages (your language / language you're learning).")
+				setStatus("error")
+				return
+			}
+
+			const body: Record<string, unknown> = {
+				mode: "TRANSLATION",
+				nativeLanguageId: practiceNativeId,
+				targetLanguageId: practiceTargetId,
 			}
 
 			const res = await fetch("/api/test/sessions", {
@@ -132,7 +148,7 @@ function PracticePage() {
 			setFeedback(e instanceof Error ? e.message : "Something went wrong")
 			setStatus("error")
 		}
-	}, [fromProfile, guestNativeId, guestTargetId])
+	}, [practiceNativeId, practiceTargetId])
 
 	const loadNext = useCallback(async (sid: string) => {
 		setStatus("loading")
@@ -180,11 +196,23 @@ function PracticePage() {
 		}
 	}, [sessionId, question, answer])
 
-	const needsGuestLanguages = userMeLoaded && isGuest
-	const needsAccountLanguages = userMeLoaded && !isGuest && !fromProfile
-	const guestLanguagesInvalid =
-		needsGuestLanguages && (!guestNativeId || !guestTargetId || guestNativeId === guestTargetId)
-	const canStartPractice = fromProfile || (needsGuestLanguages && !guestLanguagesInvalid)
+	const practiceLanguagesInvalid =
+		!practiceNativeId || !practiceTargetId || practiceNativeId === practiceTargetId
+	const canStartPractice = userMeLoaded && !practiceLanguagesInvalid
+	const practiceAuthState = !userMeLoaded ? "loading" : isGuest ? "guest" : "signedIn"
+
+	async function handlePracticeSignOut() {
+		await authClient.signOut()
+		setProfile(null)
+		setSessionId(null)
+		setQuestion(null)
+		setAnswer("")
+		setFeedback(null)
+		setPracticeNativeId("")
+		setPracticeTargetId("")
+		setStatus("idle")
+		navigate({ to: "/practice", replace: true })
+	}
 
 	const hintLabel =
 		question?.hintSource === "parallel"
@@ -194,7 +222,7 @@ function PracticePage() {
 	if (!userMeLoaded) {
 		return (
 			<div className="flex-1 flex flex-col min-h-0">
-				<PracticeHeader />
+				<PracticeHeader authState="loading" />
 				<div className="max-w-xl mx-auto px-6 py-10 text-sm text-muted-foreground">Loading…</div>
 			</div>
 		)
@@ -202,26 +230,53 @@ function PracticePage() {
 
 	return (
 		<div className="flex-1 flex flex-col min-h-0">
-			<PracticeHeader />
+			<PracticeHeader authState={practiceAuthState} onSignOut={() => void handlePracticeSignOut()} />
 			<div className="max-w-xl mx-auto px-6 py-8 space-y-6 flex-1">
-				{needsGuestLanguages && (
-					<Card>
-						<CardHeader className="pb-4">
-							<CardTitle className="text-base">Languages</CardTitle>
-							<CardDescription>
-								Choose the language you know best and the one you are practicing.{" "}
-								<Link to="/auth/register" className="text-foreground underline-offset-4 hover:underline">
-									Sign up
-								</Link>{" "}
-								to save progress across sessions.
-							</CardDescription>
-						</CardHeader>
-						<CardContent className="grid gap-4 sm:grid-cols-2">
+				<Card>
+					<CardHeader className="pb-4">
+						<CardTitle className="text-base">Languages for this session</CardTitle>
+						<CardDescription>
+							{isGuest ? (
+								<>
+									You&apos;re not signed in. Pick your language and the one you&apos;re studying (they
+									must differ).{" "}
+									<Link to="/auth/register" className="text-foreground underline-offset-4 hover:underline">
+										Sign up
+									</Link>{" "}
+									to save progress.
+								</>
+							) : hasAccountLanguages ? (
+								<>
+									Defaults match your account. Change below anytime for this run only —{" "}
+									<Link to="/settings" className="text-foreground underline-offset-4 hover:underline">
+										Settings
+									</Link>{" "}
+									updates what the dashboard uses.
+								</>
+							) : (
+								<>
+									Set default languages in{" "}
+									<Link to="/settings" className="text-foreground underline-offset-4 hover:underline">
+										Settings
+									</Link>{" "}
+									for your dashboard; you can still choose a pair here to practice now.
+								</>
+							)}
+						</CardDescription>
+					</CardHeader>
+					<CardContent className="space-y-4">
+						<div className="grid gap-4 sm:grid-cols-2">
 							<div className="space-y-2">
-								<Label htmlFor="guest-native">I know</Label>
-								<Select value={guestNativeId} onValueChange={setGuestNativeId}>
-									<SelectTrigger id="guest-native" className="w-full min-w-0">
-										<SelectValue placeholder="Native / known" />
+								<Label htmlFor="practice-native">Your language</Label>
+								<Select
+									value={practiceNativeId}
+									onValueChange={(v) => {
+										setPracticeNativeId(v)
+										if (sessionId) discardActiveRun()
+									}}
+								>
+									<SelectTrigger id="practice-native" className="w-full min-w-0">
+										<SelectValue placeholder="Language you know" />
 									</SelectTrigger>
 									<SelectContent>
 										{languageOptions.map((l) => (
@@ -233,9 +288,15 @@ function PracticePage() {
 								</Select>
 							</div>
 							<div className="space-y-2">
-								<Label htmlFor="guest-target">I&apos;m learning</Label>
-								<Select value={guestTargetId} onValueChange={setGuestTargetId}>
-									<SelectTrigger id="guest-target" className="w-full min-w-0">
+								<Label htmlFor="practice-target">Language you&apos;re learning</Label>
+								<Select
+									value={practiceTargetId}
+									onValueChange={(v) => {
+										setPracticeTargetId(v)
+										if (sessionId) discardActiveRun()
+									}}
+								>
+									<SelectTrigger id="practice-target" className="w-full min-w-0">
 										<SelectValue placeholder="Target language" />
 									</SelectTrigger>
 									<SelectContent>
@@ -247,20 +308,14 @@ function PracticePage() {
 									</SelectContent>
 								</Select>
 							</div>
-						</CardContent>
-					</Card>
-				)}
-
-				{needsAccountLanguages && (
-					<div className="max-w-lg">
-						<p className="text-muted-foreground mb-4">
-							Set your languages in settings to use practice with your profile.
-						</p>
-						<Button asChild>
-							<Link to="/settings">Settings</Link>
-						</Button>
-					</div>
-				)}
+						</div>
+						{practiceLanguagesInvalid && (
+							<p className="text-sm text-muted-foreground">
+								Choose two different languages above to start.
+							</p>
+						)}
+					</CardContent>
+				</Card>
 
 				{canStartPractice && (
 					<Card>
@@ -269,7 +324,7 @@ function PracticePage() {
 							<CardDescription>
 								Fill the blank in{" "}
 								<span className="font-medium text-foreground">{targetLabel ?? "your target language"}</span>{" "}
-								using the hint.
+								using the hint. Uses the pair you selected above.
 							</CardDescription>
 						</CardHeader>
 						<CardContent className="space-y-4">
@@ -277,7 +332,7 @@ function PracticePage() {
 								<Button
 									type="button"
 									onClick={() => void startSession()}
-									disabled={status === "loading" || (needsGuestLanguages && guestLanguagesInvalid)}
+									disabled={status === "loading" || practiceLanguagesInvalid}
 								>
 									{status === "loading" ? "Loading…" : "Start practice"}
 								</Button>
@@ -331,17 +386,40 @@ function PracticePage() {
 	)
 }
 
-function PracticeHeader() {
+function PracticeHeader({
+	authState,
+	onSignOut,
+}: {
+	authState: "loading" | "guest" | "signedIn"
+	onSignOut?: () => void
+}) {
 	return (
 		<header className="shrink-0 border-b border-border/50 backdrop-blur-sm sticky top-0 z-10 bg-background/80">
 			<div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center gap-3 sm:gap-4">
 				<AppHeaderBrand compact />
 				<h1 className="text-base sm:text-lg font-semibold tracking-tight min-w-0 truncate flex-1">Practice</h1>
-				<div className="flex items-center gap-2 shrink-0">
+				<div className="flex items-center gap-1 sm:gap-2 shrink-0">
 					<ThemeToggleButton />
-					<Button type="button" variant="ghost" size="sm" asChild>
-						<Link to="/auth/login">Sign in</Link>
-					</Button>
+					{authState === "loading" ? null : authState === "guest" ? (
+						<Button type="button" variant="ghost" size="sm" asChild>
+							<Link to="/auth/login">Sign in</Link>
+						</Button>
+					) : (
+						<>
+							<Button type="button" variant="ghost" size="sm" asChild>
+								<Link to="/dashboard">Dashboard</Link>
+							</Button>
+							<Button
+								type="button"
+								variant="ghost"
+								size="sm"
+								className="text-muted-foreground"
+								onClick={() => onSignOut?.()}
+							>
+								Sign out
+							</Button>
+						</>
+					)}
 				</div>
 			</div>
 		</header>

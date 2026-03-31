@@ -1,12 +1,15 @@
 import { prisma } from "@nwords/db"
 
-/** Used when admin starts a new full import or cancels from UI: workers should stop without marking COMPLETED. */
+/**
+ * Workers should stop early when the job row is no longer active: explicit cancel, or operator
+ * “skip” that marked the row COMPLETED while the worker was still running.
+ */
 export async function isIngestionJobCancelled(jobId: string): Promise<boolean> {
 	const row = await prisma.ingestionJob.findUnique({
 		where: { id: jobId },
 		select: { status: true },
 	})
-	return row?.status === "CANCELLED"
+	return row?.status === "CANCELLED" || row?.status === "COMPLETED"
 }
 
 /** Only moves PENDING → RUNNING so a superseding cancel cannot be overwritten by a late worker start. */

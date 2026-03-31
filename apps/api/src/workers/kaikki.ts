@@ -95,7 +95,16 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 	}
 
 	const started = await tryMarkIngestionJobRunning(jobId)
-	if (!started) return
+	if (!started) {
+		const row = await prisma.ingestionJob.findUnique({
+			where: { id: jobId },
+			select: { status: true },
+		})
+		console.warn(
+			`[kaikki] skipped job ${jobId}: could not claim (ingestion status=${row?.status ?? "missing"})`,
+		)
+		return
+	}
 
 	await appendJobLog(jobId, "out", "Kaikki dictionary: job started.")
 	await appendJobLog(

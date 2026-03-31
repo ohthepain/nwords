@@ -79,6 +79,17 @@ export function tatoebaPerLanguageSentencesUrl(iso639_3: string): string {
 	return `https://downloads.tatoeba.org/exports/per_language/${c}/${c}_sentences.tsv.bz2`
 }
 
+/**
+ * Tatoeba sentence-translation pairs: tab-separated Tatoeba sentence ids for one direction.
+ * Lies under `per_language/{baseIso3}/` — required for cloze hints in the “native → target” direction.
+ * @see https://downloads.tatoeba.org/exports/
+ */
+export function tatoebaPairLinksBz2Url(baseIso639_3: string, otherIso639_3: string): string {
+	const a = baseIso639_3.toLowerCase()
+	const b = otherIso639_3.toLowerCase()
+	return `https://downloads.tatoeba.org/exports/per_language/${a}/${a}-${b}_links.tsv.bz2`
+}
+
 const HERMITDAVE_CONTENT_API =
 	"https://api.github.com/repos/hermitdave/FrequencyWords/contents/content"
 const HERMITDAVE_RAW_BASE = "https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content"

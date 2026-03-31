@@ -1,16 +1,25 @@
-import { prisma } from "@nwords/db"
+import { type Prisma, prisma } from "@nwords/db"
 import PgBoss from "pg-boss"
 
 let boss: PgBoss | null = null
 let workersRegistered = false
 let staleSweepTimer: ReturnType<typeof setInterval> | null = null
+let staleSweepStarted = false
 
 async function runStaleIngestionSweep(): Promise<void> {
 	try {
-		const { sweepStaleRunningIngestionJobs } = await import("./stale-ingestion-jobs.js")
-		const n = await sweepStaleRunningIngestionJobs(prisma)
-		if (n > 0) {
-			console.log(`[ingest] marked ${n} stale RUNNING job(s) as FAILED`)
+		const { sweepStalePendingIngestionJobs, sweepStaleRunningIngestionJobs } = await import(
+			"./stale-ingestion-jobs.js"
+		)
+		const [nRun, nPen] = await Promise.all([
+			sweepStaleRunningIngestionJobs(prisma),
+			sweepStalePendingIngestionJobs(prisma),
+		])
+		if (nRun > 0) {
+			console.log(`[ingest] marked ${nRun} stale RUNNING job(s) as FAILED`)
+		}
+		if (nPen > 0) {
+			console.log(`[ingest] marked ${nPen} stale PENDING job(s) as FAILED (no worker pickup)`)
 		}
 	} catch (err) {
 		console.error("[ingest] stale sweep failed:", err)
@@ -60,14 +69,56 @@ export async function getBoss(): Promise<PgBoss> {
 	const { ensureIngestQueues, registerIngestWorkers } = await import("../workers/index.js")
 	await ensureIngestQueues(instance)
 
-	if (process.env.DISABLE_INGEST_WORKERS !== "true" && !workersRegistered) {
+	if (process.env.DISABLE_INGEST_WORKERS === "true") {
+		console.warn(
+			"[pg-boss] DISABLE_INGEST_WORKERS=true — queue consumers are off. Ingestion jobs stay PENDING until a process runs workers (e.g. apps/api with this unset).",
+		)
+	} else if (!workersRegistered) {
 		await registerIngestWorkers(instance)
 		workersRegistered = true
+	}
+	if (!staleSweepStarted) {
+		staleSweepStarted = true
 		scheduleStaleIngestionSweep()
 	}
 
 	boss = instance
 	return boss
+}
+
+/**
+ * Enqueue a pg-boss job tied to `IngestionJob` `payload.jobId`.
+ * On failure, marks that ingestion row FAILED so it does not sit PENDING forever with no logs.
+ */
+export async function sendIngestJob(
+	queue: string,
+	payload: Record<string, unknown> & { jobId: string },
+): Promise<void> {
+	const jobId = payload.jobId
+	try {
+		const instance = await getBoss()
+		await instance.send(queue, payload)
+	} catch (err) {
+		const row = await prisma.ingestionJob.findUnique({ where: { id: jobId } })
+		const meta = row?.metadata
+		const base =
+			meta !== null && typeof meta === "object" && !Array.isArray(meta)
+				? { ...(meta as Record<string, unknown>) }
+				: {}
+		await prisma.ingestionJob.update({
+			where: { id: jobId },
+			data: {
+				status: "FAILED",
+				completedAt: new Date(),
+				metadata: {
+					...base,
+					error: err instanceof Error ? err.message : String(err),
+					stage: "pg-boss-send",
+				} as Prisma.InputJsonValue,
+			},
+		})
+		throw err
+	}
 }
 
 export async function stopBoss(): Promise<void> {
@@ -79,5 +130,6 @@ export async function stopBoss(): Promise<void> {
 		await boss.stop()
 		boss = null
 		workersRegistered = false
+		staleSweepStarted = false
 	}
 }

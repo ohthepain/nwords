@@ -38,6 +38,7 @@ const getJobs = createServerFn({ method: "GET" }).handler(async () => {
 			j.totalItems > 0 ? Math.round((j.processedItems / j.totalItems) * 100) : null
 
 		const metadata = stripJobLogsFromMetadata(j.metadata) as Record<string, object> | null
+		const chainPipeline = meta?.chainPipeline === true
 		return {
 			id: j.id,
 			type: j.type,
@@ -54,6 +55,7 @@ const getJobs = createServerFn({ method: "GET" }).handler(async () => {
 			completedAt: j.completedAt?.toISOString() ?? null,
 			createdAt: j.createdAt.toISOString(),
 			metadata,
+			chainPipeline,
 			errorMessage: jobMetadataError(j.metadata),
 		}
 	})
@@ -142,7 +144,9 @@ function AdminJobsPage() {
 	const [uploading, setUploading] = useState(false)
 	const [uploadError, setUploadError] = useState<string | null>(null)
 	const [retryError, setRetryError] = useState<string | null>(null)
-	const [retryingJobId, setRetryingJobId] = useState<string | null>(null)
+	const [requeueJobId, setRequeueJobId] = useState<string | null>(null)
+	const [skippingJobId, setSkippingJobId] = useState<string | null>(null)
+	const [skipError, setSkipError] = useState<string | null>(null)
 	const [outputJob, setOutputJob] = useState<{ id: string; title: string } | null>(null)
 	const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -201,9 +205,35 @@ function AdminJobsPage() {
 		router.invalidate()
 	}
 
+	async function handleSkipAndChain(jobId: string) {
+		setSkipError(null)
+		if (
+			!globalThis.confirm(
+				"Mark this job complete (assume data is already in the database) and continue the pipeline when this job was started with chaining? The worker will stop on its next check.",
+			)
+		) {
+			return
+		}
+		setSkippingJobId(jobId)
+		try {
+			const res = await fetch(`/api/admin/jobs/${jobId}/skip-and-chain`, {
+				method: "POST",
+				credentials: "include",
+			})
+			const body = (await res.json().catch(() => ({}))) as { error?: string }
+			if (!res.ok) {
+				setSkipError(body.error ?? `Skip failed (${res.status})`)
+				return
+			}
+			await router.invalidate()
+		} finally {
+			setSkippingJobId(null)
+		}
+	}
+
 	async function handleRetry(jobId: string) {
 		setRetryError(null)
-		setRetryingJobId(jobId)
+		setRequeueJobId(jobId)
 		try {
 			const res = await fetch(`/api/admin/jobs/${jobId}/retry`, {
 				method: "POST",
@@ -216,7 +246,33 @@ function AdminJobsPage() {
 			}
 			await router.invalidate()
 		} finally {
-			setRetryingJobId(null)
+			setRequeueJobId(null)
+		}
+	}
+
+	async function handleRerun(jobId: string) {
+		if (
+			!globalThis.confirm(
+				"Queue a new run using this job’s saved file/URLs? The completed job stays in the list.",
+			)
+		) {
+			return
+		}
+		setRetryError(null)
+		setRequeueJobId(jobId)
+		try {
+			const res = await fetch(`/api/admin/jobs/${jobId}/rerun`, {
+				method: "POST",
+				credentials: "include",
+			})
+			const body = (await res.json().catch(() => ({}))) as { error?: string }
+			if (!res.ok) {
+				setRetryError(body.error ?? `Re-run failed (${res.status})`)
+				return
+			}
+			await router.invalidate()
+		} finally {
+			setRequeueJobId(null)
 		}
 	}
 
@@ -248,6 +304,11 @@ function AdminJobsPage() {
 			{retryError ? (
 				<div className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-3 py-2">
 					{retryError}
+				</div>
+			) : null}
+			{skipError ? (
+				<div className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-3 py-2">
+					{skipError}
 				</div>
 			) : null}
 
@@ -432,24 +493,52 @@ function AdminJobsPage() {
 										Output
 									</Button>
 									{(job.status === "PENDING" || job.status === "RUNNING") && (
-										<Button
-											variant="ghost"
-											size="sm"
-											className="h-7 text-xs text-muted-foreground hover:text-destructive px-2"
-											onClick={() => handleCancel(job.id)}
-										>
-											Cancel
-										</Button>
+										<>
+											<Button
+												variant="outline"
+												size="sm"
+												className="h-7 text-xs px-2 font-mono text-muted-foreground border-dashed"
+												disabled={skippingJobId !== null}
+												title={
+													job.chainPipeline
+														? "Mark complete and enqueue the next pipeline job (frequency or Tatoeba)."
+														: "Mark complete without chaining (this upload was not part of the full pipeline)."
+												}
+												onClick={() => handleSkipAndChain(job.id)}
+											>
+												{skippingJobId === job.id ? "…" : "Skip → next"}
+											</Button>
+											<Button
+												variant="ghost"
+												size="sm"
+												className="h-7 text-xs text-muted-foreground hover:text-destructive px-2"
+												onClick={() => handleCancel(job.id)}
+											>
+												Cancel
+											</Button>
+										</>
 									)}
 									{(job.status === "FAILED" || job.status === "CANCELLED") && (
 										<Button
 											variant="secondary"
 											size="sm"
 											className="h-7 text-xs px-2"
-											disabled={retryingJobId !== null}
+											disabled={requeueJobId !== null}
 											onClick={() => handleRetry(job.id)}
 										>
-											{retryingJobId === job.id ? "…" : "Retry"}
+											{requeueJobId === job.id ? "…" : "Retry"}
+										</Button>
+									)}
+									{job.status === "COMPLETED" && (
+										<Button
+											variant="secondary"
+											size="sm"
+											className="h-7 text-xs px-2"
+											disabled={requeueJobId !== null}
+											title="Enqueue again from the same source (metadata URLs or upload path)."
+											onClick={() => handleRerun(job.id)}
+										>
+											{requeueJobId === job.id ? "…" : "Re-run"}
 										</Button>
 									)}
 								</div>

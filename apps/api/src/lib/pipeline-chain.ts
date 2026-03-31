@@ -1,5 +1,5 @@
 import { prisma } from "@nwords/db"
-import { getBoss } from "./boss"
+import { sendIngestJob } from "./boss"
 import { INGEST_QUEUE } from "./ingestion-queues"
 import {
 	bnpdFreqListUrl,
@@ -29,8 +29,7 @@ export async function chainFrequencyFromKaikki(languageId: string): Promise<void
 			},
 		})
 
-		const boss = await getBoss()
-		await boss.send(INGEST_QUEUE.FREQUENCY, {
+		await sendIngestJob(INGEST_QUEUE.FREQUENCY, {
 			jobId: job.id,
 			languageId,
 			downloadUrl: hermit.downloadUrl,
@@ -76,8 +75,7 @@ export async function chainFrequencyFromKaikki(languageId: string): Promise<void
 		},
 	})
 
-	const boss = await getBoss()
-	await boss.send(INGEST_QUEUE.FREQUENCY, {
+	await sendIngestJob(INGEST_QUEUE.FREQUENCY, {
 		jobId: job.id,
 		languageId,
 		downloadUrl,
@@ -139,8 +137,7 @@ export async function chainTatoebaFromFrequency(
 		return
 	}
 
-	const boss = await getBoss()
-	await boss.send(INGEST_QUEUE.TATOEBA, {
+	await sendIngestJob(INGEST_QUEUE.TATOEBA, {
 		jobId: job.row.id,
 		languageId,
 		downloadUrl,

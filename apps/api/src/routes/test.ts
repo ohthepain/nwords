@@ -27,6 +27,12 @@ async function getSessionIfAllowed(
 async function resolveClozeLanguageIds(
 	session: TestSession,
 ): Promise<{ nativeLanguageId: string; targetLanguageId: string } | null> {
+	if (session.nativeLanguageId && session.targetLanguageId) {
+		return {
+			nativeLanguageId: session.nativeLanguageId,
+			targetLanguageId: session.targetLanguageId,
+		}
+	}
 	if (session.userId) {
 		const dbUser = await prisma.user.findUnique({
 			where: { id: session.userId },
@@ -35,11 +41,7 @@ async function resolveClozeLanguageIds(
 		if (!dbUser?.nativeLanguageId || !dbUser.targetLanguageId) return null
 		return { nativeLanguageId: dbUser.nativeLanguageId, targetLanguageId: dbUser.targetLanguageId }
 	}
-	if (!session.nativeLanguageId || !session.targetLanguageId) return null
-	return {
-		nativeLanguageId: session.nativeLanguageId,
-		targetLanguageId: session.targetLanguageId,
-	}
+	return null
 }
 
 export const testRoute = new Hono<OptionalAuthEnv>()
@@ -61,13 +63,59 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 			const body = c.req.valid("json")
 
 			if (user) {
+				const { nativeLanguageId, targetLanguageId } = body
+				const hasPair = !!(nativeLanguageId && targetLanguageId)
+				const hasOne = !!(nativeLanguageId || targetLanguageId)
+				if (hasOne && !hasPair) {
+					return c.json(
+						{ error: "Provide both nativeLanguageId and targetLanguageId for a practice pair." },
+						400,
+					)
+				}
+
+				if (hasPair) {
+					if (nativeLanguageId === targetLanguageId) {
+						return c.json({ error: "Native and target languages must be different" }, 400)
+					}
+
+					const [nativeLang, targetLang] = await Promise.all([
+						prisma.language.findUnique({ where: { id: nativeLanguageId } }),
+						prisma.language.findUnique({ where: { id: targetLanguageId } }),
+					])
+
+					if (!nativeLang) {
+						return c.json({ error: "Native language not found" }, 404)
+					}
+					if (!targetLang?.enabled) {
+						return c.json({ error: "Target language is not available" }, 400)
+					}
+
+					const session = await prisma.testSession.create({
+						data: {
+							userId: user.id,
+							mode: body.mode,
+							nativeLanguageId,
+							targetLanguageId,
+						},
+					})
+
+					return c.json({ sessionId: session.id, mode: body.mode }, 201)
+				}
+
 				const dbUser = await prisma.user.findUnique({
 					where: { id: user.id },
-					select: { targetLanguageId: true },
+					select: { nativeLanguageId: true, targetLanguageId: true },
 				})
 
-				if (!dbUser?.targetLanguageId) {
-					return c.json({ error: "No target language set" }, 400)
+				if (!dbUser?.nativeLanguageId || !dbUser.targetLanguageId) {
+					return c.json(
+						{
+							error: "languages_required",
+							message:
+								"Set native and target language in settings, or pass nativeLanguageId and targetLanguageId.",
+						},
+						400,
+					)
 				}
 
 				const session = await prisma.testSession.create({

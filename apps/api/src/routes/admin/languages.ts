@@ -97,6 +97,45 @@ export const adminLanguagesRoute = new Hono()
 		})
 	})
 
+	/**
+	 * Remove lemma↔sentence links and test-sentence curation for this language so Tatoeba linking can run again.
+	 * Does not delete `sentence` rows or `sentence_translation` pairs.
+	 */
+	.post("/:id/clear-sentence-links", async (c) => {
+		const { id } = c.req.param()
+
+		const lang = await prisma.language.findUnique({ where: { id } })
+		if (!lang) {
+			return c.json({ error: "Language not found" }, 404)
+		}
+
+		const result = await prisma.$transaction(async (tx) => {
+			const deleted = await tx.sentenceWord.deleteMany({
+				where: { sentence: { languageId: id } },
+			})
+			const sentencesReset = await tx.sentence.updateMany({
+				where: { languageId: id },
+				data: { testQualityScore: null, isTestCandidate: false },
+			})
+			const wordsReset = await tx.word.updateMany({
+				where: { languageId: id },
+				data: { testSentenceIds: [] },
+			})
+			return {
+				sentenceWordsRemoved: deleted.count,
+				sentencesReset: sentencesReset.count,
+				wordsCleared: wordsReset.count,
+			}
+		})
+
+		return c.json({
+			id: lang.id,
+			code: lang.code,
+			name: lang.name,
+			...result,
+		})
+	})
+
 	// Get details about a specific language's vocabulary coverage
 	.get("/:id/stats", async (c) => {
 		const { id } = c.req.param()

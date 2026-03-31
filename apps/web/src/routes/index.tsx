@@ -54,16 +54,16 @@ function HomePage() {
 
 					<div className="flex flex-wrap items-center justify-center gap-3">
 						<Link
-							to="/auth/register"
+							to="/practice"
 							className="bg-primary text-primary-foreground px-6 py-3 rounded-md text-sm font-medium hover:opacity-90 transition-all active:scale-[0.98]"
 						>
 							Start measuring
 						</Link>
 						<Link
-							to="/practice"
+							to="/auth/register"
 							className="border border-border px-6 py-3 rounded-md text-sm font-medium hover:bg-accent transition-all"
 						>
-							Try practice
+							Save progress
 						</Link>
 						<a
 							href="#how-it-works"

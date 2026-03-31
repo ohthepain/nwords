@@ -1,5 +1,15 @@
 import { type Prisma, prisma } from "@nwords/db"
 
+/** Same rules as `sentence-link` tokenization (for gloss ↔ parallel alignment). */
+const SCORE_SPLIT = /[^\p{L}\p{N}]+/gu
+
+function tokensForScoring(text: string): string[] {
+	return text
+		.toLowerCase()
+		.split(SCORE_SPLIT)
+		.filter((t) => t.length > 0)
+}
+
 /** Match word-token runs; same segmentation as `SentenceWord.position` from sentence linking. */
 const WORD_RUN = /[\p{L}\p{N}]+/gu
 
@@ -20,15 +30,49 @@ export type ClozeResolution =
 	  }
 	| { ok: false; reason: "no_test_sentences" | "no_blank_position" | "no_hint_available" }
 
+/** Tokens derived from Kaikki/Wiktionary gloss strings (often English) for sense alignment. */
+function definitionSenseTokens(definitions: unknown): Set<string> {
+	const out = new Set<string>()
+	if (!Array.isArray(definitions)) return out
+	for (const item of definitions) {
+		if (typeof item !== "string" || !item.trim()) continue
+		for (const tok of tokensForScoring(item)) {
+			if (tok.length > 1) out.add(tok)
+		}
+	}
+	return out
+}
+
+/** Prefer parallels whose English text overlaps the word sense in `definitions` (helps homograph Tatoeba links). */
+function scoreParallelForSense(parallelText: string, senseTokens: Set<string>): number {
+	if (senseTokens.size === 0) return 0
+	const pTok = tokensForScoring(parallelText)
+	const parallel = new Set(pTok)
+	let score = 0
+	for (const s of senseTokens) {
+		if (parallel.has(s)) score += 3
+	}
+	// Stem-like substring matches: "fold" vs "folding", "bay" vs "bays"
+	for (const s of senseTokens) {
+		if (s.length < 4) continue
+		for (const p of parallel) {
+			if (p.length < 4) continue
+			if (p.includes(s) || s.includes(p)) score += 1
+		}
+	}
+	return score
+}
+
 /**
- * Find a Tatoeba-linked sentence in `nativeLanguageId` for this target-language sentence.
- * Checks both directions (original/translated is not a language direction).
+ * Tatoeba-linked sentences in `nativeLanguageId` for this target-language sentence (both directions).
+ * When multiple links exist, pick the English line that best matches dictionary glosses for this sense.
  */
-export async function findNativeParallelSentence(
+async function findBestNativeParallelForSense(
 	targetSentenceId: string,
 	nativeLanguageId: string,
+	definitions: unknown,
 ): Promise<{ id: string; text: string; languageId: string } | null> {
-	const row = await prisma.sentenceTranslation.findFirst({
+	const rows = await prisma.sentenceTranslation.findMany({
 		where: {
 			OR: [
 				{
@@ -45,14 +89,30 @@ export async function findNativeParallelSentence(
 			originalSentence: { select: { id: true, text: true, languageId: true } },
 			translatedSentence: { select: { id: true, text: true, languageId: true } },
 		},
+		orderBy: { id: "asc" },
 	})
 
-	if (!row) return null
+	if (rows.length === 0) return null
 
-	if (row.originalSentenceId === targetSentenceId) {
-		return row.translatedSentence
+	const sense = definitionSenseTokens(definitions)
+
+	const mapped = rows.map((row) =>
+		row.originalSentenceId === targetSentenceId ? row.translatedSentence : row.originalSentence,
+	)
+
+	let best = mapped[0]!
+	let bestScore = scoreParallelForSense(best.text, sense)
+
+	for (let i = 1; i < mapped.length; i++) {
+		const par = mapped[i]!
+		const sc = scoreParallelForSense(par.text, sense)
+		if (sc > bestScore) {
+			best = par
+			bestScore = sc
+		}
 	}
-	return row.originalSentence
+
+	return best
 }
 
 export function buildClozePrompt(sentenceText: string, blankTokenIndex: number): string {
@@ -143,9 +203,10 @@ export async function resolveClozeWithHint(params: {
 	}
 
 	for (const c of candidates) {
-		const parallel = await findNativeParallelSentence(
+		const parallel = await findBestNativeParallelForSense(
 			c.targetSentenceId,
 			params.nativeLanguageId,
+			word.definitions,
 		)
 		if (parallel) {
 			return {

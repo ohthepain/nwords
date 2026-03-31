@@ -70,7 +70,16 @@ export async function processFrequencyJob(job: PgBoss.Job<FrequencyJobData>) {
 	}
 
 	const started = await tryMarkIngestionJobRunning(jobId)
-	if (!started) return
+	if (!started) {
+		const row = await prisma.ingestionJob.findUnique({
+			where: { id: jobId },
+			select: { status: true },
+		})
+		console.warn(
+			`[frequency] skipped job ${jobId}: could not claim (ingestion status=${row?.status ?? "missing"})`,
+		)
+		return
+	}
 
 	await appendJobLog(jobId, "out", "Frequency list: job started.")
 	await appendJobLog(

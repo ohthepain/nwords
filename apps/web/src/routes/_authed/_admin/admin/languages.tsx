@@ -35,6 +35,7 @@ type LanguageIngestJobRow = {
 	errorCount: number
 	progress: number | null
 	createdAt: string
+	chainPipeline: boolean
 	/** Populated from `metadata.error` when the worker records a failure. */
 	errorMessage: string | null
 }
@@ -86,6 +87,7 @@ const loadAdminLanguagesPage = createServerFn({ method: "GET" }).handler(async (
 			counts[j.languageId]++
 			const progressPct =
 				j.totalItems > 0 ? Math.round((j.processedItems / j.totalItems) * 100) : null
+			const jmeta = j.metadata as Record<string, unknown> | null
 			jobsByLanguageId[j.languageId].push({
 				id: j.id,
 				type: j.type,
@@ -95,6 +97,7 @@ const loadAdminLanguagesPage = createServerFn({ method: "GET" }).handler(async (
 				errorCount: j.errorCount,
 				progress: progressPct,
 				createdAt: j.createdAt.toISOString(),
+				chainPipeline: jmeta?.chainPipeline === true,
 				errorMessage: jobMetadataError(j.metadata),
 			})
 		}
@@ -157,6 +160,36 @@ const runLanguagePipeline = createServerFn({ method: "POST" })
 		return { success: true, pipelineJobId: body.pipelineJobId }
 	})
 
+const clearLanguageSentenceLinks = createServerFn({ method: "POST" })
+	.inputValidator((data: { id: string }) => data)
+	.handler(async ({ data }) => {
+		const request = getRequest()
+		if (!request) {
+			throw new Error("Missing request context")
+		}
+		const origin = new URL(request.url).origin
+		const res = await app.fetch(
+			new Request(`${origin}/api/admin/languages/${data.id}/clear-sentence-links`, {
+				method: "POST",
+				headers: forwardedAdminApiHeaders(request),
+			}),
+		)
+		const body = (await res.json().catch(() => ({}))) as {
+			error?: string
+			sentenceWordsRemoved?: number
+			sentencesReset?: number
+			wordsCleared?: number
+		}
+		if (!res.ok) {
+			throw new Error(body.error ?? `Clear failed (${res.status})`)
+		}
+		return {
+			sentenceWordsRemoved: body.sentenceWordsRemoved ?? 0,
+			sentencesReset: body.sentencesReset ?? 0,
+			wordsCleared: body.wordsCleared ?? 0,
+		}
+	})
+
 export const Route = createFileRoute("/_authed/_admin/admin/languages")({
 	loader: () => loadAdminLanguagesPage(),
 	component: AdminLanguagesPage,
@@ -167,9 +200,12 @@ function AdminLanguagesPage() {
 	const { languages, jobsByLanguageId } = Route.useLoaderData()
 	const [toggling, setToggling] = useState<string | null>(null)
 	const [runningPipeline, setRunningPipeline] = useState<string | null>(null)
+	const [clearingLinksId, setClearingLinksId] = useState<string | null>(null)
 	const [notice, setNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null)
 	const [jobActionError, setJobActionError] = useState<string | null>(null)
-	const [retryingJobId, setRetryingJobId] = useState<string | null>(null)
+	const [requeueJobId, setRequeueJobId] = useState<string | null>(null)
+	const [skippingJobId, setSkippingJobId] = useState<string | null>(null)
+	const [skipJobError, setSkipJobError] = useState<string | null>(null)
 	const [outputJob, setOutputJob] = useState<{ id: string; title: string } | null>(null)
 
 	const enabledJobsFlat = useMemo(() => {
@@ -234,6 +270,30 @@ function AdminLanguagesPage() {
 		await router.invalidate()
 	}
 
+	async function handleClearSentenceLinks(id: string, name: string) {
+		if (
+			!globalThis.confirm(
+				`Clear sentence links for ${name}? This removes word↔sentence links, resets sentence test scores, and empties curated test sentences on every word in this language. Tatoeba sentence text and translation pairs are kept. Run Re-import (or enqueue Tatoeba Sentences with linking) afterward to rebuild links.`,
+			)
+		) {
+			return
+		}
+		setNotice(null)
+		setClearingLinksId(id)
+		try {
+			const out = await clearLanguageSentenceLinks({ data: { id } })
+			setNotice({
+				kind: "ok",
+				text: `Cleared ${out.sentenceWordsRemoved.toLocaleString()} word–sentence links; reset ${out.sentencesReset.toLocaleString()} sentences; updated ${out.wordsCleared.toLocaleString()} words. Queue Tatoeba / Re-import to relink.`,
+			})
+		} catch (e) {
+			setNotice({ kind: "err", text: e instanceof Error ? e.message : "Clear failed" })
+		} finally {
+			setClearingLinksId(null)
+		}
+		await router.invalidate()
+	}
+
 	async function handleJobCancel(jobId: string) {
 		setJobActionError(null)
 		await fetch(`/api/admin/jobs/${jobId}/cancel`, {
@@ -243,9 +303,36 @@ function AdminLanguagesPage() {
 		await router.invalidate()
 	}
 
+	async function handleJobSkipAndChain(jobId: string) {
+		setJobActionError(null)
+		setSkipJobError(null)
+		if (
+			!globalThis.confirm(
+				"Mark this job complete (assume data is already in the database) and continue the pipeline when chaining is enabled? The worker stops on its next check.",
+			)
+		) {
+			return
+		}
+		setSkippingJobId(jobId)
+		try {
+			const res = await fetch(`/api/admin/jobs/${jobId}/skip-and-chain`, {
+				method: "POST",
+				credentials: "include",
+			})
+			const body = (await res.json().catch(() => ({}))) as { error?: string }
+			if (!res.ok) {
+				setSkipJobError(body.error ?? `Skip failed (${res.status})`)
+				return
+			}
+			await router.invalidate()
+		} finally {
+			setSkippingJobId(null)
+		}
+	}
+
 	async function handleJobRetry(jobId: string) {
 		setJobActionError(null)
-		setRetryingJobId(jobId)
+		setRequeueJobId(jobId)
 		try {
 			const res = await fetch(`/api/admin/jobs/${jobId}/retry`, {
 				method: "POST",
@@ -258,7 +345,33 @@ function AdminLanguagesPage() {
 			}
 			await router.invalidate()
 		} finally {
-			setRetryingJobId(null)
+			setRequeueJobId(null)
+		}
+	}
+
+	async function handleJobRerun(jobId: string) {
+		if (
+			!globalThis.confirm(
+				"Queue a new run using this job’s saved file/URLs? The completed job stays in the list.",
+			)
+		) {
+			return
+		}
+		setJobActionError(null)
+		setRequeueJobId(jobId)
+		try {
+			const res = await fetch(`/api/admin/jobs/${jobId}/rerun`, {
+				method: "POST",
+				credentials: "include",
+			})
+			const body = (await res.json().catch(() => ({}))) as { error?: string }
+			if (!res.ok) {
+				setJobActionError(body.error ?? `Re-run failed (${res.status})`)
+				return
+			}
+			await router.invalidate()
+		} finally {
+			setRequeueJobId(null)
 		}
 	}
 
@@ -275,7 +388,7 @@ function AdminLanguagesPage() {
 				<p className="text-xs">
 					When a language is <strong className="text-foreground font-medium">on</strong>, recent{" "}
 					<strong className="text-foreground font-medium">ingestion jobs</strong> for that language
-					appear below the row (Output / Cancel / Retry). For a full list see{" "}
+					appear below the row (Output / Skip → next / Cancel / Retry / Re-run). For a full list see{" "}
 					<Link
 						to="/admin/jobs"
 						className="underline underline-offset-2 hover:text-foreground font-medium text-foreground/90"
@@ -315,6 +428,11 @@ function AdminLanguagesPage() {
 			{jobActionError ? (
 				<div className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-3 py-2">
 					{jobActionError}
+				</div>
+			) : null}
+			{skipJobError ? (
+				<div className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-3 py-2">
+					{skipJobError}
 				</div>
 			) : null}
 
@@ -362,7 +480,7 @@ function AdminLanguagesPage() {
 												{lang.code}
 											</span>
 										</div>
-										<div className="flex items-center gap-2 text-[11px]">
+										<div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
 											<Link
 												to="/admin/words"
 												search={{ languageId: lang.id }}
@@ -378,6 +496,20 @@ function AdminLanguagesPage() {
 											>
 												Sentences
 											</Link>
+											<span className="text-border select-none">·</span>
+											<button
+												type="button"
+												disabled={
+													clearingLinksId === lang.id ||
+													toggling === lang.id ||
+													runningPipeline === lang.id ||
+													lang.sentenceCount === 0
+												}
+												className="text-destructive/90 hover:text-destructive hover:underline underline-offset-2 disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed"
+												onClick={() => handleClearSentenceLinks(lang.id, lang.name)}
+											>
+												{clearingLinksId === lang.id ? "Clearing…" : "Clear sentence links"}
+											</button>
 										</div>
 									</div>
 									<span className="text-sm font-mono text-right tabular-nums">
@@ -485,24 +617,52 @@ function AdminLanguagesPage() {
 																Output
 															</Button>
 															{(job.status === "PENDING" || job.status === "RUNNING") && (
-																<Button
-																	variant="ghost"
-																	size="sm"
-																	className="h-7 text-[11px] px-2 text-muted-foreground hover:text-destructive"
-																	onClick={() => handleJobCancel(job.id)}
-																>
-																	Cancel
-																</Button>
+																<>
+																	<Button
+																		variant="outline"
+																		size="sm"
+																		className="h-7 text-[11px] px-2 font-mono text-muted-foreground border-dashed"
+																		disabled={skippingJobId !== null}
+																		title={
+																			job.chainPipeline
+																				? "Mark complete and enqueue the next pipeline job."
+																				: "Mark complete without chaining."
+																		}
+																		onClick={() => handleJobSkipAndChain(job.id)}
+																	>
+																		{skippingJobId === job.id ? "…" : "Skip → next"}
+																	</Button>
+																	<Button
+																		variant="ghost"
+																		size="sm"
+																		className="h-7 text-[11px] px-2 text-muted-foreground hover:text-destructive"
+																		onClick={() => handleJobCancel(job.id)}
+																	>
+																		Cancel
+																	</Button>
+																</>
 															)}
 															{(job.status === "FAILED" || job.status === "CANCELLED") && (
 																<Button
 																	variant="secondary"
 																	size="sm"
 																	className="h-7 text-[11px] px-2"
-																	disabled={retryingJobId !== null}
+																	disabled={requeueJobId !== null}
 																	onClick={() => handleJobRetry(job.id)}
 																>
-																	{retryingJobId === job.id ? "…" : "Retry"}
+																	{requeueJobId === job.id ? "…" : "Retry"}
+																</Button>
+															)}
+															{job.status === "COMPLETED" && (
+																<Button
+																	variant="secondary"
+																	size="sm"
+																	className="h-7 text-[11px] px-2"
+																	disabled={requeueJobId !== null}
+																	title="Enqueue again from the same source."
+																	onClick={() => handleJobRerun(job.id)}
+																>
+																	{requeueJobId === job.id ? "…" : "Re-run"}
 																</Button>
 															)}
 														</div>

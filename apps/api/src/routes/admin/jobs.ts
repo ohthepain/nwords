@@ -4,11 +4,12 @@ import { zValidator } from "@hono/zod-validator"
 import { prisma, type Prisma } from "@nwords/db"
 import { Hono } from "hono"
 import { z } from "zod"
-import { getBoss } from "../../lib/boss"
+import { sendIngestJob } from "../../lib/boss"
 import { INGEST_QUEUE } from "../../lib/ingestion-queues"
 import { adminMiddleware } from "../../middleware/admin"
 import { authMiddleware } from "../../middleware/auth"
 import { jobMetadataForRetry } from "../../lib/job-logs"
+import { skipIngestionJobAndContinuePipeline } from "../../lib/skip-ingestion-chain"
 
 const UPLOAD_DIR = path.join(process.cwd(), "uploads")
 
@@ -165,6 +166,78 @@ async function planRetryFromJob(job: {
 	}
 }
 
+async function requeueIngestionJobFromSource(
+	sourceJobId: string,
+	mode: "retry" | "rerun",
+): Promise<
+	| { ok: true; job: ReturnType<typeof serializeJob>; httpStatus: 201 }
+	| { ok: false; error: string; httpStatus: 400 | 404 | 500 }
+> {
+	const old = await prisma.ingestionJob.findUnique({ where: { id: sourceJobId } })
+	if (!old) {
+		return { ok: false, error: "Job not found", httpStatus: 404 }
+	}
+
+	if (mode === "retry") {
+		if (old.status !== "FAILED" && old.status !== "CANCELLED") {
+			return {
+				ok: false,
+				error: `Only failed or cancelled jobs can be retried (status is ${old.status})`,
+				httpStatus: 400,
+			}
+		}
+	} else {
+		if (old.status !== "COMPLETED") {
+			return {
+				ok: false,
+				error: `Only completed jobs can be re-run (status is ${old.status})`,
+				httpStatus: 400,
+			}
+		}
+	}
+
+	const queueName = TYPE_TO_QUEUE[old.type]
+	if (!queueName) {
+		return { ok: false, error: "This job type cannot be re-queued", httpStatus: 400 }
+	}
+
+	const plan = await planRetryFromJob(old)
+	if (!plan.ok) {
+		return { ok: false, error: plan.error, httpStatus: 400 }
+	}
+	if (plan.queue !== queueName) {
+		return { ok: false, error: "Internal re-queue routing mismatch", httpStatus: 500 }
+	}
+
+	const rawMeta = asMetaRecord(old.metadata)
+	const {
+		retriedFromJobId: _retriedFrom,
+		retriedAt: _retriedAt,
+		requeuedFromJobId: _requeuedFrom,
+		...prevMeta
+	}: Record<string, unknown> = rawMeta
+	const cleanMeta = {
+		...jobMetadataForRetry(prevMeta),
+		...(mode === "rerun" ? { requeuedFromJobId: sourceJobId } : {}),
+	}
+
+	const newJob = await prisma.ingestionJob.create({
+		data: {
+			type: old.type,
+			languageId: old.languageId,
+			metadata: cleanMeta as Prisma.InputJsonValue,
+		},
+	})
+
+	await sendIngestJob(queueName, { ...plan.payload, jobId: newJob.id })
+
+	if (mode === "retry") {
+		await prisma.ingestionJob.delete({ where: { id: sourceJobId } })
+	}
+
+	return { ok: true, job: serializeJob(newJob), httpStatus: 201 }
+}
+
 function serializeJob(j: {
 	id: string
 	type: string
@@ -298,10 +371,8 @@ export const adminJobsRoute = new Hono()
 				},
 			})
 
-			// Enqueue the job with pg-boss
 			const queueName = TYPE_TO_QUEUE[type]
 			if (queueName) {
-				const boss = await getBoss()
 				const langCode3 = language.code3 ?? language.code
 				const payload =
 					type === "FREQUENCY_LIST"
@@ -319,7 +390,7 @@ export const adminJobsRoute = new Hono()
 								langCode: langCode3,
 								source: source ?? file.name,
 							}
-				await boss.send(queueName, payload)
+				await sendIngestJob(queueName, payload)
 			}
 
 			return c.json(serializeJob(job), 201)
@@ -347,57 +418,36 @@ export const adminJobsRoute = new Hono()
 		return c.json(serializeJob(updated))
 	})
 
-	// Re-queue a failed or cancelled job (new row + pg-boss message)
-	.post("/:id/retry", async (c) => {
-		const { id: sourceJobId } = c.req.param()
-
-		const old = await prisma.ingestionJob.findUnique({ where: { id: sourceJobId } })
-		if (!old) {
+	/** Mark RUNNING/PENDING as COMPLETED (assume DB already has data), optional pipeline chain. */
+	.post("/:id/skip-and-chain", async (c) => {
+		const { id } = c.req.param()
+		const out = await skipIngestionJobAndContinuePipeline(id)
+		if (!out.ok) {
+			return c.json({ error: out.error }, out.status as 400 | 404)
+		}
+		const job = await prisma.ingestionJob.findUnique({ where: { id } })
+		if (!job) {
 			return c.json({ error: "Job not found" }, 404)
 		}
+		return c.json(serializeJob(job))
+	})
 
-		if (old.status !== "FAILED" && old.status !== "CANCELLED") {
-			return c.json(
-				{
-					error: `Only failed or cancelled jobs can be retried (status is ${old.status})`,
-				},
-				400,
-			)
+	// Re-queue a failed or cancelled job (new row + pg-boss message; replaces the old row)
+	.post("/:id/retry", async (c) => {
+		const { id: sourceJobId } = c.req.param()
+		const out = await requeueIngestionJobFromSource(sourceJobId, "retry")
+		if (!out.ok) {
+			return c.json({ error: out.error }, out.httpStatus)
 		}
+		return c.json(out.job, out.httpStatus)
+	})
 
-		const queueName = TYPE_TO_QUEUE[old.type]
-		if (!queueName) {
-			return c.json({ error: "This job type cannot be retried" }, 400)
+	// Re-queue a completed job (new row + pg-boss message; keeps the completed row for history)
+	.post("/:id/rerun", async (c) => {
+		const { id: sourceJobId } = c.req.param()
+		const out = await requeueIngestionJobFromSource(sourceJobId, "rerun")
+		if (!out.ok) {
+			return c.json({ error: out.error }, out.httpStatus)
 		}
-
-		const plan = await planRetryFromJob(old)
-		if (!plan.ok) {
-			return c.json({ error: plan.error }, 400)
-		}
-		if (plan.queue !== queueName) {
-			return c.json({ error: "Internal retry routing mismatch" }, 500)
-		}
-
-		const rawMeta = asMetaRecord(old.metadata)
-		const {
-			retriedFromJobId: _retriedFrom,
-			retriedAt: _retriedAt,
-			...prevMeta
-		}: Record<string, unknown> = rawMeta
-		const cleanMeta = jobMetadataForRetry(prevMeta)
-
-		const newJob = await prisma.ingestionJob.create({
-			data: {
-				type: old.type,
-				languageId: old.languageId,
-				metadata: cleanMeta as Prisma.InputJsonValue,
-			},
-		})
-
-		const boss = await getBoss()
-		await boss.send(queueName, { ...plan.payload, jobId: newJob.id })
-
-		await prisma.ingestionJob.delete({ where: { id: sourceJobId } })
-
-		return c.json(serializeJob(newJob), 201)
+		return c.json(out.job, out.httpStatus)
 	})

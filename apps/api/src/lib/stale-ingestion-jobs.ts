@@ -57,3 +57,42 @@ export async function sweepStaleRunningIngestionJobs(prisma: PrismaClient): Prom
 
 	return stale.length
 }
+
+/**
+ * PENDING forever usually means no worker consumed the queue (e.g. DISABLE_INGEST_WORKERS on API) or enqueue failed silently.
+ */
+export async function sweepStalePendingIngestionJobs(prisma: PrismaClient): Promise<number> {
+	const raw = process.env.STALE_INGESTION_JOB_MINUTES?.trim()
+	const minutes = raw ? Number.parseInt(raw, 10) : 120
+	if (!Number.isFinite(minutes) || minutes <= 0) {
+		return 0
+	}
+
+	const cutoff = new Date(Date.now() - minutes * 60_000)
+	const stale = await prisma.ingestionJob.findMany({
+		where: {
+			status: "PENDING",
+			createdAt: { lt: cutoff },
+		},
+		select: { id: true, metadata: true },
+	})
+
+	for (const row of stale) {
+		const prev = asMetaRecord(row.metadata)
+		await prisma.ingestionJob.update({
+			where: { id: row.id },
+			data: {
+				status: "FAILED",
+				completedAt: new Date(),
+				metadata: {
+					...prev,
+					error: `Stale PENDING: never started after ${minutes} minutes. Run apps/api with DISABLE_INGEST_WORKERS unset/false so Tatoeba/Kaikki workers register, and check API logs for [pg-boss].`,
+					staleSweep: true,
+					staleSweepAt: new Date().toISOString(),
+				},
+			},
+		})
+	}
+
+	return stale.length
+}

@@ -101,11 +101,13 @@ export async function linkSentencesAndAssignTests(
 			let position = 0
 			for (const t of tokens) {
 				const wids = lemmaToWordIds.get(t)
-				if (wids?.length) {
-					for (const wid of wids) {
-						matchedLemmaIds.add(wid)
-						sentenceWordRows.push({ sentenceId: s.id, wordId: wid, position })
-					}
+				// Same surface form can map to multiple Word rows (different POS / senses). Without a tagger
+				// we cannot tell which applies, so linking all of them attaches the wrong sense (e.g. noun
+				// "vik" vs verb "vik") and English parallels disagree with the blank. Skip ambiguous tokens.
+				if (wids?.length === 1) {
+					const [wid] = wids
+					matchedLemmaIds.add(wid)
+					sentenceWordRows.push({ sentenceId: s.id, wordId: wid, position })
 				}
 				position++
 			}

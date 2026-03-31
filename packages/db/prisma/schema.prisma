@@ -184,6 +184,8 @@ model Sentence {
   sentenceWords SentenceWord[]
 
   @@index([languageId])
+  /// Speeds up Tatoeba linking: rows needing first-pass link (`testQualityScore` null) per language.
+  @@index([languageId, testQualityScore])
   @@map("sentence")
 }
 

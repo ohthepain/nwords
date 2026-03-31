@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { prisma } from "@nwords/db"
-import { getBoss } from "./boss"
+import { sendIngestJob } from "./boss"
 import { INGEST_QUEUE } from "./ingestion-queues"
 import { resolveKaikkiDownloadPlan } from "./ingestion-urls"
 
@@ -51,30 +51,13 @@ export async function enqueueLanguageIngestionPipeline(
 		},
 	})
 
-	try {
-		const boss = await getBoss()
-		await boss.send(INGEST_QUEUE.KAIKKI, {
-			jobId: job.id,
-			languageId,
-			downloadUrls,
-			kaikkiMode: mode,
-			chainPipeline: true,
-		})
-	} catch (err) {
-		const base =
-			job.metadata !== null && typeof job.metadata === "object" && !Array.isArray(job.metadata)
-				? { ...(job.metadata as Record<string, unknown>) }
-				: {}
-		await prisma.ingestionJob.update({
-			where: { id: job.id },
-			data: {
-				status: "FAILED",
-				completedAt: new Date(),
-				metadata: { ...base, error: String(err), stage: "pg-boss-send" },
-			},
-		})
-		throw err
-	}
+	await sendIngestJob(INGEST_QUEUE.KAIKKI, {
+		jobId: job.id,
+		languageId,
+		downloadUrls,
+		kaikkiMode: mode,
+		chainPipeline: true,
+	})
 
 	return { jobId: job.id }
 }
@@ -95,29 +78,12 @@ export async function enqueueKaikkiFromFile(
 		},
 	})
 
-	try {
-		const boss = await getBoss()
-		await boss.send(INGEST_QUEUE.KAIKKI, {
-			jobId: job.id,
-			languageId,
-			filePath,
-			chainPipeline: false,
-		})
-	} catch (err) {
-		const base =
-			job.metadata !== null && typeof job.metadata === "object" && !Array.isArray(job.metadata)
-				? { ...(job.metadata as Record<string, unknown>) }
-				: {}
-		await prisma.ingestionJob.update({
-			where: { id: job.id },
-			data: {
-				status: "FAILED",
-				completedAt: new Date(),
-				metadata: { ...base, error: String(err), stage: "pg-boss-send" },
-			},
-		})
-		throw err
-	}
+	await sendIngestJob(INGEST_QUEUE.KAIKKI, {
+		jobId: job.id,
+		languageId,
+		filePath,
+		chainPipeline: false,
+	})
 
 	return { jobId: job.id }
 }

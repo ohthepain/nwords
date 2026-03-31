@@ -7,6 +7,7 @@ import bz2 from "unbzip2-stream"
 import { isIngestionJobCancelled, tryMarkIngestionJobRunning } from "../lib/ingestion-job-cancel"
 import { appendJobLog, snapshotJobMetadata } from "../lib/job-logs"
 import { updateIngestionProgress } from "../lib/job-progress"
+import { tatoebaPairLinksBz2Url } from "../lib/ingestion-urls"
 import { nodeReadableFromWeb } from "../lib/node-streams"
 import { linkSentencesAndAssignTests, type LinkingProgressEvent } from "./sentence-link"
 
@@ -23,6 +24,16 @@ export interface TatoebaJobData {
 	langCode: string
 	translationLinksPath?: string
 	chainPipeline?: boolean
+}
+
+/** Tatoeba TSV `lang` column vs our pipeline `langCode` (usually ISO 639-3, e.g. vie). */
+function tatoebaLangMatches(column: string, langCode: string): boolean {
+	const c = column.toLowerCase()
+	const l = langCode.toLowerCase()
+	if (c === l) return true
+	// Vietnamese: Tatoeba exports sometimes use 639-1 `vi` in the column.
+	if ((l === "vie" && c === "vi") || (l === "vi" && c === "vie")) return true
+	return false
 }
 
 async function* linesFromFilePlain(filePath: string): AsyncGenerator<string> {
@@ -77,7 +88,16 @@ export async function processTatoebaJob(job: PgBoss.Job<TatoebaJobData>) {
 	}
 
 	const started = await tryMarkIngestionJobRunning(jobId)
-	if (!started) return
+	if (!started) {
+		const row = await prisma.ingestionJob.findUnique({
+			where: { id: jobId },
+			select: { status: true },
+		})
+		console.warn(
+			`[tatoeba] skipped job ${jobId}: could not claim (ingestion status=${row?.status ?? "missing"})`,
+		)
+		return
+	}
 
 	await appendJobLog(jobId, "out", "Tatoeba sentences: job started.")
 	await appendJobLog(
@@ -96,6 +116,9 @@ export async function processTatoebaJob(job: PgBoss.Job<TatoebaJobData>) {
 	let translationsLinked = 0
 	let sentenceFlush = 0
 	const BATCH_SIZE = 500
+	/** Log progress while streaming huge bz2 files (batch logs alone go quiet for long gaps). */
+	let lastHeartbeatAt = Date.now()
+	const HEARTBEAT_MS = 45_000
 
 	try {
 		if (filePath) {
@@ -128,6 +151,24 @@ export async function processTatoebaJob(job: PgBoss.Job<TatoebaJobData>) {
 		for await (const line of readSource) {
 			processed++
 
+			if (Date.now() - lastHeartbeatAt >= HEARTBEAT_MS) {
+				lastHeartbeatAt = Date.now()
+				await appendJobLog(
+					jobId,
+					"out",
+					`Tatoeba import: still streaming… ${processed.toLocaleString()} lines read, ${inserted.toLocaleString()} sentences inserted, ${skipped.toLocaleString()} lines skipped (other languages in TSV)`,
+				)
+				await updateIngestionProgress(jobId, {
+					processedItems: processed,
+					errorCount: errors,
+					extraMetadata: { inserted, skipped, phase: "import" },
+				})
+				if (await isIngestionJobCancelled(jobId)) {
+					console.log(`[tatoeba] Job ${jobId} cancelled during import heartbeat`)
+					return
+				}
+			}
+
 			const trimmed = line.trim()
 			if (!trimmed) continue
 
@@ -138,7 +179,7 @@ export async function processTatoebaJob(job: PgBoss.Job<TatoebaJobData>) {
 			const sentenceLang = parts[1]
 			const text = parts[2]
 
-			if (sentenceLang !== langCode) {
+			if (!tatoebaLangMatches(sentenceLang, langCode)) {
 				skipped++
 				continue
 			}
@@ -161,11 +202,12 @@ export async function processTatoebaJob(job: PgBoss.Job<TatoebaJobData>) {
 				batch = []
 
 				sentenceFlush++
-				if (sentenceFlush === 1 || sentenceFlush % 15 === 0) {
+				lastHeartbeatAt = Date.now()
+				if (sentenceFlush === 1 || sentenceFlush % 5 === 0) {
 					await appendJobLog(
 						jobId,
 						"out",
-						`Tatoeba import: batch ${sentenceFlush}, lines scanned ${processed.toLocaleString()}, sentences inserted ${inserted}`,
+						`Tatoeba import: batch ${sentenceFlush}, lines scanned ${processed.toLocaleString()}, sentences inserted ${inserted.toLocaleString()}`,
 					)
 				}
 				await updateIngestionProgress(jobId, {
@@ -197,14 +239,30 @@ export async function processTatoebaJob(job: PgBoss.Job<TatoebaJobData>) {
 			`Tatoeba: sentence import pass done — ${inserted} inserted, ${skipped} skipped, ${errors} row errors`,
 		)
 
+		if (chainPipeline !== false) {
+			const fromExports = await importCrossLanguageLinksFromTatoeba(jobId, langCode)
+			translationsLinked += fromExports
+		}
+
 		if (translationLinksPath) {
 			await appendJobLog(jobId, "out", "Tatoeba: processing translation links file…")
-			translationsLinked = await processTranslationLinks(translationLinksPath)
-			await appendJobLog(jobId, "out", `Tatoeba: linked ${translationsLinked} translation pairs`)
+			translationsLinked += await processTranslationLinks(translationLinksPath)
+			await appendJobLog(jobId, "out", `Tatoeba: linked ${translationsLinked} translation pairs (total incl. exports)`)
+		} else if (translationsLinked > 0) {
+			await appendJobLog(
+				jobId,
+				"out",
+				`Tatoeba: ${translationsLinked.toLocaleString()} translation pair rows from Tatoeba exports (for parallel hints)`,
+			)
 		}
 
 		let linkStats = { sentencesProcessed: 0, linksCreated: 0, candidates: 0 }
 		if (chainPipeline !== false) {
+			await appendJobLog(
+				jobId,
+				"out",
+				"Tatoeba: starting sentence–lemma linking. Large languages can take a long time; progress logs appear below.",
+			)
 			await appendJobLog(jobId, "out", "Tatoeba: linking sentences to lemmas / test assignments…")
 			const LINK_DETAIL_LOG_MS = 5000
 			let lastDetailLogAt = 0
@@ -340,16 +398,12 @@ async function flushSentenceBatch(
 	return { inserted, errors }
 }
 
-async function processTranslationLinks(linksPath: string): Promise<number> {
+async function consumeTranslationLinkLines(lineSource: AsyncIterable<string>): Promise<number> {
 	let linked = 0
 	const BATCH_SIZE = 500
-
-	const readStream = createReadStream(linksPath, "utf-8")
-	const rl = createInterface({ input: readStream })
-
 	let batch: Array<{ origTatoebaId: number; transTatoebaId: number }> = []
 
-	for await (const line of rl) {
+	for await (const line of lineSource) {
 		const trimmed = line.trim()
 		if (!trimmed) continue
 
@@ -376,6 +430,73 @@ async function processTranslationLinks(linksPath: string): Promise<number> {
 	return linked
 }
 
+async function processTranslationLinks(linksPath: string): Promise<number> {
+	const readStream = createReadStream(linksPath, "utf-8")
+	const rl = createInterface({ input: readStream })
+	try {
+		return await consumeTranslationLinkLines(rl)
+	} finally {
+		rl.close()
+	}
+}
+
+/**
+ * Import Tatoeba `{base}-{partner}_links.tsv.bz2` for each other enabled language so cloze hints can use parallels.
+ * Pairs are only stored when both Tatoeba sentence ids already exist (run after each language’s sentence import).
+ */
+async function importCrossLanguageLinksFromTatoeba(jobId: string, baseLangCode3: string): Promise<number> {
+	const self = baseLangCode3.toLowerCase()
+	const partners = await prisma.language.findMany({
+		where: { enabled: true, code3: { not: null } },
+		select: { code3: true, name: true },
+	})
+
+	let total = 0
+	for (const row of partners) {
+		const other = row.code3!.toLowerCase()
+		if (other === self) continue
+
+		if (await isIngestionJobCancelled(jobId)) {
+			return total
+		}
+
+		const url = tatoebaPairLinksBz2Url(self, other)
+		try {
+			const head = await fetch(url, { method: "HEAD", redirect: "follow" })
+			if (!head.ok) {
+				await appendJobLog(
+					jobId,
+					"out",
+					`Tatoeba translation links: no weekly export for ${self}→${other} (HTTP ${head.status}); hints may need the other language’s Tatoeba import first`,
+				)
+				continue
+			}
+		} catch (err) {
+			await appendJobLog(
+				jobId,
+				"err",
+				`Tatoeba translation links: could not check ${self}→${other}: ${String(err)}`,
+			)
+			continue
+		}
+
+		await appendJobLog(jobId, "out", `Tatoeba translation links: importing ${self}↔${other}…`)
+		try {
+			const n = await consumeTranslationLinkLines(linesFromBz2Url(url))
+			total += n
+			await appendJobLog(
+				jobId,
+				"out",
+				`Tatoeba translation links: ${self}↔${other} — ${n.toLocaleString()} pairs linked (both sentences must exist in DB)`,
+			)
+		} catch (err) {
+			await appendJobLog(jobId, "err", `Tatoeba translation links ${self}↔${other}: ${String(err)}`)
+		}
+	}
+
+	return total
+}
+
 async function flushLinkBatch(
 	batch: Array<{ origTatoebaId: number; transTatoebaId: number }>,
 ): Promise<number> {
@@ -397,14 +518,12 @@ async function flushLinkBatch(
 
 	const creates = []
 	for (const { origTatoebaId, transTatoebaId } of batch) {
-		const origId = idMap.get(origTatoebaId)
-		const transId = idMap.get(transTatoebaId)
-		if (!origId || !transId) continue
-
-		creates.push({
-			originalSentenceId: origId,
-			translatedSentenceId: transId,
-		})
+		const a = idMap.get(origTatoebaId)
+		const b = idMap.get(transTatoebaId)
+		if (!a || !b || a === b) continue
+		// Canonical order so eng→vie and vie→eng Tatoeba exports dedupe on @@unique([originalSentenceId, translatedSentenceId]).
+		const [originalSentenceId, translatedSentenceId] = a < b ? [a, b] : [b, a]
+		creates.push({ originalSentenceId, translatedSentenceId })
 	}
 
 	if (creates.length > 0) {
