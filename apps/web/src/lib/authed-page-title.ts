@@ -7,6 +7,7 @@ const ROUTE_PAGE_TITLE: Record<string, string> = {
 	"/_authed/_admin/admin/jobs": "Jobs",
 	"/_authed/_admin/admin/words": "Words",
 	"/_authed/_admin/admin/sentences": "Sentences",
+	"/_authed/_admin/admin/cloze-reports": "Cloze reports",
 }
 
 export function authedPageTitleForRouteId(routeId: string | undefined): string {

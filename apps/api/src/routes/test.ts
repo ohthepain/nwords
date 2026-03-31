@@ -1,10 +1,10 @@
 import { zValidator } from "@hono/zod-validator"
-import { prisma, type TestSession } from "@nwords/db"
+import { type TestSession, prisma } from "@nwords/db"
 import { Hono } from "hono"
 import { z } from "zod"
 import { pickRandomWordIdForCloze, resolveClozeWithHint } from "../lib/parallel-hint"
 import type { AuthUser } from "../middleware/auth"
-import { optionalAuth, type OptionalAuthEnv } from "../middleware/auth"
+import { type OptionalAuthEnv, optionalAuth } from "../middleware/auth"
 
 async function getSessionIfAllowed(
 	sessionId: string,
@@ -194,17 +194,26 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 			return c.json(
 				{
 					error: "languages_required",
-					message: "Set native and target language in settings (or restart guest practice with a valid pair).",
+					message:
+						"Set native and target language in settings (or restart guest practice with a valid pair).",
 				},
 				400,
 			)
 		}
 
+		// Progressive difficulty: start around rank 100 and widen the range as more words are tested.
+		// Each question tested adds ~50 to the upper bound, so the first few questions are common
+		// words and the range gradually opens up.
+		const tested = session.wordsTestedCount
+		const rankMin = 1
+		const rankMax = Math.min(100 + tested * 50, 10000)
+		const rankRange = { min: rankMin, max: rankMax }
+
 		const tried = new Set<string>()
 		const maxTries = 24
 
 		for (let i = 0; i < maxTries; i++) {
-			const wordId = await pickRandomWordIdForCloze(langs.targetLanguageId, [...tried])
+			const wordId = await pickRandomWordIdForCloze(langs.targetLanguageId, [...tried], rankRange)
 			if (!wordId) break
 			tried.add(wordId)
 
@@ -219,6 +228,7 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 			return c.json({
 				wordId: resolved.wordId,
 				lemma: resolved.lemma,
+				rank: resolved.rank,
 				targetSentenceId: resolved.targetSentenceId,
 				promptText: resolved.promptText,
 				targetSentenceText: resolved.targetSentenceText,
@@ -466,4 +476,86 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 				wordsCorrectCount: s.wordsCorrectCount,
 			})),
 		})
+	})
+
+	/** Report a bad cloze (training / debugging). Works for guests; attaches reporter when signed in. */
+	.post(
+		"/cloze-reports",
+		zValidator(
+			"json",
+			z.object({
+				nativeLanguageId: z.string().uuid(),
+				targetLanguageId: z.string().uuid(),
+				wordId: z.string().uuid(),
+				wordLemma: z.string().min(1),
+				targetSentenceId: z.string().uuid(),
+				targetSentenceText: z.string().min(1),
+				promptText: z.string().min(1),
+				hintText: z.string().min(1),
+				hintSentenceId: z.string().uuid().nullable().optional(),
+				hintSource: z.enum(["parallel", "definition"]),
+				inlineHint: z.string().nullable().optional(),
+			}),
+		),
+		async (c) => {
+			const user = c.get("user")
+			const b = c.req.valid("json")
+
+			const [nativeLang, targetLang, word] = await Promise.all([
+				prisma.language.findUnique({ where: { id: b.nativeLanguageId } }),
+				prisma.language.findUnique({ where: { id: b.targetLanguageId } }),
+				prisma.word.findFirst({
+					where: { id: b.wordId, languageId: b.targetLanguageId },
+				}),
+			])
+
+			if (!nativeLang || !targetLang) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+			if (!word) {
+				return c.json({ error: "Word not found for target language" }, 404)
+			}
+
+			const report = await prisma.clozeIssueReport.create({
+				data: {
+					reporterUserId: user?.id ?? null,
+					nativeLanguageId: b.nativeLanguageId,
+					targetLanguageId: b.targetLanguageId,
+					wordId: b.wordId,
+					targetSentenceId: b.targetSentenceId,
+					hintSentenceId: b.hintSentenceId ?? null,
+					targetSentenceText: b.targetSentenceText,
+					promptText: b.promptText,
+					hintText: b.hintText,
+					hintSource: b.hintSource,
+					inlineHint: b.inlineHint ?? null,
+					wordLemma: b.wordLemma,
+				},
+			})
+
+			return c.json({ id: report.id }, 201)
+		},
+	)
+
+	/** Withdraw a cloze report (reporter only when logged in; guest reports by id). */
+	.delete("/cloze-reports/:id", async (c) => {
+		const user = c.get("user")
+		const id = c.req.param("id")
+
+		const report = await prisma.clozeIssueReport.findUnique({
+			where: { id },
+			select: { id: true, reporterUserId: true },
+		})
+		if (!report) {
+			return c.json({ error: "Report not found" }, 404)
+		}
+
+		if (report.reporterUserId) {
+			if (!user || user.id !== report.reporterUserId) {
+				return c.json({ error: "You can only withdraw your own report" }, 403)
+			}
+		}
+
+		await prisma.clozeIssueReport.delete({ where: { id } })
+		return c.body(null, 204)
 	})

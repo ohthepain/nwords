@@ -40,7 +40,9 @@
       "Bash(PGPASSWORD='M+4FoG4IaMfbnF87ShI30RKEPnKl2qSX5WES6lFZK2w' psql -h localhost -p 5432 -U octacard -d nwords -c \"SELECT id::text, type, status, \"\"errorCount\"\", metadata->>''error'' as error, metadata->>''languageName'' as lang FROM ingestion_job ORDER BY \"\"createdAt\"\" DESC LIMIT 10;\")",
       "Bash(PGPASSWORD='M+4FoG4IaMfbnF87ShI30RKEPnKl2qSX5WES6lFZK2w' psql -h localhost -p 5432 -U octacard -d nwords -c \"SELECT l.name, count\\(*\\) FROM word w JOIN language l ON l.id = w.\"\"languageId\"\" GROUP BY l.name ORDER BY count DESC;\")",
       "Bash(PGPASSWORD='M+4FoG4IaMfbnF87ShI30RKEPnKl2qSX5WES6lFZK2w' psql -h localhost -p 5432 -U octacard -d nwords -c \"SELECT w.lemma, w.definitions FROM word w JOIN language l ON l.id = w.\"\"languageId\"\" WHERE l.name = ''Vietnamese'' AND w.lemma = ''đáng'' LIMIT 1;\")",
-      "Bash(PGPASSWORD='M+4FoG4IaMfbnF87ShI30RKEPnKl2qSX5WES6lFZK2w' psql -h localhost -p 5432 -U octacard -d nwords -c \":*)"
+      "Bash(PGPASSWORD='M+4FoG4IaMfbnF87ShI30RKEPnKl2qSX5WES6lFZK2w' psql -h localhost -p 5432 -U octacard -d nwords -c \":*)",
+      "Bash(PGPASSWORD='M+4FoG4IaMfbnF87ShI30RKEPnKl2qSX5WES6lFZK2w' psql -h 127.0.0.1 -p 5432 -U octacard -d nwords -c \":*)",
+      "Bash(curl -sI \"https://downloads.tatoeba.org/exports/per_language/vie/vie-eng_links.tsv.bz2\")"
     ]
   }
 }

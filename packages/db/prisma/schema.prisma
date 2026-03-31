@@ -30,6 +30,7 @@ model User {
   wordKnowledge UserWordKnowledge[]
   scoreHistory  ScoreHistory[]
   testSessions  TestSession[]
+  clozeIssueReports ClozeIssueReport[]
 
   @@map("user")
 }
@@ -105,6 +106,8 @@ model Language {
   frequencyLists FrequencyList[]
   guestSessionsNative TestSession[] @relation("GuestTestNativeLanguage")
   guestSessionsTarget TestSession[] @relation("GuestTestTargetLanguage")
+  clozeReportsAsNative ClozeIssueReport[] @relation("ClozeReportNative")
+  clozeReportsAsTarget ClozeIssueReport[] @relation("ClozeReportTarget")
 
   @@map("language")
 }
@@ -129,6 +132,7 @@ model Word {
   sentenceWords SentenceWord[]
   userKnowledge UserWordKnowledge[]
   forms         WordForm[]
+  clozeIssueReports ClozeIssueReport[]
 
   @@unique([languageId, lemma, pos])
   @@index([languageId, rank])
@@ -323,6 +327,43 @@ enum AnswerType {
   MULTIPLE_CHOICE
   TRANSLATION_TYPED
   VOICE_TRANSCRIPTION
+}
+
+/// User-reported bad cloze items (training / debugging).
+enum ClozeIssueStatus {
+  PENDING
+  REMOVE_CANDIDATE
+  CLUE_CORRECTED
+  DISMISSED
+}
+
+model ClozeIssueReport {
+  id               String           @id @default(uuid()) @db.Uuid
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  reporterUserId   String?          @db.Uuid
+  reporter         User?            @relation(fields: [reporterUserId], references: [id], onDelete: SetNull)
+  nativeLanguageId String           @db.Uuid
+  nativeLanguage   Language         @relation("ClozeReportNative", fields: [nativeLanguageId], references: [id])
+  targetLanguageId String           @db.Uuid
+  targetLanguage   Language         @relation("ClozeReportTarget", fields: [targetLanguageId], references: [id])
+  wordId           String           @db.Uuid
+  word             Word             @relation(fields: [wordId], references: [id])
+  targetSentenceId String?          @db.Uuid
+  hintSentenceId   String?          @db.Uuid
+  targetSentenceText String         @db.Text
+  promptText       String           @db.Text
+  hintText         String           @db.Text
+  hintSource       String
+  inlineHint       String?          @db.Text
+  wordLemma        String
+  status           ClozeIssueStatus @default(PENDING)
+  adminCorrectClue String?          @db.Text
+  adminNote        String?          @db.Text
+
+  @@index([targetLanguageId, status])
+  @@index([createdAt])
+  @@map("cloze_issue_report")
 }
 
 // ─── Ingestion Jobs ─────────────────────────────────────

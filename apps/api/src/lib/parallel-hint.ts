@@ -13,6 +13,96 @@ function tokensForScoring(text: string): string[] {
 /** Match word-token runs; same segmentation as `SentenceWord.position` from sentence linking. */
 const WORD_RUN = /[\p{L}\p{N}]+/gu
 
+/**
+ * When parallel index alignment is wrong, we fall back to the gloss pivot. Reject only
+ * tokens that are almost never the single-word cloze target (articles, auxiliaries, a few
+ * high-frequency glue words). Do **not** block pronouns/possessives (e.g. "my" for Swedish
+ * "min") — blocking those caused bad pivots like "minute".
+ */
+const INLINE_HINT_STOPWORDS_EN = new Set([
+	"a",
+	"an",
+	"the",
+	"and",
+	"or",
+	"but",
+	"if",
+	"so",
+	"as",
+	"at",
+	"by",
+	"for",
+	"in",
+	"is",
+	"of",
+	"on",
+	"to",
+	"no",
+	"be",
+	"do",
+	"am",
+	"are",
+	"was",
+	"were",
+	"been",
+	"being",
+	"has",
+	"had",
+	"having",
+	"does",
+	"did",
+	"doing",
+	"done",
+	"will",
+	"would",
+	"could",
+	"should",
+	"may",
+	"might",
+	"must",
+	"shall",
+	"can",
+	"there",
+	"here",
+	"then",
+	"than",
+	"too",
+	"very",
+	"just",
+	"all",
+	"any",
+	"both",
+	"each",
+	"few",
+	"more",
+	"most",
+	"some",
+	"such",
+	"only",
+	"own",
+	"into",
+	"from",
+	"with",
+	"about",
+	"against",
+	"between",
+	"through",
+	"during",
+	"before",
+	"after",
+	"above",
+	"below",
+	"under",
+	"again",
+	"once",
+	"not",
+	"nor",
+	"yet",
+	"ever",
+	"even",
+	"also",
+])
+
 export type HintSource = "parallel" | "definition"
 
 export type ClozeResolution =
@@ -20,6 +110,7 @@ export type ClozeResolution =
 			ok: true
 			wordId: string
 			lemma: string
+			rank: number
 			targetSentenceId: string
 			targetSentenceText: string
 			promptText: string
@@ -170,52 +261,289 @@ async function loadClozeCandidates(
 }
 
 /**
+ * Kaikki entries for inflected forms often have definitions like "past tense of vara" or
+ * "definite form of man" instead of the actual meaning. Detect these and extract the
+ * referenced lemma so we can look up its real definitions instead.
+ */
+const FORM_OF_RE =
+	/^(?:present|past|future|imperative|indicative|subjunctive|infinitive|gerund|participle|superlative|comparative|singular|plural|nominative|genitive|dative|accusative|ablative|definite|indefinite|conditional|preterite|imperfect)[\s,;/]+(?:(?:tense|indicative|subjunctive|form|singular|plural|active|passive|simple|continuous|perfect)\s+)*(?:of\s+)(.+)/i
+
+function extractFormOfLemma(gloss: string): string | null {
+	const m = gloss.trim().match(FORM_OF_RE)
+	if (!m) return null
+	// The referenced lemma may have trailing context: "vara; am/is/are" → just take the first word-run
+	const ref = m[1].trim()
+	const firstWord = ref.match(/^[\p{L}\p{N}]+/u)
+	return firstWord ? firstWord[0].toLowerCase() : null
+}
+
+/** Also detect "inflection of X:" which Kaikki uses for Swedish/Finnish etc. */
+const INFLECTION_OF_RE = /^inflection of\s+([\p{L}\p{N}]+)/iu
+
+function extractInflectionOfLemma(gloss: string): string | null {
+	const m = gloss.trim().match(INFLECTION_OF_RE)
+	return m ? m[1].toLowerCase() : null
+}
+
+/**
+ * Word-token runs in order; must match `buildClozePrompt` / `SentenceWord.position` indexing.
+ */
+function wordRunsInOrder(text: string): string[] {
+	return text.match(WORD_RUN) ?? []
+}
+
+/** How far we search left/right when token counts differ (e.g. "That's" → That + s). */
+const PARALLEL_HINT_ALIGN_WINDOW = 4
+
+/**
+ * Use the native-language parallel token at the same index as the blank when it is not a
+ * blocked function word; used when we have no expanded sense tokens to score.
+ */
+function tryParallelAlignedInlineHint(parallelText: string, blankTokenIndex: number): string | null {
+	const runs = wordRunsInOrder(parallelText)
+	if (blankTokenIndex < 0 || blankTokenIndex >= runs.length) return null
+	const raw = runs[blankTokenIndex]!
+	const tok = raw.toLowerCase()
+	if (tok.length < 2) return null
+	if (INLINE_HINT_STOPWORDS_EN.has(tok)) return null
+	return tok
+}
+
+/** Bounded Levenshtein: returns whether distance(a, b) ≤ max. */
+function withinEditDistance(a: string, b: string, max: number): boolean {
+	const m = a.length
+	const n = b.length
+	if (m === 0) return n <= max
+	if (n === 0) return m <= max
+	if (Math.abs(m - n) > max) return false
+
+	const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0))
+	for (let i = 0; i <= m; i++) dp[i]![0] = i
+	for (let j = 0; j <= n; j++) dp[0]![j] = j
+
+	for (let i = 1; i <= m; i++) {
+		let rowMin = Infinity
+		for (let j = 1; j <= n; j++) {
+			const cost = a[i - 1] === b[j - 1] ? 0 : 1
+			const v = Math.min(dp[i - 1]![j]! + 1, dp[i]![j - 1]! + 1, dp[i - 1]![j - 1]! + cost)
+			dp[i]![j] = v
+			if (v < rowMin) rowMin = v
+		}
+		if (rowMin > max) return false
+	}
+	return dp[m]![n]! <= max
+}
+
+function scoreParallelTokAgainstSense(tok: string, sense: Set<string>): number {
+	if (sense.size === 0) return 0
+	const h = tok.toLowerCase()
+	let best = 0
+	for (const s of sense) {
+		if (s === h) return 100
+		if (s.length >= 3 && h.length >= 3 && (h.includes(s) || s.includes(h))) {
+			best = Math.max(best, 55)
+			continue
+		}
+		if (s.length >= 4 && h.length >= 4) {
+			if (withinEditDistance(h, s, 1)) best = Math.max(best, 45)
+			else if (withinEditDistance(h, s, 2)) best = Math.max(best, 28)
+		}
+	}
+	return best
+}
+
+/**
+ * Gloss string after following form-of / inflection-of to the root lemma (same as gloss pivot).
+ */
+async function resolveGlossStringForPivot(
+	definitions: unknown,
+	targetLanguageId: string,
+): Promise<string | null> {
+	if (!Array.isArray(definitions) || definitions.length === 0) return null
+	const firstGloss = definitions.find((d): d is string => typeof d === "string" && d.trim().length > 0)
+	if (!firstGloss) return null
+
+	let glossToUse = firstGloss
+	const formOfLemma = extractFormOfLemma(firstGloss) ?? extractInflectionOfLemma(firstGloss)
+	if (formOfLemma) {
+		const rootWord = await prisma.word.findFirst({
+			where: { lemma: formOfLemma, languageId: targetLanguageId },
+			select: { definitions: true },
+			orderBy: { rank: "asc" },
+		})
+		if (rootWord && Array.isArray(rootWord.definitions)) {
+			const realDef = (rootWord.definitions as string[]).find(
+				(d) =>
+					typeof d === "string" &&
+					d.trim().length > 0 &&
+					!extractFormOfLemma(d) &&
+					!extractInflectionOfLemma(d),
+			)
+			if (realDef) glossToUse = realDef
+		}
+	}
+	return glossToUse
+}
+
+async function expandedSenseTokensForInlineHint(
+	definitions: unknown,
+	targetLanguageId: string,
+): Promise<Set<string>> {
+	const out = definitionSenseTokens(definitions)
+	const gloss = await resolveGlossStringForPivot(definitions, targetLanguageId)
+	if (gloss) {
+		for (const t of tokensForScoring(gloss)) {
+			if (t.length >= 2) out.add(t)
+		}
+	}
+	return out
+}
+
+/**
+ * Pick a parallel hint token near the blank index that matches dictionary sense (handles
+ * extra/missing tokens from apostrophes and phrasing). Falls back to pivot when nothing scores.
+ */
+async function tryParallelInlineHintWithWindow(
+	parallelText: string,
+	blankTokenIndex: number,
+	definitions: unknown,
+	targetLanguageId: string,
+): Promise<string | null> {
+	const runs = wordRunsInOrder(parallelText)
+	if (runs.length === 0) return null
+
+	const sense = await expandedSenseTokensForInlineHint(definitions, targetLanguageId)
+	if (sense.size === 0) {
+		return tryParallelAlignedInlineHint(parallelText, blankTokenIndex)
+	}
+
+	const from = Math.max(0, blankTokenIndex - PARALLEL_HINT_ALIGN_WINDOW)
+	const to = Math.min(runs.length - 1, blankTokenIndex + PARALLEL_HINT_ALIGN_WINDOW)
+
+	let bestTok: string | null = null
+	let bestTotal = -1
+	let bestIdx = blankTokenIndex
+
+	const debugCandidates: Array<{
+		i: number
+		tok: string
+		skipReason?: string
+		matchScore?: number
+	}> = []
+
+	for (let i = from; i <= to; i++) {
+		const raw = runs[i]!
+		const tok = raw.toLowerCase()
+		if (tok.length < 2) {
+			debugCandidates.push({ i, tok, skipReason: "short" })
+			continue
+		}
+		if (INLINE_HINT_STOPWORDS_EN.has(tok)) {
+			debugCandidates.push({ i, tok, skipReason: "stopword" })
+			continue
+		}
+
+		const matchScore = scoreParallelTokAgainstSense(tok, sense)
+		debugCandidates.push({ i, tok, matchScore })
+		if (matchScore < 28) continue
+
+		const closeness = PARALLEL_HINT_ALIGN_WINDOW - Math.abs(i - blankTokenIndex) + 1
+		const total = matchScore * 10 + closeness
+		const closer = Math.abs(i - blankTokenIndex) < Math.abs(bestIdx - blankTokenIndex)
+
+		if (total > bestTotal || (total === bestTotal && closer)) {
+			bestTotal = total
+			bestTok = tok
+			bestIdx = i
+		}
+	}
+
+	// #region agent log
+	const senseArr = [...sense]
+	fetch("http://127.0.0.1:7794/ingest/99baccff-1168-49a3-aecb-775311639d96", {
+		method: "POST",
+		headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "0573f2" },
+		body: JSON.stringify({
+			sessionId: "0573f2",
+			hypothesisId: "A-B-C",
+			location: "parallel-hint.ts:tryParallelInlineHintWithWindow",
+			message: "parallel_inline_hint_window",
+			data: {
+				blankTokenIndex,
+				parallelLen: runs.length,
+				runsJoin: runs.map((r) => r.toLowerCase()).join("|"),
+				senseSize: sense.size,
+				senseSample: senseArr.slice(0, 40),
+				debugCandidates,
+				bestTok,
+				bestTotal,
+			},
+			timestamp: Date.now(),
+		}),
+	}).catch(() => {})
+	// #endregion
+
+	return bestTok
+}
+
+/**
  * Translate a target-language word to the user's native language via English-gloss pivot.
  * Returns the best native lemma or `null` when no overlap is found.
  *
- * Strategy: extract content words (≥3 chars) from the target word's Kaikki glosses, then find
+ * Strategy: extract content words (≥4 chars) from the target word's Kaikki glosses, then find
  * native-language words whose definitions share those content words. Prefers the most-common
  * native word (lowest rank) with the most overlapping tokens.
  *
- * Example: Vietnamese "chó" → glosses ["dog"] → English content words {"dog"}
- *   → Danish word with gloss containing "dog" → "hund" (rank 832)
+ * For "form-of" definitions (e.g. "past tense of vara"), follows the reference back to the
+ * root lemma and uses its real definitions for the pivot.
  */
 async function translateViaGlossPivot(
 	definitions: unknown,
 	nativeLanguageId: string,
+	targetLanguageId: string,
 ): Promise<string | null> {
-	if (!Array.isArray(definitions) || definitions.length === 0) return null
+	const glossToUse = await resolveGlossStringForPivot(definitions, targetLanguageId)
+	if (!glossToUse) return null
 
-	// Extract meaningful content words from the target word's FIRST English gloss only.
-	// Using only the first gloss avoids polluting the pivot with unrelated senses for polysemous words.
-	// Filter out short function words (to, a, an, of, the, be, …) by requiring length ≥ 4.
-	const firstGloss = definitions.find((d): d is string => typeof d === "string" && d.trim().length > 0)
-	if (!firstGloss) return null
+	// Grammatical terms that should never be used as inline hints — safety net beyond form-of detection.
+	const GRAMMAR_BLOCKLIST = new Set([
+		"past", "present", "future", "tense", "form", "plural", "singular",
+		"definite", "indefinite", "indicative", "subjunctive", "imperative",
+		"conditional", "infinitive", "gerund", "participle", "superlative",
+		"comparative", "nominative", "genitive", "dative", "accusative",
+		"ablative", "preterite", "imperfect", "active", "passive",
+		"perfect", "continuous", "simple", "progressive", "inflection",
+	])
 
+	// Extract meaningful content words — filter out short function words by requiring length ≥ 4
+	// and grammatical descriptors.
 	const contentWords = new Set<string>()
-	for (const tok of tokensForScoring(firstGloss)) {
-		if (tok.length >= 4) contentWords.add(tok)
+	for (const tok of tokensForScoring(glossToUse)) {
+		if (tok.length >= 4 && !GRAMMAR_BLOCKLIST.has(tok)) contentWords.add(tok)
 	}
 
 	if (contentWords.size === 0) return null
-	const tokens = [...contentWords]
 
-	// Tier 1: direct lemma match — if a native word's lemma IS one of the content words,
-	// that's the best possible match (e.g. Vietnamese "chó" → gloss "dog" → English lemma "dog").
-	const lemmaMatch = await prisma.$queryRaw<
-		Array<{ lemma: string; rank: number }>
-	>`
-		SELECT w."lemma", w."rank"
-		FROM "word" w
-		WHERE w."languageId" = ${nativeLanguageId}::uuid
-		  AND w."rank" > 0
-		  AND w."lemma" = ANY(${tokens}::text[])
-		ORDER BY w."rank" ASC
-		LIMIT 1
-	`
+	// Order content lemmas by first appearance in the gloss so "child" wins over "person"
+	// when the gloss reads "young child of someone" (Tier 1 used to pick by English frequency only).
+	const tokensOrdered: string[] = []
+	const seenTok = new Set<string>()
+	for (const tok of tokensForScoring(glossToUse)) {
+		if (tok.length < 4 || GRAMMAR_BLOCKLIST.has(tok) || !contentWords.has(tok) || seenTok.has(tok))
+			continue
+		seenTok.add(tok)
+		tokensOrdered.push(tok)
+	}
+	const tokens = tokensOrdered
 
-	if (lemmaMatch.length > 0) {
-		return lemmaMatch[0].lemma
+	// Tier 1: direct lemma match — prefer gloss order, then frequency within the same lemma string.
+	for (const tok of tokensOrdered) {
+		const hit = await prisma.word.findFirst({
+			where: { languageId: nativeLanguageId, rank: { gt: 0 }, lemma: tok },
+			orderBy: { rank: "asc" },
+			select: { lemma: true },
+		})
+		if (hit) return hit.lemma
 	}
 
 	// Tier 2: definition overlap — find native words whose English definitions share content words
@@ -267,6 +595,7 @@ export async function resolveClozeWithHint(params: {
 		select: {
 			id: true,
 			lemma: true,
+			rank: true,
 			definitions: true,
 			testSentenceIds: true,
 		},
@@ -286,8 +615,8 @@ export async function resolveClozeWithHint(params: {
 		return { ok: false, reason: "no_blank_position" }
 	}
 
-	// Inline hint: target word translated to native language via English-gloss pivot (fire-and-forget).
-	const inlineHint = await translateViaGlossPivot(word.definitions, params.nativeLanguageId)
+	const glossPivotHint = (): Promise<string | null> =>
+		translateViaGlossPivot(word.definitions, params.nativeLanguageId, params.targetLanguageId)
 
 	for (const c of candidates) {
 		const parallel = await findBestNativeParallelForSense(
@@ -296,10 +625,40 @@ export async function resolveClozeWithHint(params: {
 			word.definitions,
 		)
 		if (parallel) {
+			const parallelTok = await tryParallelInlineHintWithWindow(
+				parallel.text,
+				c.position,
+				word.definitions,
+				params.targetLanguageId,
+			)
+			const pivotFallback = parallelTok == null ? await glossPivotHint() : null
+			const inlineHint = parallelTok ?? pivotFallback
+			// #region agent log
+			fetch("http://127.0.0.1:7794/ingest/99baccff-1168-49a3-aecb-775311639d96", {
+				method: "POST",
+				headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "0573f2" },
+				body: JSON.stringify({
+					sessionId: "0573f2",
+					hypothesisId: "D",
+					location: "parallel-hint.ts:resolveClozeWithHint",
+					message: "cloze_inline_hint_resolved",
+					data: {
+						lemma: word.lemma,
+						blankTokenIndex: c.position,
+						parallelTok,
+						usedPivotFallback: parallelTok == null,
+						inlineHint,
+						promptSnippet: buildClozePrompt(c.targetSentenceText, c.position).slice(0, 100),
+					},
+					timestamp: Date.now(),
+				}),
+			}).catch(() => {})
+			// #endregion
 			return {
 				ok: true,
 				wordId: word.id,
 				lemma: word.lemma,
+				rank: word.rank,
 				targetSentenceId: c.targetSentenceId,
 				targetSentenceText: c.targetSentenceText,
 				promptText: buildClozePrompt(c.targetSentenceText, c.position),
@@ -315,10 +674,12 @@ export async function resolveClozeWithHint(params: {
 	const gloss = firstDefinitionHint(word.definitions)
 	if (gloss) {
 		const c = candidates[0]
+		const inlineHint = await glossPivotHint()
 		return {
 			ok: true,
 			wordId: word.id,
 			lemma: word.lemma,
+			rank: word.rank,
 			targetSentenceId: c.targetSentenceId,
 			targetSentenceText: c.targetSentenceText,
 			promptText: buildClozePrompt(c.targetSentenceText, c.position),
@@ -333,15 +694,22 @@ export async function resolveClozeWithHint(params: {
 	return { ok: false, reason: "no_hint_available" }
 }
 
-/** Uniform random word with curated test sentences; `excludeWordIds` soft-ignored if it would empty the pool. */
+/**
+ * Random word with curated test sentences within a frequency rank range.
+ * `excludeWordIds` soft-ignored if it would empty the pool.
+ * `rankRange` constrains to words between `min` and `max` rank (inclusive);
+ * falls back to unconstrained if the range has no eligible words.
+ */
 export async function pickRandomWordIdForCloze(
 	targetLanguageId: string,
 	excludeWordIds: string[],
+	rankRange?: { min: number; max: number },
 ): Promise<string | null> {
 	const baseWhere: Prisma.WordWhereInput = {
 		languageId: targetLanguageId,
 		isOffensive: false,
 		testSentenceIds: { isEmpty: false },
+		...(rankRange ? { rank: { gte: rankRange.min, lte: rankRange.max } } : { rank: { gt: 0 } }),
 	}
 
 	let where: Prisma.WordWhereInput = baseWhere
@@ -355,7 +723,20 @@ export async function pickRandomWordIdForCloze(
 		if (n > 0) where = withExclude
 	}
 
-	const count = await prisma.word.count({ where })
+	let count = await prisma.word.count({ where })
+
+	// Fall back to any ranked word if the range is empty (sparse frequency data).
+	if (count === 0 && rankRange) {
+		const fallbackWhere: Prisma.WordWhereInput = {
+			languageId: targetLanguageId,
+			isOffensive: false,
+			testSentenceIds: { isEmpty: false },
+			rank: { gt: 0 },
+		}
+		count = await prisma.word.count({ where: fallbackWhere })
+		if (count > 0) where = fallbackWhere
+	}
+
 	if (count === 0) return null
 
 	const skip = Math.floor(Math.random() * count)
