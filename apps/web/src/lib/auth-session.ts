@@ -18,10 +18,14 @@ export const getAuthedLayoutData = createServerFn({ method: "GET" }).handler(asy
 	if (!session?.user?.id) return null
 	const dbUser = await prisma.user.findUnique({
 		where: { id: session.user.id },
-		select: { role: true },
+		select: {
+			role: true,
+			nativeLanguage: { select: { id: true, code: true, name: true } },
+		},
 	})
 	return {
 		user: session.user,
 		isAdmin: dbUser?.role === "ADMIN",
+		nativeLanguage: dbUser?.nativeLanguage ?? null,
 	}
 })

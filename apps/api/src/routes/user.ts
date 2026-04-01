@@ -33,6 +33,54 @@ export const userRoute = new Hono()
 		})
 	})
 
+	// Update native language only (target must already be set)
+	.patch(
+		"/me/native-language",
+		zValidator(
+			"json",
+			z.object({
+				nativeLanguageId: z.string().uuid(),
+			}),
+		),
+		async (c) => {
+			const user = c.get("user")
+			const { nativeLanguageId } = c.req.valid("json")
+
+			const dbUser = await prisma.user.findUnique({
+				where: { id: user.id },
+				select: { targetLanguageId: true },
+			})
+
+			if (!dbUser?.targetLanguageId) {
+				return c.json(
+					{ error: "Set a target language under Settings before changing your language." },
+					400,
+				)
+			}
+
+			if (nativeLanguageId === dbUser.targetLanguageId) {
+				return c.json({ error: "Your language and the language you study must be different." }, 400)
+			}
+
+			const native = await prisma.language.findUnique({ where: { id: nativeLanguageId } })
+			if (!native) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+
+			const updated = await prisma.user.update({
+				where: { id: user.id },
+				data: { nativeLanguageId },
+				include: {
+					nativeLanguage: { select: { id: true, code: true, name: true } },
+				},
+			})
+
+			return c.json({
+				nativeLanguage: updated.nativeLanguage,
+			})
+		},
+	)
+
 	// Update language preferences
 	.patch(
 		"/me/languages",

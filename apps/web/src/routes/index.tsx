@@ -55,6 +55,7 @@ function HomePage() {
 					<div className="flex flex-wrap items-center justify-center gap-3">
 						<Link
 							to="/practice"
+							search={{ vocabMode: "BUILD" }}
 							className="bg-primary text-primary-foreground px-6 py-3 rounded-md text-sm font-medium hover:opacity-90 transition-all active:scale-[0.98]"
 						>
 							Start measuring
