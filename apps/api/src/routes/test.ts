@@ -1,7 +1,7 @@
 import { zValidator } from "@hono/zod-validator"
 import { type TestSession, type VocabMode, prisma } from "@nwords/db"
-import { updateConfidence } from "@nwords/shared"
-import { FRUSTRATION_WORD_MIN_TESTS } from "@nwords/shared"
+import { FRUSTRATION_WORD_MIN_TESTS, updateConfidence } from "@nwords/shared"
+import { lookupUserAnswerPos } from "../lib/pos-lookup"
 import { type Context, Hono } from "hono"
 import { z } from "zod"
 import {
@@ -950,10 +950,53 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 				}
 			}
 
+			// ── POS mismatch detection (wrong answers only) ──
+			let posMismatch: { guessPos: string; targetPos: string; message: string } | undefined
+
+			if (!body.correct && body.userAnswer) {
+				const langs = await resolveClozeLanguageIds(session)
+				if (langs) {
+					const targetWord = await prisma.word.findUnique({
+						where: { id: body.wordId },
+						select: { pos: true },
+					})
+
+					if (targetWord) {
+						const guessResults = await lookupUserAnswerPos(body.userAnswer, langs.targetLanguageId)
+
+						// Only report a mismatch when ALL matched POS values differ
+						// from the target.  If any match, the user plausibly meant the
+						// right POS (e.g. "run" is both a noun and a verb).
+						const allDifferent =
+							guessResults.length > 0 && guessResults.every((g) => g.pos !== targetWord.pos)
+
+						if (allDifferent) {
+							const guessPos = guessResults[0].pos // most frequent
+
+							const msg = await prisma.posMismatchMessage.findUnique({
+								where: {
+									languageId_guessPos_targetPos: {
+										languageId: langs.nativeLanguageId,
+										guessPos,
+										targetPos: targetWord.pos,
+									},
+								},
+								select: { message: true },
+							})
+
+							if (msg) {
+								posMismatch = { guessPos, targetPos: targetWord.pos, message: msg.message }
+							}
+						}
+					}
+				}
+			}
+
 			return c.json({
 				answerId: answer.id,
 				correct: body.correct,
 				...confidenceUpdate,
+				...(posMismatch && { posMismatch }),
 			})
 		},
 	)

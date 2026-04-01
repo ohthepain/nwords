@@ -289,7 +289,13 @@ function PracticePage() {
       setFeedback("Could not record answer.");
       return;
     }
-    const data = (await res.json()) as { confidence?: number };
+    const data = (await res.json()) as {
+      confidence?: number;
+      posMismatch?: { guessPos: string; targetPos: string; message: string };
+    };
+    if (!correct && data.posMismatch) {
+      setFeedback((prev) => `${prev} ${data.posMismatch!.message}`);
+    }
     if (typeof data.confidence === "number" && vocabMode === "BUILD") {
       setAnswerConfidenceFlash({
         wordId: question.wordId,

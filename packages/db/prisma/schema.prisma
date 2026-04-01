@@ -110,6 +110,7 @@ model Language {
   guestSessionsTarget TestSession[] @relation("GuestTestTargetLanguage")
   clozeReportsAsNative ClozeIssueReport[] @relation("ClozeReportNative")
   clozeReportsAsTarget ClozeIssueReport[] @relation("ClozeReportTarget")
+  posMismatchMessages  PosMismatchMessage[]
 
   @@map("language")
 }
@@ -425,6 +426,20 @@ enum IngestionStatus {
   COMPLETED
   FAILED
   CANCELLED
+}
+
+// ─── POS Mismatch Messages ─────────────────────────────
+
+model PosMismatchMessage {
+  id         String       @id @default(uuid()) @db.Uuid
+  languageId String       @db.Uuid
+  language   Language     @relation(fields: [languageId], references: [id])
+  guessPos   PartOfSpeech
+  targetPos  PartOfSpeech
+  message    String
+
+  @@unique([languageId, guessPos, targetPos])
+  @@map("pos_mismatch_message")
 }
 
 // ─── Deploy / site configuration (singleton row) ───────

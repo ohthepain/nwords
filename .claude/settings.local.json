@@ -50,7 +50,15 @@
       "Bash(export PATH=\"$HOME/.local/share/mise/installs/node/22.14.0/bin:$PATH\")",
       "Bash(pnpm tsc:*)",
       "Bash(source ~/.zshrc)",
-      "Read(//Users/paulwilkinson/.local/share/mise/installs/**)"
+      "Read(//Users/paulwilkinson/.local/share/mise/installs/**)",
+      "Bash(find /Users/paulwilkinson/projects/claude/nwords -type f \\\\\\(-name *.prisma -o -path */prisma/* \\\\\\) ! -path */node_modules/*)",
+      "Bash(find /Users/paulwilkinson/projects/claude/nwords/apps -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\) ! -path */node_modules/* ! -path */.next/*)",
+      "Bash(find /Users/paulwilkinson/projects/claude/nwords/apps/api/src -type f -name *.ts ! -path */node_modules/*)",
+      "Bash(grep -l \"updateConfidence\\\\|FRUSTRATION\" /Users/paulwilkinson/projects/claude/nwords/packages/shared/src/*.ts)",
+      "Bash(find /Users/paulwilkinson/projects/claude/nwords/apps/api/src -type f -name *.ts)",
+      "Bash(pnpm prisma:*)",
+      "Bash(pnpm --filter @nwords/api exec tsx src/scripts/seed-pos-mismatch-messages.ts)",
+      "Bash(ls /Users/paulwilkinson/projects/claude/nwords/.env*)"
     ]
   }
 }

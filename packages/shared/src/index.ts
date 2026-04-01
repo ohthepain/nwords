@@ -1,4 +1,5 @@
 export * from "./constants/cefr"
 export * from "./constants/confidence"
 export * from "./constants/languages"
+export * from "./constants/pos-mismatch-messages"
 export * from "./constants/scoring"

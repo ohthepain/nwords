@@ -3,6 +3,7 @@ import { prisma } from "@nwords/db"
 import { Hono } from "hono"
 import { z } from "zod"
 import { APP_SETTINGS_ROW_ID, getAppSettings } from "../../lib/app-settings"
+import { seedPosMismatchMessages } from "../../lib/seed-pos-mismatch-messages"
 import { adminMiddleware } from "../../middleware/admin"
 import { authMiddleware } from "../../middleware/auth"
 
@@ -32,4 +33,8 @@ export const adminSettingsRoute = new Hono()
 			showHints: updated.showHints,
 			updatedAt: updated.updatedAt.toISOString(),
 		})
+	})
+	.post("/pos-mismatch-messages", async (c) => {
+		const result = await seedPosMismatchMessages()
+		return c.json(result)
 	})
