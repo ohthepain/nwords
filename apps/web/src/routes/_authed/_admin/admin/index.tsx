@@ -1,5 +1,5 @@
 import { Link, createFileRoute } from "@tanstack/react-router"
-import { BookOpen, Flag, Languages, ListTodo, MessageSquareText } from "lucide-react"
+import { BookOpen, Flag, Languages, ListTodo, MessageSquareText, SlidersHorizontal } from "lucide-react"
 import { Button } from "~/components/ui/button"
 
 export const Route = createFileRoute("/_authed/_admin/admin/")({
@@ -11,6 +11,17 @@ function AdminHomePage() {
 		<div className="p-6 max-w-lg mx-auto space-y-6">
 			<p className="text-sm text-muted-foreground">Choose an admin area</p>
 			<div className="grid gap-3">
+				<Button variant="outline" className="h-auto py-5 px-5 justify-start" asChild>
+					<Link to="/admin/settings" className="flex flex-col items-start gap-1">
+						<span className="flex items-center gap-2 text-base font-semibold">
+							<SlidersHorizontal className="size-5 shrink-0 text-brand" />
+							Settings
+						</span>
+						<span className="text-sm font-normal text-muted-foreground">
+							Site-wide practice flags and deploy options
+						</span>
+					</Link>
+				</Button>
 				<Button variant="outline" className="h-auto py-5 px-5 justify-start" asChild>
 					<Link to="/admin/languages" className="flex flex-col items-start gap-1">
 						<span className="flex items-center gap-2 text-base font-semibold">

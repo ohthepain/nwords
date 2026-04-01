@@ -16,7 +16,7 @@ type UserMe = {
   email: string | null;
   role: string;
   nativeLanguage: { id: string; name: string; code: string } | null;
-  targetLanguage: { id: string; name: string } | null;
+  targetLanguage: { id: string; name: string; code: string } | null;
 };
 
 type LanguageOption = { id: string; name: string; code: string };
@@ -95,17 +95,24 @@ function PracticePage() {
   } | null>(null);
   const answerInputRef = useRef<HTMLInputElement>(null);
   const devMode = useDevStore((s) => s.devMode);
+  /** Deploy-controlled via `/api/settings` (`AppSettings.showHints`). */
+  const [showInlineHints, setShowInlineHints] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [meRes, langRes] = await Promise.all([
+      const [meRes, langRes, settingsRes] = await Promise.all([
         fetch("/api/user/me", { credentials: "include" }),
         fetch("/api/languages?enabled=true"),
+        fetch("/api/settings"),
       ]);
       if (!cancelled && langRes.ok) {
         const data = (await langRes.json()) as { languages: LanguageOption[] };
         setLanguageOptions(data.languages);
+      }
+      if (!cancelled && settingsRes.ok) {
+        const s = (await settingsRes.json()) as { showHints?: boolean };
+        setShowInlineHints(s.showHints === true);
       }
       if (!cancelled && meRes.ok) {
         const data = (await meRes.json()) as UserMe;
@@ -392,6 +399,9 @@ function PracticePage() {
         nativeLanguage={
           account.nativeLanguage ? { id: account.nativeLanguage.id, code: account.nativeLanguage.code } : null
         }
+        targetLanguage={
+          account.targetLanguage ? { id: account.targetLanguage.id, code: account.targetLanguage.code } : null
+        }
         onNativeLanguageUpdated={(next) => setProfile((p) => (p && p !== null ? { ...p, nativeLanguage: next } : p))}
         signOutNavigateTo="/practice"
         onAfterSignOut={resetPracticeUiAfterSignOut}
@@ -481,7 +491,16 @@ function PracticePage() {
             )}
           </CardContent>
         </Card>
-
+        {vocabMode === "BUILD" && !isGuest && practiceTargetId ? (
+          <div className="pb-4 overflow-visible">
+            <VocabGraph
+              languageId={practiceTargetId}
+              activeWordId={sessionId && question ? question.wordId : null}
+              answerFlash={answerConfidenceFlash}
+              showDevGrid={account?.role === "ADMIN" && devMode}
+            />
+          </div>
+        ) : null}
         {canStartPractice && (
           <Card>
             <CardHeader>
@@ -503,16 +522,7 @@ function PracticePage() {
                 )}
               </CardDescription>
             </CardHeader>
-            {vocabMode === "BUILD" && !isGuest && practiceTargetId ? (
-              <div className="px-6 pb-4 overflow-visible">
-                <VocabGraph
-                  languageId={practiceTargetId}
-                  activeWordId={sessionId && question ? question.wordId : null}
-                  answerFlash={answerConfidenceFlash}
-                  showDevGrid={account?.role === "ADMIN" && devMode}
-                />
-              </div>
-            ) : null}
+
             <CardContent className="space-y-4">
               {assessmentDone ? (
                 <div className="py-8 text-center space-y-4">
@@ -554,8 +564,8 @@ function PracticePage() {
                   {status === "loading" ? "Loading…" : "Start practice"}
                 </Button>
               ) : (
-                <div className="w-full max-w-xl mx-auto space-y-4">
-                  <div className="space-y-2 min-h-[7rem]">
+                <div className="w-full max-w-4xl mx-auto space-y-4">
+                  <div className="space-y-2">
                     <div className="flex items-center gap-2">
                       <Label className="text-xs font-mono text-muted-foreground uppercase tracking-wider">
                         Sentence
@@ -567,7 +577,10 @@ function PracticePage() {
                       )}
                     </div>
                     <p className="text-lg leading-relaxed font-medium text-pretty">
-                      <ClozePrompt promptText={question.promptText} inlineHint={question.inlineHint} />
+                      <ClozePrompt
+                        promptText={question.promptText}
+                        inlineHint={showInlineHints ? question.inlineHint : null}
+                      />
                     </p>
                   </div>
                   <div className="space-y-2 rounded-lg border border-border/80 bg-muted/30 p-4 min-h-22">

@@ -46,7 +46,11 @@
       "Bash(psql -d nwords -c \"DELETE FROM _prisma_migrations WHERE migration_name = ''20260401133000_sync_word_knowledge_vocab_mode'';\")",
       "Bash(psql -h localhost -d nwords -c \"DELETE FROM _prisma_migrations WHERE migration_name = ''20260401133000_sync_word_knowledge_vocab_mode'';\")",
       "Bash(PGPASSWORD='M+4FoG4IaMfbnF87ShI30RKEPnKl2qSX5WES6lFZK2w' psql -h localhost -U octacard -d nwords -c \"DELETE FROM _prisma_migrations WHERE migration_name = ''20260401133000_sync_word_knowledge_vocab_mode'';\")",
-      "Bash(pnpm build:*)"
+      "Bash(pnpm build:*)",
+      "Bash(export PATH=\"$HOME/.local/share/mise/installs/node/22.14.0/bin:$PATH\")",
+      "Bash(pnpm tsc:*)",
+      "Bash(source ~/.zshrc)",
+      "Read(//Users/paulwilkinson/.local/share/mise/installs/**)"
     ]
   }
 }

@@ -426,3 +426,13 @@ enum IngestionStatus {
   FAILED
   CANCELLED
 }
+
+// ─── Deploy / site configuration (singleton row) ───────
+
+model AppSettings {
+  id        String   @id
+  showHints Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+
+  @@map("app_settings")
+}

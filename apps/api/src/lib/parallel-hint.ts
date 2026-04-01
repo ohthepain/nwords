@@ -598,6 +598,12 @@ export async function resolveClozeWithHint(params: {
 		return { ok: false, reason: "no_blank_position" }
 	}
 
+	// Shuffle candidates so we don't always use the same sentence for a word
+	for (let i = candidates.length - 1; i > 0; i--) {
+		const j = Math.floor(Math.random() * (i + 1))
+		;[candidates[i], candidates[j]] = [candidates[j], candidates[i]]
+	}
+
 	const glossPivotHint = (): Promise<string | null> =>
 		translateViaGlossPivot(word.definitions, params.nativeLanguageId, params.targetLanguageId)
 

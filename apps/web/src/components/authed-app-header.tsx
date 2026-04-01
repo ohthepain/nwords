@@ -1,5 +1,5 @@
 import { Link, useNavigate, useRouter } from "@tanstack/react-router"
-import { Check, Globe, LogOut, UserRound } from "lucide-react"
+import { ArrowRight, Check, Globe, LogOut, UserRound } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 import { AppHeaderBrand } from "~/components/header"
 import { ThemeToggleButton } from "~/components/theme-toggle-button"
@@ -23,10 +23,13 @@ export type AuthedAppHeaderUser = {
 	email?: string | null
 }
 
-export type AuthedAppHeaderNativeLanguage = {
+export type AuthedAppHeaderLanguage = {
 	id: string
 	code: string
 }
+
+/** @deprecated Use `AuthedAppHeaderLanguage` instead. */
+export type AuthedAppHeaderNativeLanguage = AuthedAppHeaderLanguage
 
 type HeaderLanguageRow = { id: string; code: string; name: string }
 
@@ -35,7 +38,9 @@ type AuthedAppHeaderProps = {
 	user: AuthedAppHeaderUser
 	isAdmin: boolean
 	/** Summary of the user's native language for the flag control (null if unset). */
-	nativeLanguage: AuthedAppHeaderNativeLanguage | null
+	nativeLanguage: AuthedAppHeaderLanguage | null
+	/** Summary of the user's target language (null if unset). */
+	targetLanguage: AuthedAppHeaderLanguage | null
 	/** When native language is changed from the header, run after a successful API update (e.g. sync local practice state). Router layout data is also invalidated. */
 	onNativeLanguageUpdated?: (next: { id: string; code: string; name: string }) => void
 	/** Called after `signOut` succeeds, before navigation. */
@@ -48,7 +53,7 @@ function NativeLanguageMenuButton({
 	nativeLanguage,
 	onNativeLanguageUpdated,
 }: {
-	nativeLanguage: AuthedAppHeaderNativeLanguage | null
+	nativeLanguage: AuthedAppHeaderLanguage | null
 	onNativeLanguageUpdated?: (next: { id: string; code: string; name: string }) => void
 }) {
 	const router = useRouter()
@@ -175,6 +180,7 @@ export function AuthedAppHeader({
 	user,
 	isAdmin,
 	nativeLanguage,
+	targetLanguage,
 	onNativeLanguageUpdated,
 	onAfterSignOut,
 	signOutNavigateTo = "/",
@@ -197,10 +203,24 @@ export function AuthedAppHeader({
 					{pageTitle}
 				</h1>
 				<div className="flex items-center gap-1 sm:gap-2 shrink-0">
-					<NativeLanguageMenuButton
-						nativeLanguage={nativeLanguage}
-						onNativeLanguageUpdated={onNativeLanguageUpdated}
-					/>
+					<div className="flex items-center gap-1">
+						<NativeLanguageMenuButton
+							nativeLanguage={nativeLanguage}
+							onNativeLanguageUpdated={onNativeLanguageUpdated}
+						/>
+						{targetLanguage && (
+							<>
+								<ArrowRight className="size-3.5 text-muted-foreground/60 shrink-0" aria-hidden />
+								<span
+									aria-label="Target language"
+									title="Target language"
+									className="text-[1.35rem] leading-none select-none relative top-px"
+								>
+									{languageCodeToFlagEmoji(targetLanguage.code)}
+								</span>
+							</>
+						)}
+					</div>
 					<ThemeToggleButton />
 					{isAdmin && (
 						<Button

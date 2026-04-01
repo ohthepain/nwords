@@ -5,8 +5,10 @@ import { adminCheckRoute } from "./routes/admin/check"
 import { adminClozeReportsRoute } from "./routes/admin/cloze-reports"
 import { adminJobsRoute } from "./routes/admin/jobs"
 import { adminLanguagesRoute } from "./routes/admin/languages"
+import { adminSettingsRoute } from "./routes/admin/settings"
 import { healthRoute } from "./routes/health"
 import { languagesRoute } from "./routes/languages"
+import { publicSettingsRoute } from "./routes/settings"
 import { progressRoute } from "./routes/progress"
 import { testRoute } from "./routes/test"
 import { userRoute } from "./routes/user"
@@ -26,6 +28,7 @@ app.use(
 // Public routes
 app.route("/health", healthRoute)
 app.route("/languages", languagesRoute)
+app.route("/settings", publicSettingsRoute)
 
 // Authenticated routes
 app.route("/words", wordsRoute)
@@ -38,6 +41,7 @@ app.route("/admin/check", adminCheckRoute)
 app.route("/admin/languages", adminLanguagesRoute)
 app.route("/admin/jobs", adminJobsRoute)
 app.route("/admin/cloze-reports", adminClozeReportsRoute)
+app.route("/admin/settings", adminSettingsRoute)
 
 export type AppType = typeof app
 export { app }

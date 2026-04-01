@@ -15,7 +15,7 @@ export const Route = createFileRoute("/_authed")({
 })
 
 function AuthedLayout() {
-	const { user, isAdmin, nativeLanguage } = Route.useRouteContext()
+	const { user, isAdmin, nativeLanguage, targetLanguage } = Route.useRouteContext()
 
 	const matches = useMatches()
 	const leaf = matches.at(-1)
@@ -28,6 +28,7 @@ function AuthedLayout() {
 				user={{ id: user.id, name: user.name, email: user.email }}
 				isAdmin={isAdmin}
 				nativeLanguage={nativeLanguage ? { id: nativeLanguage.id, code: nativeLanguage.code } : null}
+				targetLanguage={targetLanguage ? { id: targetLanguage.id, code: targetLanguage.code } : null}
 			/>
 			<main className="flex-1 min-h-0 flex flex-col">
 				<Outlet />

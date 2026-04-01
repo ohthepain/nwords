@@ -21,6 +21,7 @@ import { Route as AuthedAdminRouteImport } from './routes/_authed/_admin'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as AuthedAdminAdminIndexRouteImport } from './routes/_authed/_admin/admin/index'
 import { Route as AuthedAdminAdminWordsRouteImport } from './routes/_authed/_admin/admin/words'
+import { Route as AuthedAdminAdminSettingsRouteImport } from './routes/_authed/_admin/admin/settings'
 import { Route as AuthedAdminAdminSentencesRouteImport } from './routes/_authed/_admin/admin/sentences'
 import { Route as AuthedAdminAdminLanguagesRouteImport } from './routes/_authed/_admin/admin/languages'
 import { Route as AuthedAdminAdminJobsRouteImport } from './routes/_authed/_admin/admin/jobs'
@@ -84,6 +85,12 @@ const AuthedAdminAdminWordsRoute = AuthedAdminAdminWordsRouteImport.update({
   path: '/admin/words',
   getParentRoute: () => AuthedAdminRoute,
 } as any)
+const AuthedAdminAdminSettingsRoute =
+  AuthedAdminAdminSettingsRouteImport.update({
+    id: '/admin/settings',
+    path: '/admin/settings',
+    getParentRoute: () => AuthedAdminRoute,
+  } as any)
 const AuthedAdminAdminSentencesRoute =
   AuthedAdminAdminSentencesRouteImport.update({
     id: '/admin/sentences',
@@ -121,6 +128,7 @@ export interface FileRoutesByFullPath {
   '/admin/jobs': typeof AuthedAdminAdminJobsRoute
   '/admin/languages': typeof AuthedAdminAdminLanguagesRoute
   '/admin/sentences': typeof AuthedAdminAdminSentencesRoute
+  '/admin/settings': typeof AuthedAdminAdminSettingsRoute
   '/admin/words': typeof AuthedAdminAdminWordsRoute
   '/admin/': typeof AuthedAdminAdminIndexRoute
 }
@@ -137,6 +145,7 @@ export interface FileRoutesByTo {
   '/admin/jobs': typeof AuthedAdminAdminJobsRoute
   '/admin/languages': typeof AuthedAdminAdminLanguagesRoute
   '/admin/sentences': typeof AuthedAdminAdminSentencesRoute
+  '/admin/settings': typeof AuthedAdminAdminSettingsRoute
   '/admin/words': typeof AuthedAdminAdminWordsRoute
   '/admin': typeof AuthedAdminAdminIndexRoute
 }
@@ -156,6 +165,7 @@ export interface FileRoutesById {
   '/_authed/_admin/admin/jobs': typeof AuthedAdminAdminJobsRoute
   '/_authed/_admin/admin/languages': typeof AuthedAdminAdminLanguagesRoute
   '/_authed/_admin/admin/sentences': typeof AuthedAdminAdminSentencesRoute
+  '/_authed/_admin/admin/settings': typeof AuthedAdminAdminSettingsRoute
   '/_authed/_admin/admin/words': typeof AuthedAdminAdminWordsRoute
   '/_authed/_admin/admin/': typeof AuthedAdminAdminIndexRoute
 }
@@ -174,6 +184,7 @@ export interface FileRouteTypes {
     | '/admin/jobs'
     | '/admin/languages'
     | '/admin/sentences'
+    | '/admin/settings'
     | '/admin/words'
     | '/admin/'
   fileRoutesByTo: FileRoutesByTo
@@ -190,6 +201,7 @@ export interface FileRouteTypes {
     | '/admin/jobs'
     | '/admin/languages'
     | '/admin/sentences'
+    | '/admin/settings'
     | '/admin/words'
     | '/admin'
   id:
@@ -208,6 +220,7 @@ export interface FileRouteTypes {
     | '/_authed/_admin/admin/jobs'
     | '/_authed/_admin/admin/languages'
     | '/_authed/_admin/admin/sentences'
+    | '/_authed/_admin/admin/settings'
     | '/_authed/_admin/admin/words'
     | '/_authed/_admin/admin/'
   fileRoutesById: FileRoutesById
@@ -308,6 +321,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedAdminAdminWordsRouteImport
       parentRoute: typeof AuthedAdminRoute
     }
+    '/_authed/_admin/admin/settings': {
+      id: '/_authed/_admin/admin/settings'
+      path: '/admin/settings'
+      fullPath: '/admin/settings'
+      preLoaderRoute: typeof AuthedAdminAdminSettingsRouteImport
+      parentRoute: typeof AuthedAdminRoute
+    }
     '/_authed/_admin/admin/sentences': {
       id: '/_authed/_admin/admin/sentences'
       path: '/admin/sentences'
@@ -344,6 +364,7 @@ interface AuthedAdminRouteChildren {
   AuthedAdminAdminJobsRoute: typeof AuthedAdminAdminJobsRoute
   AuthedAdminAdminLanguagesRoute: typeof AuthedAdminAdminLanguagesRoute
   AuthedAdminAdminSentencesRoute: typeof AuthedAdminAdminSentencesRoute
+  AuthedAdminAdminSettingsRoute: typeof AuthedAdminAdminSettingsRoute
   AuthedAdminAdminWordsRoute: typeof AuthedAdminAdminWordsRoute
   AuthedAdminAdminIndexRoute: typeof AuthedAdminAdminIndexRoute
 }
@@ -353,6 +374,7 @@ const AuthedAdminRouteChildren: AuthedAdminRouteChildren = {
   AuthedAdminAdminJobsRoute: AuthedAdminAdminJobsRoute,
   AuthedAdminAdminLanguagesRoute: AuthedAdminAdminLanguagesRoute,
   AuthedAdminAdminSentencesRoute: AuthedAdminAdminSentencesRoute,
+  AuthedAdminAdminSettingsRoute: AuthedAdminAdminSettingsRoute,
   AuthedAdminAdminWordsRoute: AuthedAdminAdminWordsRoute,
   AuthedAdminAdminIndexRoute: AuthedAdminAdminIndexRoute,
 }

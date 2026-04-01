@@ -254,7 +254,7 @@ async function handleFrustrationNext(
 				},
 			},
 		},
-		orderBy: [{ confidence: "asc" }, { timesTested: "desc" }],
+		orderBy: [{ lastTestedAt: "asc" }, { confidence: "asc" }],
 		take: 20,
 		select: { wordId: true },
 	})
@@ -280,8 +280,8 @@ async function handleFrustrationNext(
 	const candidates = frustrationWords.filter((w) => !testedInSession.has(w.wordId))
 	const pool = candidates.length > 0 ? candidates : frustrationWords
 
-	// Pick randomly from top candidates for variety
-	const pick = pool[Math.floor(Math.random() * Math.min(pool.length, 5))]
+	// Pick randomly from pool for variety
+	const pick = pool[Math.floor(Math.random() * Math.min(pool.length, 10))]
 
 	const resolved = await resolveClozeWithHint({
 		wordId: pick.wordId,
@@ -454,7 +454,7 @@ async function handleBuildNext(
 					},
 				},
 			},
-			orderBy: [{ word: { rank: "asc" } }, { confidence: "asc" }],
+			orderBy: [{ lastTestedAt: "asc" }, { confidence: "asc" }],
 			take: BUILD_CANDIDATE_CAP,
 			select: { wordId: true },
 		}),
