@@ -8,14 +8,14 @@ The user can study as many languages as they want. They have only one native lan
 
 One entry per user per word (across all modes). Fields:
 
-| Field            | Type     | Notes                                                    |
-| ---------------- | -------- | -------------------------------------------------------- |
-| `confidence`     | Float    | 0.0–1.0 internally, displayed as 0–100%                 |
-| `timesTested`    | Int      | Total attempts across all modes                          |
-| `timesCorrect`   | Int      | Total correct across all modes                           |
-| `lastTestedAt`   | DateTime | Timestamp of most recent attempt                         |
-| `lastCorrect`    | Boolean  | Whether the most recent attempt was correct              |
-| `streak`         | Int      | Consecutive correct (resets on wrong). Useful for mood.  |
+| Field          | Type     | Notes                                                   |
+| -------------- | -------- | ------------------------------------------------------- |
+| `confidence`   | Float    | 0.0–1.0 internally, displayed as 0–100%                 |
+| `timesTested`  | Int      | Total attempts across all modes                         |
+| `timesCorrect` | Int      | Total correct across all modes                          |
+| `lastTestedAt` | DateTime | Timestamp of most recent attempt                        |
+| `lastCorrect`  | Boolean  | Whether the most recent attempt was correct             |
+| `streak`       | Int      | Consecutive correct (resets on wrong). Useful for mood. |
 
 ### User's Assumed Rank
 
@@ -63,6 +63,7 @@ newConfidence = confidence * (1.0 - adjustedPenalty)
 ```
 
 Key properties:
+
 - Early tests move confidence a lot (timesTested is low → large swings)
 - Established words are resilient (timesTested is high → small moves)
 - Staleness hurts: forgetting a word you haven't seen in a month is
@@ -71,6 +72,7 @@ Key properties:
 ### Assessment Mode Formula
 
 Binary — this is measurement, not learning:
+
 - Correct → confidence = 1.0
 - Wrong → confidence = 0.0
 
@@ -128,8 +130,8 @@ statistical padding (e.g., 2–3 questions per rank level near the boundary).
 
 Word selection priority (weighted random from these buckets):
 
-1. **New territory** (~50%) — next untested words above assumed rank, in rank order
-2. **Shaky words** (~35%) — words with confidence < 0.95, prioritized by
+1. **New territory** (~35%) — next untested words above assumed rank, in rank order
+2. **Shaky words** (~50%) — words with confidence < 0.95, prioritized by
    low confidence + high rank (focus on common words first)
 3. **Mood boost** (~15%) — a word the user knows well (confidence ≥ 0.95),
    picked after ≥ 2 consecutive wrong answers
@@ -139,9 +141,10 @@ Confidence updates use the Build Mode formula.
 #### Spaced repetition (lightweight)
 
 Rather than a full SRS scheduler (Anki-style intervals), we use the confidence
-+ staleness model: words with lower confidence and longer time-since-tested
-naturally bubble up in the "shaky words" bucket. No need for `nextReviewAt`.
-The time factor in the wrong-answer penalty naturally handles forgetting curves.
+
+- staleness model: words with lower confidence and longer time-since-tested
+  naturally bubble up in the "shaky words" bucket. No need for `nextReviewAt`.
+  The time factor in the wrong-answer penalty naturally handles forgetting curves.
 
 #### Mood management
 
@@ -197,15 +200,15 @@ model UserWordKnowledge {
 
 ## API Use Cases
 
-| #   | Use Case                      | Formula                                                    |
-| --- | ----------------------------- | ---------------------------------------------------------- |
-| 1   | Correct in Build mode         | Build correct formula (gain + time bonus)                  |
-| 2   | Wrong in Build mode           | Build wrong formula (penalty + staleness)                  |
-| 3   | Count user's vocabulary       | assumedRank + count(confidence ≥ 0.95 AND timesTested ≥ 3) |
-| 4   | Correct in Assessment         | confidence = 1.0                                           |
-| 5   | Wrong in Assessment           | confidence = 0.0                                           |
-| 6   | Correct in Frustration mode   | Frustration correct formula (dampened 0.5x gain)           |
-| 7   | Wrong in Frustration mode     | Same wrong formula as Build (no mercy)                     |
+| #   | Use Case                    | Formula                                                    |
+| --- | --------------------------- | ---------------------------------------------------------- |
+| 1   | Correct in Build mode       | Build correct formula (gain + time bonus)                  |
+| 2   | Wrong in Build mode         | Build wrong formula (penalty + staleness)                  |
+| 3   | Count user's vocabulary     | assumedRank + count(confidence ≥ 0.95 AND timesTested ≥ 3) |
+| 4   | Correct in Assessment       | confidence = 1.0                                           |
+| 5   | Wrong in Assessment         | confidence = 0.0                                           |
+| 6   | Correct in Frustration mode | Frustration correct formula (dampened 0.5x gain)           |
+| 7   | Wrong in Frustration mode   | Same wrong formula as Build (no mercy)                     |
 
 ## Resolved Design Decisions
 

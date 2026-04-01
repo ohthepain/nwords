@@ -40,9 +40,9 @@ Total width before the mobile 50% shrink:
 
 | Visible ranks (cap) | Width  |
 | ------------------- | ------ |
-| ≤ 400               | 400 px |
-| ≤ 1000              | 600 px |
-| > 1000              | 800 px |
+| ≤ 400               | 360 px |
+| ≤ 1000              | 640 px |
+| > 1000              | 700 px |
 
 Height is derived from width, square size, gap, and row count. Scaled to **50% width** on narrow mobile (`max-width: 639px`).
 

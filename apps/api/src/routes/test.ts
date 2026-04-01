@@ -1,6 +1,7 @@
 import { zValidator } from "@hono/zod-validator"
 import { type TestSession, type VocabMode, prisma } from "@nwords/db"
 import { updateConfidence } from "@nwords/shared"
+import { FRUSTRATION_WORD_MIN_TESTS } from "@nwords/shared"
 import { type Context, Hono } from "hono"
 import { z } from "zod"
 import {
@@ -8,7 +9,6 @@ import {
 	pickWordNearRank,
 	resolveClozeWithHint,
 } from "../lib/parallel-hint"
-import { FRUSTRATION_WORD_MIN_TESTS } from "@nwords/shared"
 import type { AuthUser } from "../middleware/auth"
 import { type OptionalAuthEnv, optionalAuth } from "../middleware/auth"
 
@@ -63,6 +63,60 @@ const ASSESSMENT_MAX_QUESTIONS = 30
 const ASSESSMENT_CONVERGE_THRESHOLD = 50
 const ASSESSMENT_INITIAL_LOW = 1
 const ASSESSMENT_INITIAL_HIGH = 10000
+
+/** BUILD mode bucket weights (see docs/design/vocab-architecture.md). New 35%, shaky 50%, mood 15%. */
+const BUILD_WEIGHT_NEW = 35
+const BUILD_WEIGHT_SHAKY = 50
+const BUILD_MOOD_MIN_STREAK_WRONG = 2
+const BUILD_CANDIDATE_CAP = 45
+const BUILD_SESSION_EXCLUSION_SPREAD = 28
+/** New-territory picks stay near the first gap (same band as graph, rank-ordered). */
+const BUILD_NEW_SPREAD = 8
+
+/**
+ * Max rank for build-mode targets — matches heatmap “visible” extent (baseline × 1.2).
+ * @see apps/web/src/components/vocab-graph.tsx heatmapTargetCellCount
+ */
+function buildGraphRankMax(assumedRank: number, vocabSize: number): number {
+	const baseline = Math.max(assumedRank, vocabSize, 50)
+	return Math.min(10_000, Math.ceil(baseline * 1.2))
+}
+
+function rollBuildBucket(eligibleMood: boolean): "new" | "shaky" | "mood" {
+	const r = Math.random() * 100
+	if (eligibleMood) {
+		if (r < BUILD_WEIGHT_NEW) return "new"
+		if (r < BUILD_WEIGHT_NEW + BUILD_WEIGHT_SHAKY) return "shaky"
+		return "mood"
+	}
+	const den = BUILD_WEIGHT_NEW + BUILD_WEIGHT_SHAKY
+	const newCut = (BUILD_WEIGHT_NEW / den) * 100
+	return r < newCut ? "new" : "shaky"
+}
+
+function tailConsecutiveWrongs(answersOrderedChronological: { correct: boolean }[]): number {
+	let n = 0
+	for (let i = answersOrderedChronological.length - 1; i >= 0; i--) {
+		if (!answersOrderedChronological[i].correct) n++
+		else break
+	}
+	return n
+}
+
+function pickPreferFreshFromOrderedIds(
+	orderedIds: string[],
+	testedInSession: Set<string>,
+	tried: Set<string>,
+	options?: { spreadCap?: number },
+): string | null {
+	const slice = orderedIds.slice(0, BUILD_CANDIDATE_CAP)
+	let pool = slice.filter((id) => !tried.has(id) && !testedInSession.has(id))
+	if (pool.length === 0) pool = slice.filter((id) => !tried.has(id))
+	if (pool.length === 0) return null
+	const cap = options?.spreadCap ?? BUILD_SESSION_EXCLUSION_SPREAD
+	const spread = Math.min(cap, pool.length)
+	return pool[Math.floor(Math.random() * spread)]
+}
 
 // biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
 async function handleAssessmentNext(
@@ -193,8 +247,11 @@ async function handleFrustrationNext(
 			timesTested: { gte: FRUSTRATION_WORD_MIN_TESTS },
 			confidence: { lt: 0.5 },
 			word: {
-				languageId: langs.targetLanguageId,
-				testSentenceIds: { isEmpty: false },
+				is: {
+					languageId: langs.targetLanguageId,
+					isAbbreviation: false,
+					testSentenceIds: { isEmpty: false },
+				},
 			},
 		},
 		orderBy: [{ confidence: "asc" }, { timesTested: "desc" }],
@@ -257,6 +314,283 @@ async function handleFrustrationNext(
 		sessionMode: session.mode,
 		vocabMode: "FRUSTRATION" as const,
 	})
+}
+
+/**
+ * BUILD mode: fill gaps in the vocab graph band (rank ≤ ≈1.2× max(assumedRank, vocabSize)).
+ * New territory = first untested words above assumed rank in that band. Shaky = low-rank
+ * (common) words first, then lowest confidence — includes holes below the assumed line.
+ * Guests keep the legacy rank-window random walk (no profile / knowledge).
+ */
+// biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
+async function handleBuildGuestNext(
+	c: Context<any>,
+	session: TestSession,
+	langs: { nativeLanguageId: string; targetLanguageId: string },
+	vocabMode: VocabMode,
+) {
+	const tested = session.wordsTestedCount
+	const rankMin = 1
+	const rankMax = Math.min(100 + tested * 50, 10000)
+	const rankRange = { min: rankMin, max: rankMax }
+
+	const tried = new Set<string>()
+	const maxTries = 24
+
+	for (let i = 0; i < maxTries; i++) {
+		const wordId = await pickRandomWordIdForCloze(langs.targetLanguageId, [...tried], rankRange)
+		if (!wordId) break
+		tried.add(wordId)
+
+		const resolved = await resolveClozeWithHint({
+			wordId,
+			nativeLanguageId: langs.nativeLanguageId,
+			targetLanguageId: langs.targetLanguageId,
+		})
+
+		if (!resolved.ok) continue
+
+		return c.json({
+			wordId: resolved.wordId,
+			lemma: resolved.lemma,
+			rank: resolved.rank,
+			targetSentenceId: resolved.targetSentenceId,
+			promptText: resolved.promptText,
+			targetSentenceText: resolved.targetSentenceText,
+			hintText: resolved.hintText,
+			hintSentenceId: resolved.hintSentenceId,
+			hintSource: resolved.hintSource,
+			inlineHint: resolved.inlineHint,
+			answerType: "TRANSLATION_TYPED" as const,
+			sessionMode: session.mode,
+			vocabMode,
+		})
+	}
+
+	return c.json(
+		{
+			error: "no_question_available",
+			message:
+				"No cloze item with a hint could be built. Add parallel translations (Tatoeba links) or ensure words have dictionary glosses.",
+		},
+		404,
+	)
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
+async function handleBuildNext(
+	c: Context<any>,
+	session: TestSession,
+	langs: { nativeLanguageId: string; targetLanguageId: string },
+	vocabMode: VocabMode,
+) {
+	if (!session.userId) {
+		return handleBuildGuestNext(c, session, langs, vocabMode)
+	}
+
+	const [profile, sessionAnswers, knownVerifiedCount] = await Promise.all([
+		prisma.userLanguageProfile.findUnique({
+			where: {
+				userId_languageId: {
+					userId: session.userId,
+					languageId: langs.targetLanguageId,
+				},
+			},
+		}),
+		prisma.testAnswer.findMany({
+			where: { testSessionId: session.id },
+			orderBy: { answeredAt: "asc" },
+			select: { wordId: true, correct: true },
+		}),
+		prisma.userWordKnowledge.count({
+			where: {
+				userId: session.userId,
+				confidence: { gte: 0.95 },
+				timesTested: { gte: 3 },
+				word: {
+					is: { languageId: langs.targetLanguageId, isAbbreviation: false },
+				},
+			},
+		}),
+	])
+
+	const assumedRank = profile?.assumedRank ?? 0
+	const vocabSize = assumedRank + knownVerifiedCount
+	const graphRankMax = buildGraphRankMax(assumedRank, vocabSize)
+	const rankAboveFloor = Math.max(0, assumedRank)
+
+	const testedInSession = new Set(sessionAnswers.map((a) => a.wordId))
+	const eligibleMood = tailConsecutiveWrongs(sessionAnswers) >= BUILD_MOOD_MIN_STREAK_WRONG
+
+	const [newWords, shakyKnowledge, moodKnowledge] = await Promise.all([
+		prisma.word.findMany({
+			where: {
+				languageId: langs.targetLanguageId,
+				rank: { gt: rankAboveFloor, lte: graphRankMax },
+				isOffensive: false,
+				isAbbreviation: false,
+				testSentenceIds: { isEmpty: false },
+				NOT: {
+					userKnowledge: {
+						some: { userId: session.userId },
+					},
+				},
+			},
+			orderBy: { rank: "asc" },
+			take: BUILD_CANDIDATE_CAP,
+			select: { id: true },
+		}),
+		prisma.userWordKnowledge.findMany({
+			where: {
+				userId: session.userId,
+				confidence: { lt: 0.95 },
+				word: {
+					is: {
+						languageId: langs.targetLanguageId,
+						rank: { gte: 1, lte: graphRankMax },
+						isOffensive: false,
+						isAbbreviation: false,
+						testSentenceIds: { isEmpty: false },
+					},
+				},
+			},
+			orderBy: [{ word: { rank: "asc" } }, { confidence: "asc" }],
+			take: BUILD_CANDIDATE_CAP,
+			select: { wordId: true },
+		}),
+		eligibleMood
+			? prisma.userWordKnowledge.findMany({
+					where: {
+						userId: session.userId,
+						confidence: { gte: 0.95 },
+						timesTested: { gte: 3 },
+						word: {
+							is: {
+								languageId: langs.targetLanguageId,
+								rank: { gte: 1, lte: graphRankMax },
+								isOffensive: false,
+								isAbbreviation: false,
+								testSentenceIds: { isEmpty: false },
+							},
+						},
+					},
+					take: BUILD_CANDIDATE_CAP,
+					select: { wordId: true },
+				})
+			: Promise.resolve([] as { wordId: string }[]),
+	])
+
+	const newIds = newWords.map((w) => w.id)
+	const shakyIds = shakyKnowledge.map((k) => k.wordId)
+	const moodIds = moodKnowledge.map((k) => k.wordId)
+
+	const primaryBucket = rollBuildBucket(eligibleMood)
+	const bucketOrder: ("new" | "shaky" | "mood")[] =
+		primaryBucket === "new"
+			? ["new", "shaky", ...(eligibleMood ? (["mood"] as const) : [])]
+			: primaryBucket === "shaky"
+				? ["shaky", "new", ...(eligibleMood ? (["mood"] as const) : [])]
+				: ["mood", "shaky", "new"]
+
+	const tried = new Set<string>()
+	const maxTries = 28
+
+	for (let i = 0; i < maxTries; i++) {
+		for (const bucket of bucketOrder) {
+			let wordId: string | null = null
+			if (bucket === "new") {
+				wordId = pickPreferFreshFromOrderedIds(newIds, testedInSession, tried, {
+					spreadCap: BUILD_NEW_SPREAD,
+				})
+			} else if (bucket === "shaky") {
+				wordId = pickPreferFreshFromOrderedIds(shakyIds, testedInSession, tried)
+			} else if (bucket === "mood" && eligibleMood) {
+				wordId = pickPreferFreshFromOrderedIds(moodIds, testedInSession, tried)
+			}
+			if (!wordId) continue
+			tried.add(wordId)
+
+			const resolved = await resolveClozeWithHint({
+				wordId,
+				nativeLanguageId: langs.nativeLanguageId,
+				targetLanguageId: langs.targetLanguageId,
+			})
+
+			if (!resolved.ok) continue
+
+			return c.json({
+				wordId: resolved.wordId,
+				lemma: resolved.lemma,
+				rank: resolved.rank,
+				targetSentenceId: resolved.targetSentenceId,
+				promptText: resolved.promptText,
+				targetSentenceText: resolved.targetSentenceText,
+				hintText: resolved.hintText,
+				hintSentenceId: resolved.hintSentenceId,
+				hintSource: resolved.hintSource,
+				inlineHint: resolved.inlineHint,
+				answerType: "TRANSLATION_TYPED" as const,
+				sessionMode: session.mode,
+				vocabMode,
+			})
+		}
+	}
+
+	// Last resort: random cloze in the graph band above assumed rank, then widen if the band is exhausted.
+	const triedFallback = new Set(tried)
+	const fallbackRanges: { min: number; max: number }[] = []
+	const low = rankAboveFloor + 1
+	if (low <= graphRankMax) {
+		fallbackRanges.push({ min: low, max: graphRankMax })
+	}
+	if (low <= 10_000 && graphRankMax < 10_000) {
+		fallbackRanges.push({ min: low, max: 10_000 })
+	}
+
+	for (const rankRange of fallbackRanges) {
+		for (let i = 0; i < 20; i++) {
+			const wordId = await pickRandomWordIdForCloze(
+				langs.targetLanguageId,
+				[...triedFallback],
+				rankRange,
+			)
+			if (!wordId) break
+			triedFallback.add(wordId)
+
+			const resolved = await resolveClozeWithHint({
+				wordId,
+				nativeLanguageId: langs.nativeLanguageId,
+				targetLanguageId: langs.targetLanguageId,
+			})
+
+			if (!resolved.ok) continue
+
+			return c.json({
+				wordId: resolved.wordId,
+				lemma: resolved.lemma,
+				rank: resolved.rank,
+				targetSentenceId: resolved.targetSentenceId,
+				promptText: resolved.promptText,
+				targetSentenceText: resolved.targetSentenceText,
+				hintText: resolved.hintText,
+				hintSentenceId: resolved.hintSentenceId,
+				hintSource: resolved.hintSource,
+				inlineHint: resolved.inlineHint,
+				answerType: "TRANSLATION_TYPED" as const,
+				sessionMode: session.mode,
+				vocabMode,
+			})
+		}
+	}
+
+	return c.json(
+		{
+			error: "no_question_available",
+			message:
+				"No build-mode cloze available above your assumed rank. Try Frustration mode or complete an assessment.",
+		},
+		404,
+	)
 }
 
 /**
@@ -349,7 +683,10 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 						},
 					})
 
-					return c.json({ sessionId: session.id, mode: body.mode, vocabMode: session.vocabMode }, 201)
+					return c.json(
+						{ sessionId: session.id, mode: body.mode, vocabMode: session.vocabMode },
+						201,
+					)
 				}
 
 				const dbUser = await prisma.user.findUnique({
@@ -465,53 +802,7 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 			return await handleFrustrationNext(c, session, langs)
 		}
 
-		// BUILD mode: progressive difficulty (original behavior)
-		const tested = session.wordsTestedCount
-		const rankMin = 1
-		const rankMax = Math.min(100 + tested * 50, 10000)
-		const rankRange = { min: rankMin, max: rankMax }
-
-		const tried = new Set<string>()
-		const maxTries = 24
-
-		for (let i = 0; i < maxTries; i++) {
-			const wordId = await pickRandomWordIdForCloze(langs.targetLanguageId, [...tried], rankRange)
-			if (!wordId) break
-			tried.add(wordId)
-
-			const resolved = await resolveClozeWithHint({
-				wordId,
-				nativeLanguageId: langs.nativeLanguageId,
-				targetLanguageId: langs.targetLanguageId,
-			})
-
-			if (!resolved.ok) continue
-
-			return c.json({
-				wordId: resolved.wordId,
-				lemma: resolved.lemma,
-				rank: resolved.rank,
-				targetSentenceId: resolved.targetSentenceId,
-				promptText: resolved.promptText,
-				targetSentenceText: resolved.targetSentenceText,
-				hintText: resolved.hintText,
-				hintSentenceId: resolved.hintSentenceId,
-				hintSource: resolved.hintSource,
-				inlineHint: resolved.inlineHint,
-				answerType: "TRANSLATION_TYPED" as const,
-				sessionMode: session.mode,
-				vocabMode,
-			})
-		}
-
-		return c.json(
-			{
-				error: "no_question_available",
-				message:
-					"No cloze item with a hint could be built. Add parallel translations (Tatoeba links) or ensure words have dictionary glosses.",
-			},
-			404,
-		)
+		return handleBuildNext(c, session, langs, vocabMode)
 	})
 
 	// Get an active test session
@@ -605,9 +896,7 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 				}),
 			])
 
-			let confidenceUpdate:
-				| { confidence: number; previousConfidence: number | null }
-				| undefined
+			let confidenceUpdate: { confidence: number; previousConfidence: number | null } | undefined
 
 			if (session.userId && user?.id === session.userId) {
 				const now = new Date()

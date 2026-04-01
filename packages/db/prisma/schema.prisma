@@ -125,6 +125,8 @@ model Word {
   rank            Int
   definitions     Json
   isOffensive     Boolean      @default(false)
+  /// Excluded from frequency rank, cloze tests, and vocab graph (abbreviations / initialisms).
+  isAbbreviation  Boolean      @default(false)
   cefrLevel       CefrLevel?
   /// Curated sentence UUIDs suitable for vocabulary tests (ranked by quality).
   testSentenceIds String[]     @default([])

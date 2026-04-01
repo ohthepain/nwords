@@ -13,7 +13,8 @@ import { chainFrequencyFromKaikki } from "../lib/pipeline-chain"
 /**
  * Kaikki.org dictionary dump worker (JSON lines).
  * Prefers four per-POS JSONL URLs (same data as HTML `pos-*` browse pages); falls back to one monolith URL.
- * Drops entries tagged offensive; POS filter still applied on each line.
+ * Drops entries tagged offensive; drops senses tagged as abbreviations / initialisms.
+ * POS filter still applied on each line.
  */
 
 const POS_MAP: Record<string, string> = {
@@ -26,6 +27,26 @@ const POS_MAP: Record<string, string> = {
 }
 
 const OFFENSIVE_TAGS = new Set(["vulgar", "offensive", "slur", "derogatory", "pejorative"])
+
+/** Skip these Wiktionary sense tags so lemmas like "GDP" are not ranked or tested. */
+const ABBREVIATION_SENSE_TAGS = new Set([
+	"abbreviation",
+	"abbrev",
+	"initialism",
+	"acronym",
+	"clipping",
+	"shortening",
+])
+
+function senseHasAbbreviationTag(sense: {
+	tags?: string[]
+	raw_tags?: string[]
+}): boolean {
+	for (const t of [...(sense.tags ?? []), ...(sense.raw_tags ?? [])]) {
+		if (ABBREVIATION_SENSE_TAGS.has(t.toLowerCase())) return true
+	}
+	return false
+}
 
 interface KaikkiEntry {
 	word: string
@@ -156,9 +177,6 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 			let isOffensive = false
 
 			for (const sense of entry.senses ?? []) {
-				if (sense.glosses) {
-					definitions.push(...sense.glosses)
-				}
 				const tags = [...(sense.tags ?? []), ...(sense.raw_tags ?? [])]
 				if (tags.some((t) => OFFENSIVE_TAGS.has(t.toLowerCase()))) {
 					isOffensive = true
@@ -168,6 +186,13 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 			if (isOffensive) {
 				skipped++
 				return true
+			}
+
+			for (const sense of entry.senses ?? []) {
+				if (senseHasAbbreviationTag(sense)) continue
+				if (sense.glosses) {
+					definitions.push(...sense.glosses)
+				}
 			}
 
 			if (definitions.length === 0) {
@@ -343,6 +368,7 @@ async function flushBatch(
 					update: {
 						definitions: word.definitions,
 						isOffensive: word.isOffensive,
+						isAbbreviation: false,
 					},
 				})
 				inserted++

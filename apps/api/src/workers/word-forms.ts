@@ -29,6 +29,10 @@ const POS_MAP: Record<string, string> = {
 interface KaikkiEntry {
 	word: string
 	pos: string
+	senses?: Array<{
+		tags?: string[]
+		raw_tags?: string[]
+	}>
 	forms?: Array<{
 		form: string
 		tags?: string[]
@@ -71,6 +75,26 @@ async function* linesFromUrl(url: string): AsyncGenerator<string> {
 
 /** Max forms we store per lemma — caps pathological cases (agglutinative langs). */
 const MAX_FORMS_PER_WORD = 200
+
+/** Same set as kaikki worker — skip forms for abbreviation-only dictionary rows. */
+const ABBREVIATION_SENSE_TAGS = new Set([
+	"abbreviation",
+	"abbrev",
+	"initialism",
+	"acronym",
+	"clipping",
+	"shortening",
+])
+
+function senseHasAbbreviationTag(sense: {
+	tags?: string[]
+	raw_tags?: string[]
+}): boolean {
+	for (const t of [...(sense.tags ?? []), ...(sense.raw_tags ?? [])]) {
+		if (ABBREVIATION_SENSE_TAGS.has(t.toLowerCase())) return true
+	}
+	return false
+}
 
 export async function processWordFormsJob(job: PgBoss.Job<WordFormsJobData>) {
 	const { jobId, languageId, filePath, downloadUrl, chainPipeline, kaikkiMode } = job.data
@@ -118,7 +142,7 @@ export async function processWordFormsJob(job: PgBoss.Job<WordFormsJobData>) {
 	await appendJobLog(jobId, "out", "Word forms: loading lemma→wordId index…")
 	const wordIndex = new Map<string, string>()
 	const wordRows = await prisma.word.findMany({
-		where: { languageId },
+		where: { languageId, isAbbreviation: false },
 		select: { id: true, lemma: true, pos: true },
 	})
 	for (const w of wordRows) {
@@ -158,6 +182,15 @@ export async function processWordFormsJob(job: PgBoss.Job<WordFormsJobData>) {
 
 			const lemma = entry.word?.trim()?.toLowerCase()
 			if (!lemma) {
+				skipped++
+				return true
+			}
+
+			const senses = entry.senses ?? []
+			if (
+				senses.length > 0 &&
+				senses.every((s) => senseHasAbbreviationTag(s))
+			) {
 				skipped++
 				return true
 			}

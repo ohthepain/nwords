@@ -82,6 +82,7 @@ export async function linkSentencesAndAssignTests(
 				languageId,
 				lemma: { in: [...allTokens] },
 				isOffensive: false,
+				isAbbreviation: false,
 			},
 			select: { id: true, lemma: true },
 		})
@@ -157,7 +158,7 @@ async function assignTopTestSentencesForLanguage(
 	onProgress: (event: LinkingProgressEvent) => Promise<void>,
 ): Promise<void> {
 	const words = await prisma.word.findMany({
-		where: { languageId },
+		where: { languageId, isAbbreviation: false },
 		select: { id: true },
 		take: MAX_WORDS_TO_ASSIGN,
 	})

@@ -368,7 +368,11 @@ async function resolveGlossStringForPivot(
 	const formOfLemma = extractFormOfLemma(firstGloss) ?? extractInflectionOfLemma(firstGloss)
 	if (formOfLemma) {
 		const rootWord = await prisma.word.findFirst({
-			where: { lemma: formOfLemma, languageId: targetLanguageId },
+			where: {
+				lemma: formOfLemma,
+				languageId: targetLanguageId,
+				isAbbreviation: false,
+			},
 			select: { definitions: true },
 			orderBy: { rank: "asc" },
 		})
@@ -511,7 +515,12 @@ async function translateViaGlossPivot(
 	// Tier 1: direct lemma match — prefer gloss order, then frequency within the same lemma string.
 	for (const tok of tokensOrdered) {
 		const hit = await prisma.word.findFirst({
-			where: { languageId: nativeLanguageId, rank: { gt: 0 }, lemma: tok },
+			where: {
+				languageId: nativeLanguageId,
+				rank: { gt: 0 },
+				lemma: tok,
+				isAbbreviation: false,
+			},
 			orderBy: { rank: "asc" },
 			select: { lemma: true },
 		})
@@ -532,6 +541,7 @@ async function translateViaGlossPivot(
 		  ) AS overlap
 		FROM "word" w
 		WHERE w."languageId" = ${nativeLanguageId}::uuid
+		  AND w."isAbbreviation" = false
 		  AND w."rank" > 0
 		  AND w."rank" <= 10000
 		  AND EXISTS (
@@ -570,10 +580,11 @@ export async function resolveClozeWithHint(params: {
 			rank: true,
 			definitions: true,
 			testSentenceIds: true,
+			isAbbreviation: true,
 		},
 	})
 
-	if (!word || word.testSentenceIds.length === 0) {
+	if (!word || word.isAbbreviation || word.testSentenceIds.length === 0) {
 		return { ok: false, reason: "no_test_sentences" }
 	}
 
@@ -659,6 +670,7 @@ export async function pickRandomWordIdForCloze(
 	const baseWhere: Prisma.WordWhereInput = {
 		languageId: targetLanguageId,
 		isOffensive: false,
+		isAbbreviation: false,
 		testSentenceIds: { isEmpty: false },
 		...(rankRange ? { rank: { gte: rankRange.min, lte: rankRange.max } } : { rank: { gt: 0 } }),
 	}
@@ -681,6 +693,7 @@ export async function pickRandomWordIdForCloze(
 		const fallbackWhere: Prisma.WordWhereInput = {
 			languageId: targetLanguageId,
 			isOffensive: false,
+			isAbbreviation: false,
 			testSentenceIds: { isEmpty: false },
 			rank: { gt: 0 },
 		}
@@ -713,6 +726,7 @@ export async function pickWordNearRank(
 	const baseWhere: Prisma.WordWhereInput = {
 		languageId: targetLanguageId,
 		isOffensive: false,
+		isAbbreviation: false,
 		testSentenceIds: { isEmpty: false },
 		rank: { gte: Math.max(1, targetRank - 25), lte: targetRank + 25 },
 		...(excludeWordIds.length > 0 ? { id: { notIn: excludeWordIds } } : {}),
@@ -731,6 +745,7 @@ export async function pickWordNearRank(
 		where: {
 			languageId: targetLanguageId,
 			isOffensive: false,
+			isAbbreviation: false,
 			testSentenceIds: { isEmpty: false },
 			rank: { gte: Math.max(1, targetRank - 100), lte: targetRank + 100 },
 			...(excludeWordIds.length > 0 ? { id: { notIn: excludeWordIds } } : {}),

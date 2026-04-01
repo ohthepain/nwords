@@ -12,7 +12,7 @@ export const wordsRoute = new Hono()
 		}
 
 		const words = await prisma.word.findMany({
-			where: { languageId, isOffensive: false },
+			where: { languageId, isOffensive: false, isAbbreviation: false },
 			orderBy: { rank: "asc" },
 			take: Math.min(limit, 100),
 			skip: offset,
@@ -23,7 +23,7 @@ export const wordsRoute = new Hono()
 	.get("/count/:languageId", async (c) => {
 		const { languageId } = c.req.param()
 		const count = await prisma.word.count({
-			where: { languageId, isOffensive: false },
+			where: { languageId, isOffensive: false, isAbbreviation: false },
 		})
 		return c.json({ count })
 	})

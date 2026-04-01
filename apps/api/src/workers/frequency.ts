@@ -436,8 +436,12 @@ async function flushRankBatch(
 	try {
 		const existingWords = await prisma.word.findMany({
 			where: { languageId, lemma: { in: lemmas } },
-			select: { id: true, lemma: true },
+			select: { id: true, lemma: true, isAbbreviation: true },
 		})
+
+		const abbrevWordIds = new Set(
+			existingWords.filter((w) => w.isAbbreviation).map((w) => w.id),
+		)
 
 		const wordByLemma = new Map<string, string[]>()
 		for (const w of existingWords) {
@@ -455,6 +459,7 @@ async function flushRankBatch(
 			}
 			const cefrLevel = cefrLevelForFrequencyRank(rank)
 			for (const id of wordIds) {
+				if (abbrevWordIds.has(id)) continue
 				updates.push(prisma.word.update({ where: { id }, data: { rank, cefrLevel } }))
 			}
 		}
