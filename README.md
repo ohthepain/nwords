@@ -36,8 +36,10 @@ Copy `.env.example` to `.env` and adjust values before the first run.
 ### Google sign-in (optional)
 
 1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials) create an OAuth 2.0 Client ID (Web application).
-2. Under **Authorized redirect URIs**, add `http://localhost:3000/api/auth/callback/google` (and your production URL + `/api/auth/callback/google` when you deploy). It must match `BETTER_AUTH_URL`.
+2. Under **Authorized JavaScript origins** and **Authorized redirect URIs**, add URLs that match `BETTER_AUTH_URL` exactly (e.g. `http://localhost:3000` and `http://localhost:3000/api/auth/callback/google`; plus production when you deploy).
 3. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_AUTH_ENABLED=true` in `.env` at the repo root, then restart `pnpm dev`.
+
+**Google OAuth with ngrok (HTTPS locally):** Google often requires a public `https` origin. With the dev server on port 3000, run `pnpm dev` in one terminal. In another, put your [ngrok authtoken](https://dashboard.ngrok.com/get-started/your-authtoken) in `NGROK_AUTHTOKEN` in `.env`, then run `pnpm tunnel`. Set `BETTER_AUTH_URL` to the printed `https://…` URL (no trailing slash), add that origin and `{that URL}/api/auth/callback/google` in Google Cloud Console, restart `pnpm dev`, and open the app via the ngrok URL.
 
 ## Project Structure
 

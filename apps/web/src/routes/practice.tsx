@@ -1,5 +1,6 @@
-import { Link, createFileRoute, useNavigate } from "@tanstack/react-router"
+import { Link, createFileRoute } from "@tanstack/react-router"
 import { useCallback, useEffect, useRef, useState } from "react"
+import { AuthedAppHeader } from "~/components/authed-app-header"
 import { AppHeaderBrand } from "~/components/header"
 import { ThemeToggleButton } from "~/components/theme-toggle-button"
 import { Button } from "~/components/ui/button"
@@ -13,9 +14,11 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "~/components/ui/select"
-import { authClient } from "~/lib/auth-client"
-
 type UserMe = {
+	id: string
+	name: string
+	email: string | null
+	role: string
 	nativeLanguage: { id: string; name: string } | null
 	targetLanguage: { id: string; name: string } | null
 }
@@ -54,7 +57,6 @@ function clozeQuestionReportKey(q: NextQuestion): string {
 }
 
 function PracticePage() {
-	const navigate = useNavigate()
 	/** `undefined` = loading; `null` = not signed in; object = signed-in profile */
 	const [profile, setProfile] = useState<UserMe | null | undefined>(undefined)
 	const [languageOptions, setLanguageOptions] = useState<LanguageOption[]>([])
@@ -85,7 +87,7 @@ function PracticePage() {
 			}
 			if (!cancelled && meRes.ok) {
 				const data = (await meRes.json()) as UserMe
-				setProfile({ nativeLanguage: data.nativeLanguage, targetLanguage: data.targetLanguage })
+				setProfile(data)
 			} else if (!cancelled) {
 				setProfile(null)
 			}
@@ -282,10 +284,7 @@ function PracticePage() {
 	const practiceLanguagesInvalid =
 		!practiceNativeId || !practiceTargetId || practiceNativeId === practiceTargetId
 	const canStartPractice = userMeLoaded && !practiceLanguagesInvalid
-	const practiceAuthState = !userMeLoaded ? "loading" : isGuest ? "guest" : "signedIn"
-
-	async function handlePracticeSignOut() {
-		await authClient.signOut()
+	function resetPracticeUiAfterSignOut() {
 		setProfile(null)
 		setSessionId(null)
 		setQuestion(null)
@@ -295,7 +294,6 @@ function PracticePage() {
 		setPracticeTargetId("")
 		setStatus("idle")
 		setReportIdByQuestionKey({})
-		navigate({ to: "/practice", replace: true })
 	}
 
 	const reportKeyForQuestion = question ? clozeQuestionReportKey(question) : ""
@@ -317,12 +315,23 @@ function PracticePage() {
 		)
 	}
 
+	const account = profile
+	const header =
+		account === null ? (
+			<PracticeHeader authState="guest" />
+		) : (
+			<AuthedAppHeader
+				pageTitle="Practice"
+				user={{ id: account.id, name: account.name, email: account.email }}
+				isAdmin={account.role === "ADMIN"}
+				signOutNavigateTo="/practice"
+				onAfterSignOut={resetPracticeUiAfterSignOut}
+			/>
+		)
+
 	return (
 		<div className="flex-1 flex flex-col min-h-0">
-			<PracticeHeader
-				authState={practiceAuthState}
-				onSignOut={() => void handlePracticeSignOut()}
-			/>
+			{header}
 			<div className="w-full max-w-xl mx-auto px-6 py-8 space-y-6 flex-1 shrink-0">
 				<Card>
 					<CardHeader className="pb-4">
@@ -556,13 +565,7 @@ function ClozePrompt({
 	)
 }
 
-function PracticeHeader({
-	authState,
-	onSignOut,
-}: {
-	authState: "loading" | "guest" | "signedIn"
-	onSignOut?: () => void
-}) {
+function PracticeHeader({ authState }: { authState: "loading" | "guest" }) {
 	return (
 		<header className="shrink-0 border-b border-border/50 backdrop-blur-sm sticky top-0 z-10 bg-background/80">
 			<div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center gap-3 sm:gap-4">
@@ -572,25 +575,10 @@ function PracticeHeader({
 				</h1>
 				<div className="flex items-center gap-1 sm:gap-2 shrink-0">
 					<ThemeToggleButton />
-					{authState === "loading" ? null : authState === "guest" ? (
+					{authState === "loading" ? null : (
 						<Button type="button" variant="ghost" size="sm" asChild>
 							<Link to="/auth/login">Sign in</Link>
 						</Button>
-					) : (
-						<>
-							<Button type="button" variant="ghost" size="sm" asChild>
-								<Link to="/dashboard">Dashboard</Link>
-							</Button>
-							<Button
-								type="button"
-								variant="ghost"
-								size="sm"
-								className="text-muted-foreground"
-								onClick={() => onSignOut?.()}
-							>
-								Sign out
-							</Button>
-						</>
 					)}
 				</div>
 			</div>

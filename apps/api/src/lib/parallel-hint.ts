@@ -14,10 +14,10 @@ function tokensForScoring(text: string): string[] {
 const WORD_RUN = /[\p{L}\p{N}]+/gu
 
 /**
- * When parallel index alignment is wrong, we fall back to the gloss pivot. Reject only
- * tokens that are almost never the single-word cloze target (articles, auxiliaries, a few
- * high-frequency glue words). Do **not** block pronouns/possessives (e.g. "my" for Swedish
- * "min") — blocking those caused bad pivots like "minute".
+ * When picking a token **in the window**, skip high-frequency glue words so sense-based
+ * scoring can prefer a content word if parallel token counts are misaligned. Do **not**
+ * include prepositions like `before`/`after` — they are often the actual cloze answer
+ * (e.g. Swedish *före* ↔ English *before*).
  */
 const INLINE_HINT_STOPWORDS_EN = new Set([
 	"a",
@@ -88,8 +88,6 @@ const INLINE_HINT_STOPWORDS_EN = new Set([
 	"between",
 	"through",
 	"during",
-	"before",
-	"after",
 	"above",
 	"below",
 	"under",
@@ -102,6 +100,9 @@ const INLINE_HINT_STOPWORDS_EN = new Set([
 	"even",
 	"also",
 ])
+
+/** For index-aligned fallback only: articles (never useful as the sole hint). */
+const INLINE_HINT_ALIGNMENT_JUNK = new Set(["a", "an", "the"])
 
 export type HintSource = "parallel" | "definition"
 
@@ -305,7 +306,7 @@ function tryParallelAlignedInlineHint(parallelText: string, blankTokenIndex: num
 	const raw = runs[blankTokenIndex]!
 	const tok = raw.toLowerCase()
 	if (tok.length < 2) return null
-	if (INLINE_HINT_STOPWORDS_EN.has(tok)) return null
+	if (INLINE_HINT_ALIGNMENT_JUNK.has(tok)) return null
 	return tok
 }
 
@@ -424,27 +425,13 @@ async function tryParallelInlineHintWithWindow(
 	let bestTotal = -1
 	let bestIdx = blankTokenIndex
 
-	const debugCandidates: Array<{
-		i: number
-		tok: string
-		skipReason?: string
-		matchScore?: number
-	}> = []
-
 	for (let i = from; i <= to; i++) {
 		const raw = runs[i]!
 		const tok = raw.toLowerCase()
-		if (tok.length < 2) {
-			debugCandidates.push({ i, tok, skipReason: "short" })
-			continue
-		}
-		if (INLINE_HINT_STOPWORDS_EN.has(tok)) {
-			debugCandidates.push({ i, tok, skipReason: "stopword" })
-			continue
-		}
+		if (tok.length < 2) continue
+		if (INLINE_HINT_STOPWORDS_EN.has(tok)) continue
 
 		const matchScore = scoreParallelTokAgainstSense(tok, sense)
-		debugCandidates.push({ i, tok, matchScore })
 		if (matchScore < 28) continue
 
 		const closeness = PARALLEL_HINT_ALIGN_WINDOW - Math.abs(i - blankTokenIndex) + 1
@@ -458,30 +445,15 @@ async function tryParallelInlineHintWithWindow(
 		}
 	}
 
-	// #region agent log
-	const senseArr = [...sense]
-	fetch("http://127.0.0.1:7794/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-		method: "POST",
-		headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "0573f2" },
-		body: JSON.stringify({
-			sessionId: "0573f2",
-			hypothesisId: "A-B-C",
-			location: "parallel-hint.ts:tryParallelInlineHintWithWindow",
-			message: "parallel_inline_hint_window",
-			data: {
-				blankTokenIndex,
-				parallelLen: runs.length,
-				runsJoin: runs.map((r) => r.toLowerCase()).join("|"),
-				senseSize: sense.size,
-				senseSample: senseArr.slice(0, 40),
-				debugCandidates,
-				bestTok,
-				bestTotal,
-			},
-			timestamp: Date.now(),
-		}),
-	}).catch(() => {})
-	// #endregion
+	if (bestTok == null) {
+		const alignedRaw =
+			blankTokenIndex >= 0 && blankTokenIndex < runs.length
+				? runs[blankTokenIndex]!.toLowerCase()
+				: null
+		if (alignedRaw != null && alignedRaw.length >= 2 && !INLINE_HINT_ALIGNMENT_JUNK.has(alignedRaw)) {
+			bestTok = alignedRaw
+		}
+	}
 
 	return bestTok
 }
@@ -633,27 +605,6 @@ export async function resolveClozeWithHint(params: {
 			)
 			const pivotFallback = parallelTok == null ? await glossPivotHint() : null
 			const inlineHint = parallelTok ?? pivotFallback
-			// #region agent log
-			fetch("http://127.0.0.1:7794/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-				method: "POST",
-				headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "0573f2" },
-				body: JSON.stringify({
-					sessionId: "0573f2",
-					hypothesisId: "D",
-					location: "parallel-hint.ts:resolveClozeWithHint",
-					message: "cloze_inline_hint_resolved",
-					data: {
-						lemma: word.lemma,
-						blankTokenIndex: c.position,
-						parallelTok,
-						usedPivotFallback: parallelTok == null,
-						inlineHint,
-						promptSnippet: buildClozePrompt(c.targetSentenceText, c.position).slice(0, 100),
-					},
-					timestamp: Date.now(),
-				}),
-			}).catch(() => {})
-			// #endregion
 			return {
 				ok: true,
 				wordId: word.id,

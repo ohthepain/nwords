@@ -27,6 +27,8 @@ export default defineConfig(({ mode }) => {
 		envPrefix: ["VITE_", "GOOGLE_AUTH_"],
 		server: {
 			port: 3000,
+			// Allow Google OAuth via ngrok (Host header is *.ngrok.*, not localhost)
+			allowedHosts: ["localhost", "127.0.0.1", ".ngrok-free.app", ".ngrok.io", ".ngrok.app"],
 		},
 		plugins: [
 			tanstackStart(),
