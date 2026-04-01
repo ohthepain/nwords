@@ -700,3 +700,44 @@ export async function pickRandomWordIdForCloze(
 
 	return word?.id ?? null
 }
+
+/**
+ * Pick a word near a target rank for assessment binary search.
+ * Finds the closest word with test sentences at or above the target rank.
+ */
+export async function pickWordNearRank(
+	targetLanguageId: string,
+	targetRank: number,
+	excludeWordIds: string[],
+): Promise<{ wordId: string; rank: number } | null> {
+	const baseWhere: Prisma.WordWhereInput = {
+		languageId: targetLanguageId,
+		isOffensive: false,
+		testSentenceIds: { isEmpty: false },
+		rank: { gte: Math.max(1, targetRank - 25), lte: targetRank + 25 },
+		...(excludeWordIds.length > 0 ? { id: { notIn: excludeWordIds } } : {}),
+	}
+
+	const word = await prisma.word.findFirst({
+		where: baseWhere,
+		select: { id: true, rank: true },
+		orderBy: { rank: "asc" },
+	})
+
+	if (word) return { wordId: word.id, rank: word.rank }
+
+	// Widen search if nothing in the ±25 range
+	const wider = await prisma.word.findFirst({
+		where: {
+			languageId: targetLanguageId,
+			isOffensive: false,
+			testSentenceIds: { isEmpty: false },
+			rank: { gte: Math.max(1, targetRank - 100), lte: targetRank + 100 },
+			...(excludeWordIds.length > 0 ? { id: { notIn: excludeWordIds } } : {}),
+		},
+		select: { id: true, rank: true },
+		orderBy: { rank: "asc" },
+	})
+
+	return wider ? { wordId: wider.id, rank: wider.rank } : null
+}

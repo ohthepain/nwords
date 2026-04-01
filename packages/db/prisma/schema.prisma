@@ -27,9 +27,10 @@ model User {
   sessions      Session[]
   accounts      Account[]
   verifications Verification[]
-  wordKnowledge UserWordKnowledge[]
-  scoreHistory  ScoreHistory[]
-  testSessions  TestSession[]
+  wordKnowledge    UserWordKnowledge[]
+  languageProfiles UserLanguageProfile[]
+  scoreHistory     ScoreHistory[]
+  testSessions     TestSession[]
   clozeIssueReports ClozeIssueReport[]
 
   @@map("user")
@@ -104,6 +105,7 @@ model Language {
   nativeSpeakers User[]          @relation("NativeLanguage")
   targetLearners User[]          @relation("TargetLanguage")
   frequencyLists FrequencyList[]
+  userProfiles   UserLanguageProfile[]
   guestSessionsNative TestSession[] @relation("GuestTestNativeLanguage")
   guestSessionsTarget TestSession[] @relation("GuestTestTargetLanguage")
   clozeReportsAsNative ClozeIssueReport[] @relation("ClozeReportNative")
@@ -238,6 +240,22 @@ model SentenceWord {
   @@map("sentence_word")
 }
 
+// ─── User Language Profile ──────────────────────────────
+
+model UserLanguageProfile {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @db.Uuid
+  languageId  String   @db.Uuid
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  language    Language @relation(fields: [languageId], references: [id])
+  assumedRank Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, languageId])
+  @@map("user_language_profile")
+}
+
 // ─── User Word Knowledge ────────────────────────────────
 
 model UserWordKnowledge {
@@ -246,18 +264,17 @@ model UserWordKnowledge {
   wordId       String    @db.Uuid
   user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   word         Word      @relation(fields: [wordId], references: [id], onDelete: Cascade)
-  known        Boolean   @default(false)
-  probability  Float     @default(0.5)
+  confidence   Float     @default(0.5)
   timesTested  Int       @default(0)
   timesCorrect Int       @default(0)
   lastTestedAt DateTime?
-  nextReviewAt DateTime?
+  lastCorrect  Boolean   @default(false)
+  streak       Int       @default(0)
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
   @@unique([userId, wordId])
-  @@index([userId, known])
-  @@index([userId, nextReviewAt])
+  @@index([userId, confidence])
   @@map("user_word_knowledge")
 }
 
@@ -288,6 +305,7 @@ model TestSession {
   targetLanguageId  String?    @db.Uuid
   targetLanguage    Language?  @relation("GuestTestTargetLanguage", fields: [targetLanguageId], references: [id])
   mode              TestMode
+  vocabMode         VocabMode  @default(BUILD)
   startedAt         DateTime   @default(now())
   endedAt           DateTime?
   wordsTestedCount  Int        @default(0)
@@ -304,6 +322,12 @@ enum TestMode {
   TRANSLATION
   VOICE
   MIXED
+}
+
+enum VocabMode {
+  ASSESSMENT
+  BUILD
+  FRUSTRATION
 }
 
 model TestAnswer {

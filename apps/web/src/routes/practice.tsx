@@ -41,8 +41,21 @@ type NextQuestion = {
 	sessionMode: string
 }
 
+type VocabMode = "ASSESSMENT" | "BUILD" | "FRUSTRATION"
+
+const VOCAB_MODE_LABELS: Record<VocabMode, string> = {
+	ASSESSMENT: "Assessment",
+	BUILD: "Build vocabulary",
+	FRUSTRATION: "Frustration words",
+}
+
 export const Route = createFileRoute("/practice")({
 	component: PracticePage,
+	validateSearch: (search: Record<string, unknown>) => ({
+		vocabMode: (["ASSESSMENT", "BUILD", "FRUSTRATION"].includes(search.vocabMode as string)
+			? search.vocabMode
+			: "BUILD") as VocabMode,
+	}),
 	head: () => ({
 		meta: [{ title: "Practice — nwords.live" }],
 	}),
@@ -57,6 +70,7 @@ function clozeQuestionReportKey(q: NextQuestion): string {
 }
 
 function PracticePage() {
+	const { vocabMode } = Route.useSearch()
 	/** `undefined` = loading; `null` = not signed in; object = signed-in profile */
 	const [profile, setProfile] = useState<UserMe | null | undefined>(undefined)
 	const [languageOptions, setLanguageOptions] = useState<LanguageOption[]>([])
@@ -68,6 +82,11 @@ function PracticePage() {
 	const [answer, setAnswer] = useState("")
 	const [status, setStatus] = useState<"idle" | "loading" | "error">("idle")
 	const [feedback, setFeedback] = useState<string | null>(null)
+	const [assessmentDone, setAssessmentDone] = useState<{
+		assumedRank?: number
+		wordsTestedCount: number
+		message: string
+	} | null>(null)
 	const [reportBusy, setReportBusy] = useState(false)
 	const [reportMsg, setReportMsg] = useState<string | null>(null)
 	/** Maps `wordId:targetSentenceId` → report id for this browser session (withdraw via Unreport). */
@@ -113,6 +132,7 @@ function PracticePage() {
 		setQuestion(null)
 		setAnswer("")
 		setFeedback(null)
+		setAssessmentDone(null)
 		setStatus("idle")
 		setReportIdByQuestionKey({})
 	}
@@ -132,6 +152,7 @@ function PracticePage() {
 
 			const body: Record<string, unknown> = {
 				mode: "TRANSLATION",
+				vocabMode,
 				nativeLanguageId: practiceNativeId,
 				targetLanguageId: practiceTargetId,
 			}
@@ -159,7 +180,24 @@ function PracticePage() {
 						: await nextRes.text()
 				throw new Error(msg || "No question available")
 			}
-			const q = (await nextRes.json()) as NextQuestion
+			const nextData = await nextRes.json()
+
+			// Assessment mode: check if done immediately
+			if (nextData.done) {
+				setAssessmentDone({
+					assumedRank: nextData.assumedRank,
+					wordsTestedCount: nextData.wordsTestedCount,
+					message: nextData.message,
+				})
+				setStatus("idle")
+				await fetch(`/api/test/sessions/${data.sessionId}/end`, {
+					method: "POST",
+					credentials: "include",
+				})
+				return
+			}
+
+			const q = nextData as NextQuestion
 			setQuestion(q)
 			setAnswer("")
 			setStatus("idle")
@@ -169,7 +207,7 @@ function PracticePage() {
 			setFeedback(e instanceof Error ? e.message : "Something went wrong")
 			setStatus("error")
 		}
-	}, [practiceNativeId, practiceTargetId])
+	}, [practiceNativeId, practiceTargetId, vocabMode])
 
 	useEffect(() => {
 		if (!question) return
@@ -190,7 +228,26 @@ function PracticePage() {
 						: await nextRes.text()
 				throw new Error(msg || "No more questions")
 			}
-			const q = (await nextRes.json()) as NextQuestion
+			const data = await nextRes.json()
+
+			// Assessment mode: check if the binary search is done
+			if (data.done) {
+				setAssessmentDone({
+					assumedRank: data.assumedRank,
+					wordsTestedCount: data.wordsTestedCount,
+					message: data.message,
+				})
+				setQuestion(null)
+				setStatus("idle")
+				// Auto-end the session to save the assumed rank
+				await fetch(`/api/test/sessions/${sid}/end`, {
+					method: "POST",
+					credentials: "include",
+				})
+				return
+			}
+
+			const q = data as NextQuestion
 			setQuestion(q)
 			setAnswer("")
 			setStatus("idle")
@@ -430,17 +487,65 @@ function PracticePage() {
 				{canStartPractice && (
 					<Card>
 						<CardHeader>
-							<CardTitle className="text-base">Translation cloze</CardTitle>
+							<CardTitle className="text-base">
+								{VOCAB_MODE_LABELS[vocabMode]}
+							</CardTitle>
 							<CardDescription>
-								Fill the blank in{" "}
-								<span className="font-medium text-foreground">
-									{targetLabel ?? "your target language"}
-								</span>{" "}
-								using the hint. Uses the pair you selected above.
+								{vocabMode === "ASSESSMENT" ? (
+									<>
+										We&apos;ll find your vocabulary level via binary search.
+										Correct = you know it, wrong = you don&apos;t.
+									</>
+								) : vocabMode === "FRUSTRATION" ? (
+									<>
+										Drill your stubbornest words. Short bursts, repeat throughout the day.
+									</>
+								) : (
+									<>
+										Fill the blank in{" "}
+										<span className="font-medium text-foreground">
+											{targetLabel ?? "your target language"}
+										</span>{" "}
+										using the hint.
+									</>
+								)}
 							</CardDescription>
 						</CardHeader>
 						<CardContent className="space-y-4">
-							{!sessionId || !question ? (
+							{assessmentDone ? (
+								<div className="py-8 text-center space-y-4">
+									<div className="text-4xl font-bold font-mono tracking-tight">
+										{assessmentDone.assumedRank?.toLocaleString() ?? "—"}
+									</div>
+									<p className="text-sm text-muted-foreground">
+										Estimated vocabulary rank — we assume you know the{" "}
+										<span className="font-medium text-foreground">
+											{assessmentDone.assumedRank?.toLocaleString() ?? "?"}
+										</span>{" "}
+										most common words.
+									</p>
+									<p className="text-xs text-muted-foreground">
+										{assessmentDone.wordsTestedCount} questions answered
+									</p>
+									<div className="flex justify-center gap-3 pt-2">
+										<Button asChild variant="outline" size="sm">
+											<Link to="/dashboard">Back to dashboard</Link>
+										</Button>
+										<Button
+											type="button"
+											size="sm"
+											onClick={() => {
+												setAssessmentDone(null)
+												setSessionId(null)
+												setQuestion(null)
+												setFeedback(null)
+											}}
+										>
+											Retake assessment
+										</Button>
+									</div>
+								</div>
+							) : !sessionId || !question ? (
 								<Button
 									type="button"
 									onClick={() => void startSession()}

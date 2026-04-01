@@ -1,3 +1,6 @@
+-- CreateSchema
+CREATE SCHEMA IF NOT EXISTS "public";
+
 -- CreateEnum
 CREATE TYPE "Role" AS ENUM ('USER', 'ADMIN');
 
@@ -11,10 +14,16 @@ CREATE TYPE "CefrLevel" AS ENUM ('A1', 'A2', 'B1', 'B2', 'C1', 'C2');
 CREATE TYPE "TestMode" AS ENUM ('MULTIPLE_CHOICE', 'TRANSLATION', 'VOICE', 'MIXED');
 
 -- CreateEnum
+CREATE TYPE "VocabMode" AS ENUM ('ASSESSMENT', 'BUILD', 'FRUSTRATION');
+
+-- CreateEnum
 CREATE TYPE "AnswerType" AS ENUM ('MULTIPLE_CHOICE', 'TRANSLATION_TYPED', 'VOICE_TRANSCRIPTION');
 
 -- CreateEnum
-CREATE TYPE "IngestionType" AS ENUM ('KAIKKI_WORDS', 'FREQUENCY_LIST', 'TATOEBA_SENTENCES', 'AUDIO_FILES');
+CREATE TYPE "ClozeIssueStatus" AS ENUM ('PENDING', 'REMOVE_CANDIDATE', 'CLUE_CORRECTED', 'DISMISSED');
+
+-- CreateEnum
+CREATE TYPE "IngestionType" AS ENUM ('KAIKKI_WORDS', 'FREQUENCY_LIST', 'TATOEBA_SENTENCES', 'WORD_FORMS', 'AUDIO_FILES');
 
 -- CreateEnum
 CREATE TYPE "IngestionStatus" AS ENUM ('PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED');
@@ -87,6 +96,7 @@ CREATE TABLE "language" (
     "code" TEXT NOT NULL,
     "code3" TEXT,
     "name" TEXT NOT NULL,
+    "kaikkiDictionaryName" TEXT,
     "enabled" BOOLEAN NOT NULL DEFAULT false,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -103,10 +113,22 @@ CREATE TABLE "word" (
     "definitions" JSONB NOT NULL,
     "isOffensive" BOOLEAN NOT NULL DEFAULT false,
     "cefrLevel" "CefrLevel",
+    "testSentenceIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "word_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "word_form" (
+    "id" UUID NOT NULL,
+    "languageId" UUID NOT NULL,
+    "form" TEXT NOT NULL,
+    "wordId" UUID NOT NULL,
+    "tags" JSONB NOT NULL DEFAULT '[]',
+
+    CONSTRAINT "word_form_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -128,6 +150,8 @@ CREATE TABLE "sentence" (
     "text" TEXT NOT NULL,
     "hasAudio" BOOLEAN NOT NULL DEFAULT false,
     "audioS3Key" TEXT,
+    "testQualityScore" DOUBLE PRECISION,
+    "isTestCandidate" BOOLEAN NOT NULL DEFAULT false,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "sentence_pkey" PRIMARY KEY ("id")
@@ -153,16 +177,28 @@ CREATE TABLE "sentence_word" (
 );
 
 -- CreateTable
+CREATE TABLE "user_language_profile" (
+    "id" UUID NOT NULL,
+    "userId" UUID NOT NULL,
+    "languageId" UUID NOT NULL,
+    "assumedRank" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "user_language_profile_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "user_word_knowledge" (
     "id" UUID NOT NULL,
     "userId" UUID NOT NULL,
     "wordId" UUID NOT NULL,
-    "known" BOOLEAN NOT NULL DEFAULT false,
-    "probability" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    "confidence" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
     "timesTested" INTEGER NOT NULL DEFAULT 0,
     "timesCorrect" INTEGER NOT NULL DEFAULT 0,
     "lastTestedAt" TIMESTAMP(3),
-    "nextReviewAt" TIMESTAMP(3),
+    "lastCorrect" BOOLEAN NOT NULL DEFAULT false,
+    "streak" INTEGER NOT NULL DEFAULT 0,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -184,8 +220,11 @@ CREATE TABLE "score_history" (
 -- CreateTable
 CREATE TABLE "test_session" (
     "id" UUID NOT NULL,
-    "userId" UUID NOT NULL,
+    "userId" UUID,
+    "nativeLanguageId" UUID,
+    "targetLanguageId" UUID,
     "mode" "TestMode" NOT NULL,
+    "vocabMode" "VocabMode" NOT NULL DEFAULT 'BUILD',
     "startedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "endedAt" TIMESTAMP(3),
     "wordsTestedCount" INTEGER NOT NULL DEFAULT 0,
@@ -208,6 +247,30 @@ CREATE TABLE "test_answer" (
     "answeredAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "test_answer_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "cloze_issue_report" (
+    "id" UUID NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "reporterUserId" UUID,
+    "nativeLanguageId" UUID NOT NULL,
+    "targetLanguageId" UUID NOT NULL,
+    "wordId" UUID NOT NULL,
+    "targetSentenceId" UUID,
+    "hintSentenceId" UUID,
+    "targetSentenceText" TEXT NOT NULL,
+    "promptText" TEXT NOT NULL,
+    "hintText" TEXT NOT NULL,
+    "hintSource" TEXT NOT NULL,
+    "inlineHint" TEXT,
+    "wordLemma" TEXT NOT NULL,
+    "status" "ClozeIssueStatus" NOT NULL DEFAULT 'PENDING',
+    "adminCorrectClue" TEXT,
+    "adminNote" TEXT,
+
+    CONSTRAINT "cloze_issue_report_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -246,6 +309,15 @@ CREATE INDEX "word_languageId_cefrLevel_idx" ON "word"("languageId", "cefrLevel"
 CREATE UNIQUE INDEX "word_languageId_lemma_pos_key" ON "word"("languageId", "lemma", "pos");
 
 -- CreateIndex
+CREATE INDEX "word_form_languageId_form_idx" ON "word_form"("languageId", "form");
+
+-- CreateIndex
+CREATE INDEX "word_form_wordId_idx" ON "word_form"("wordId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "word_form_languageId_form_wordId_key" ON "word_form"("languageId", "form", "wordId");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "frequency_list_languageId_source_key" ON "frequency_list"("languageId", "source");
 
 -- CreateIndex
@@ -253,6 +325,9 @@ CREATE UNIQUE INDEX "sentence_tatoebaId_key" ON "sentence"("tatoebaId");
 
 -- CreateIndex
 CREATE INDEX "sentence_languageId_idx" ON "sentence"("languageId");
+
+-- CreateIndex
+CREATE INDEX "sentence_languageId_testQualityScore_idx" ON "sentence"("languageId", "testQualityScore");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "sentence_translation_originalSentenceId_translatedSentenceI_key" ON "sentence_translation"("originalSentenceId", "translatedSentenceId");
@@ -264,10 +339,10 @@ CREATE INDEX "sentence_word_wordId_idx" ON "sentence_word"("wordId");
 CREATE UNIQUE INDEX "sentence_word_sentenceId_wordId_key" ON "sentence_word"("sentenceId", "wordId");
 
 -- CreateIndex
-CREATE INDEX "user_word_knowledge_userId_known_idx" ON "user_word_knowledge"("userId", "known");
+CREATE UNIQUE INDEX "user_language_profile_userId_languageId_key" ON "user_language_profile"("userId", "languageId");
 
 -- CreateIndex
-CREATE INDEX "user_word_knowledge_userId_nextReviewAt_idx" ON "user_word_knowledge"("userId", "nextReviewAt");
+CREATE INDEX "user_word_knowledge_userId_confidence_idx" ON "user_word_knowledge"("userId", "confidence");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "user_word_knowledge_userId_wordId_key" ON "user_word_knowledge"("userId", "wordId");
@@ -280,6 +355,12 @@ CREATE INDEX "test_session_userId_startedAt_idx" ON "test_session"("userId", "st
 
 -- CreateIndex
 CREATE INDEX "test_answer_testSessionId_idx" ON "test_answer"("testSessionId");
+
+-- CreateIndex
+CREATE INDEX "cloze_issue_report_targetLanguageId_status_idx" ON "cloze_issue_report"("targetLanguageId", "status");
+
+-- CreateIndex
+CREATE INDEX "cloze_issue_report_createdAt_idx" ON "cloze_issue_report"("createdAt");
 
 -- CreateIndex
 CREATE INDEX "ingestion_job_status_idx" ON "ingestion_job"("status");
@@ -303,6 +384,12 @@ ALTER TABLE "verification" ADD CONSTRAINT "verification_userId_fkey" FOREIGN KEY
 ALTER TABLE "word" ADD CONSTRAINT "word_languageId_fkey" FOREIGN KEY ("languageId") REFERENCES "language"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "word_form" ADD CONSTRAINT "word_form_languageId_fkey" FOREIGN KEY ("languageId") REFERENCES "language"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "word_form" ADD CONSTRAINT "word_form_wordId_fkey" FOREIGN KEY ("wordId") REFERENCES "word"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "frequency_list" ADD CONSTRAINT "frequency_list_languageId_fkey" FOREIGN KEY ("languageId") REFERENCES "language"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -321,6 +408,12 @@ ALTER TABLE "sentence_word" ADD CONSTRAINT "sentence_word_sentenceId_fkey" FOREI
 ALTER TABLE "sentence_word" ADD CONSTRAINT "sentence_word_wordId_fkey" FOREIGN KEY ("wordId") REFERENCES "word"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "user_language_profile" ADD CONSTRAINT "user_language_profile_userId_fkey" FOREIGN KEY ("userId") REFERENCES "user"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "user_language_profile" ADD CONSTRAINT "user_language_profile_languageId_fkey" FOREIGN KEY ("languageId") REFERENCES "language"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "user_word_knowledge" ADD CONSTRAINT "user_word_knowledge_userId_fkey" FOREIGN KEY ("userId") REFERENCES "user"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -333,4 +426,22 @@ ALTER TABLE "score_history" ADD CONSTRAINT "score_history_userId_fkey" FOREIGN K
 ALTER TABLE "test_session" ADD CONSTRAINT "test_session_userId_fkey" FOREIGN KEY ("userId") REFERENCES "user"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "test_session" ADD CONSTRAINT "test_session_nativeLanguageId_fkey" FOREIGN KEY ("nativeLanguageId") REFERENCES "language"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "test_session" ADD CONSTRAINT "test_session_targetLanguageId_fkey" FOREIGN KEY ("targetLanguageId") REFERENCES "language"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "test_answer" ADD CONSTRAINT "test_answer_testSessionId_fkey" FOREIGN KEY ("testSessionId") REFERENCES "test_session"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "cloze_issue_report" ADD CONSTRAINT "cloze_issue_report_reporterUserId_fkey" FOREIGN KEY ("reporterUserId") REFERENCES "user"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "cloze_issue_report" ADD CONSTRAINT "cloze_issue_report_nativeLanguageId_fkey" FOREIGN KEY ("nativeLanguageId") REFERENCES "language"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "cloze_issue_report" ADD CONSTRAINT "cloze_issue_report_targetLanguageId_fkey" FOREIGN KEY ("targetLanguageId") REFERENCES "language"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "cloze_issue_report" ADD CONSTRAINT "cloze_issue_report_wordId_fkey" FOREIGN KEY ("wordId") REFERENCES "word"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

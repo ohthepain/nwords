@@ -112,7 +112,7 @@ function SettingsPage() {
 		<div className="max-w-2xl mx-auto px-6 py-8 space-y-6">
 			<div>
 				<p className="text-sm text-muted-foreground mt-1">
-					Configure your languages and appearance
+					Configure your languages
 				</p>
 			</div>
 
@@ -193,13 +193,9 @@ function SettingsPage() {
 
 			<Card>
 				<CardHeader>
-					<CardTitle className="text-base">Appearance</CardTitle>
-					<CardDescription>Customize how nwords looks</CardDescription>
+					<CardTitle className="text-base">UI style</CardTitle>
 				</CardHeader>
-				<CardContent className="space-y-5">
-					<p className="text-xs text-muted-foreground">
-						Light and dark theme is toggled from the header.
-					</p>
+				<CardContent>
 					<div className="space-y-2">
 						<Label className="text-xs font-mono text-muted-foreground uppercase tracking-wider">
 							UI Style
@@ -216,9 +212,6 @@ function SettingsPage() {
 								))}
 							</SelectContent>
 						</Select>
-						<p className="text-xs text-muted-foreground">
-							Changes how UI elements are rendered across the app
-						</p>
 					</div>
 				</CardContent>
 			</Card>

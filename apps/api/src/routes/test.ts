@@ -1,8 +1,14 @@
 import { zValidator } from "@hono/zod-validator"
-import { type TestSession, prisma } from "@nwords/db"
-import { Hono } from "hono"
+import { type TestSession, type VocabMode, prisma } from "@nwords/db"
+import { updateConfidence } from "@nwords/shared"
+import { type Context, Hono } from "hono"
 import { z } from "zod"
-import { pickRandomWordIdForCloze, resolveClozeWithHint } from "../lib/parallel-hint"
+import {
+	pickRandomWordIdForCloze,
+	pickWordNearRank,
+	resolveClozeWithHint,
+} from "../lib/parallel-hint"
+import { FRUSTRATION_WORD_MIN_TESTS } from "@nwords/shared"
 import type { AuthUser } from "../middleware/auth"
 import { type OptionalAuthEnv, optionalAuth } from "../middleware/auth"
 
@@ -44,6 +50,248 @@ async function resolveClozeLanguageIds(
 	return null
 }
 
+/**
+ * Assessment mode: binary search to find the user's assumed rank.
+ *
+ * The search range narrows each question. We look at previous answers in
+ * this session to compute the current binary search bounds, then pick a
+ * word near the midpoint.
+ *
+ * Stopping: when range < 50 ranks OR 30 questions answered.
+ */
+const ASSESSMENT_MAX_QUESTIONS = 30
+const ASSESSMENT_CONVERGE_THRESHOLD = 50
+const ASSESSMENT_INITIAL_LOW = 1
+const ASSESSMENT_INITIAL_HIGH = 10000
+
+// biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
+async function handleAssessmentNext(
+	c: Context<any>,
+	session: TestSession,
+	langs: { nativeLanguageId: string; targetLanguageId: string },
+) {
+	// Check stopping condition
+	if (session.wordsTestedCount >= ASSESSMENT_MAX_QUESTIONS) {
+		return c.json({
+			done: true,
+			message: "Assessment complete — max questions reached.",
+			wordsTestedCount: session.wordsTestedCount,
+		})
+	}
+
+	// Reconstruct binary search bounds from session answers
+	const answers = await prisma.testAnswer.findMany({
+		where: { testSessionId: session.id },
+		orderBy: { answeredAt: "asc" },
+		include: {
+			// We need the word's rank
+		},
+	})
+
+	// Fetch ranks for answered words
+	const answeredWordIds = answers.map((a) => a.wordId)
+	const answeredWords = await prisma.word.findMany({
+		where: { id: { in: answeredWordIds } },
+		select: { id: true, rank: true },
+	})
+	const rankMap = new Map(answeredWords.map((w) => [w.id, w.rank]))
+
+	// Binary search: correct answers push low bound up, wrong answers push high bound down
+	let low = ASSESSMENT_INITIAL_LOW
+	let high = ASSESSMENT_INITIAL_HIGH
+
+	for (const ans of answers) {
+		const rank = rankMap.get(ans.wordId)
+		if (rank === undefined) continue
+		if (ans.correct) {
+			// User knows this rank — search higher
+			low = Math.max(low, rank + 1)
+		} else {
+			// User doesn't know this rank — search lower
+			high = Math.min(high, rank - 1)
+		}
+	}
+
+	// Check convergence
+	if (high - low < ASSESSMENT_CONVERGE_THRESHOLD) {
+		return c.json({
+			done: true,
+			message: "Assessment complete — level found.",
+			wordsTestedCount: session.wordsTestedCount,
+			assumedRank: Math.floor((low + high) / 2),
+		})
+	}
+
+	const targetRank = Math.floor((low + high) / 2)
+
+	// Try to find a word near the midpoint
+	const tried = new Set<string>()
+	const maxTries = 12
+
+	for (let i = 0; i < maxTries; i++) {
+		const pick = await pickWordNearRank(langs.targetLanguageId, targetRank, [...tried])
+		if (!pick) break
+		tried.add(pick.wordId)
+
+		const resolved = await resolveClozeWithHint({
+			wordId: pick.wordId,
+			nativeLanguageId: langs.nativeLanguageId,
+			targetLanguageId: langs.targetLanguageId,
+		})
+
+		if (!resolved.ok) continue
+
+		return c.json({
+			wordId: resolved.wordId,
+			lemma: resolved.lemma,
+			rank: resolved.rank,
+			targetSentenceId: resolved.targetSentenceId,
+			promptText: resolved.promptText,
+			targetSentenceText: resolved.targetSentenceText,
+			hintText: resolved.hintText,
+			hintSentenceId: resolved.hintSentenceId,
+			hintSource: resolved.hintSource,
+			inlineHint: resolved.inlineHint,
+			answerType: "TRANSLATION_TYPED" as const,
+			sessionMode: session.mode,
+			vocabMode: "ASSESSMENT" as const,
+			assessmentProgress: {
+				low,
+				high,
+				targetRank,
+				questionsRemaining: ASSESSMENT_MAX_QUESTIONS - session.wordsTestedCount,
+			},
+		})
+	}
+
+	return c.json(
+		{
+			error: "no_question_available",
+			message: "Could not find a testable word near the target rank.",
+		},
+		404,
+	)
+}
+
+/**
+ * Frustration mode: pick from words with high test count and low confidence.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
+async function handleFrustrationNext(
+	c: Context<any>,
+	session: TestSession,
+	langs: { nativeLanguageId: string; targetLanguageId: string },
+) {
+	if (!session.userId) {
+		return c.json({ error: "Frustration mode requires a signed-in user." }, 400)
+	}
+
+	// Get the user's frustration words, sorted by frustration score
+	const frustrationWords = await prisma.userWordKnowledge.findMany({
+		where: {
+			userId: session.userId,
+			timesTested: { gte: FRUSTRATION_WORD_MIN_TESTS },
+			confidence: { lt: 0.5 },
+			word: {
+				languageId: langs.targetLanguageId,
+				testSentenceIds: { isEmpty: false },
+			},
+		},
+		orderBy: [{ confidence: "asc" }, { timesTested: "desc" }],
+		take: 20,
+		select: { wordId: true },
+	})
+
+	if (frustrationWords.length === 0) {
+		return c.json(
+			{
+				error: "no_frustration_words",
+				message: "No frustration words found. Keep building vocabulary first.",
+			},
+			404,
+		)
+	}
+
+	// Get already-tested words in this session to avoid immediate repeats
+	const sessionAnswers = await prisma.testAnswer.findMany({
+		where: { testSessionId: session.id },
+		select: { wordId: true },
+	})
+	const testedInSession = new Set(sessionAnswers.map((a) => a.wordId))
+
+	// Prefer words not yet tested in this session
+	const candidates = frustrationWords.filter((w) => !testedInSession.has(w.wordId))
+	const pool = candidates.length > 0 ? candidates : frustrationWords
+
+	// Pick randomly from top candidates for variety
+	const pick = pool[Math.floor(Math.random() * Math.min(pool.length, 5))]
+
+	const resolved = await resolveClozeWithHint({
+		wordId: pick.wordId,
+		nativeLanguageId: langs.nativeLanguageId,
+		targetLanguageId: langs.targetLanguageId,
+	})
+
+	if (!resolved.ok) {
+		return c.json(
+			{
+				error: "no_question_available",
+				message: "Could not build a cloze for this frustration word.",
+			},
+			404,
+		)
+	}
+
+	return c.json({
+		wordId: resolved.wordId,
+		lemma: resolved.lemma,
+		rank: resolved.rank,
+		targetSentenceId: resolved.targetSentenceId,
+		promptText: resolved.promptText,
+		targetSentenceText: resolved.targetSentenceText,
+		hintText: resolved.hintText,
+		hintSentenceId: resolved.hintSentenceId,
+		hintSource: resolved.hintSource,
+		inlineHint: resolved.inlineHint,
+		answerType: "TRANSLATION_TYPED" as const,
+		sessionMode: session.mode,
+		vocabMode: "FRUSTRATION" as const,
+	})
+}
+
+/**
+ * Compute the assessed rank from an assessment session's answers.
+ * Replays the binary search to find where the user's knowledge boundary is.
+ */
+async function computeAssessedRank(sessionId: string): Promise<number> {
+	const answers = await prisma.testAnswer.findMany({
+		where: { testSessionId: sessionId },
+		orderBy: { answeredAt: "asc" },
+	})
+
+	const answeredWordIds = answers.map((a) => a.wordId)
+	const answeredWords = await prisma.word.findMany({
+		where: { id: { in: answeredWordIds } },
+		select: { id: true, rank: true },
+	})
+	const rankMap = new Map(answeredWords.map((w) => [w.id, w.rank]))
+
+	let low = ASSESSMENT_INITIAL_LOW
+	let high = ASSESSMENT_INITIAL_HIGH
+
+	for (const ans of answers) {
+		const rank = rankMap.get(ans.wordId)
+		if (rank === undefined) continue
+		if (ans.correct) {
+			low = Math.max(low, rank + 1)
+		} else {
+			high = Math.min(high, rank - 1)
+		}
+	}
+
+	return Math.floor((low + high) / 2)
+}
+
 export const testRoute = new Hono<OptionalAuthEnv>()
 	.use("*", optionalAuth)
 
@@ -54,6 +302,7 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 			"json",
 			z.object({
 				mode: z.enum(["MULTIPLE_CHOICE", "TRANSLATION", "VOICE", "MIXED"]),
+				vocabMode: z.enum(["ASSESSMENT", "BUILD", "FRUSTRATION"]).default("BUILD"),
 				nativeLanguageId: z.string().uuid().optional(),
 				targetLanguageId: z.string().uuid().optional(),
 			}),
@@ -94,12 +343,13 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 						data: {
 							userId: user.id,
 							mode: body.mode,
+							vocabMode: body.vocabMode,
 							nativeLanguageId,
 							targetLanguageId,
 						},
 					})
 
-					return c.json({ sessionId: session.id, mode: body.mode }, 201)
+					return c.json({ sessionId: session.id, mode: body.mode, vocabMode: session.vocabMode }, 201)
 				}
 
 				const dbUser = await prisma.user.findUnique({
@@ -122,10 +372,11 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 					data: {
 						userId: user.id,
 						mode: body.mode,
+						vocabMode: body.vocabMode,
 					},
 				})
 
-				return c.json({ sessionId: session.id, mode: body.mode }, 201)
+				return c.json({ sessionId: session.id, mode: body.mode, vocabMode: session.vocabMode }, 201)
 			}
 
 			const { nativeLanguageId, targetLanguageId } = body
@@ -158,16 +409,17 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 			const session = await prisma.testSession.create({
 				data: {
 					mode: body.mode,
+					vocabMode: body.vocabMode,
 					nativeLanguageId,
 					targetLanguageId,
 				},
 			})
 
-			return c.json({ sessionId: session.id, mode: body.mode }, 201)
+			return c.json({ sessionId: session.id, mode: body.mode, vocabMode: session.vocabMode }, 201)
 		},
 	)
 
-	// Next cloze item with native-language hint (or definition fallback)
+	// Next cloze item — word selection depends on vocabMode
 	.get("/sessions/:id/next", async (c) => {
 		const user = c.get("user")
 		const { id: sessionId } = c.req.param()
@@ -201,9 +453,19 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 			)
 		}
 
-		// Progressive difficulty: start around rank 100 and widen the range as more words are tested.
-		// Each question tested adds ~50 to the upper bound, so the first few questions are common
-		// words and the range gradually opens up.
+		const vocabMode = session.vocabMode ?? "BUILD"
+
+		// ── Word selection by mode ──────────────────────────────
+
+		if (vocabMode === "ASSESSMENT") {
+			return await handleAssessmentNext(c, session, langs)
+		}
+
+		if (vocabMode === "FRUSTRATION") {
+			return await handleFrustrationNext(c, session, langs)
+		}
+
+		// BUILD mode: progressive difficulty (original behavior)
 		const tested = session.wordsTestedCount
 		const rankMin = 1
 		const rankMax = Math.min(100 + tested * 50, 10000)
@@ -238,6 +500,7 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 				inlineHint: resolved.inlineHint,
 				answerType: "TRANSLATION_TYPED" as const,
 				sessionMode: session.mode,
+				vocabMode,
 			})
 		}
 
@@ -343,49 +606,47 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 			])
 
 			if (session.userId && user?.id === session.userId) {
-				await prisma.userWordKnowledge.upsert({
+				const now = new Date()
+				const vocabMode = session.vocabMode as VocabMode
+
+				// Fetch existing knowledge (null if first encounter with this word)
+				const existing = await prisma.userWordKnowledge.findUnique({
 					where: {
-						userId_wordId: {
-							userId: user.id,
-							wordId: body.wordId,
-						},
-					},
-					create: {
-						userId: user.id,
-						wordId: body.wordId,
-						known: body.correct,
-						probability: body.correct ? 0.8 : 0.2,
-						timesTested: 1,
-						timesCorrect: body.correct ? 1 : 0,
-						lastTestedAt: new Date(),
-					},
-					update: {
-						timesTested: { increment: 1 },
-						...(body.correct && { timesCorrect: { increment: 1 } }),
-						lastTestedAt: new Date(),
-						probability: body.correct ? { multiply: 1.0 } : { multiply: 1.0 },
+						userId_wordId: { userId: user.id, wordId: body.wordId },
 					},
 				})
 
-				const knowledge = await prisma.userWordKnowledge.findUnique({
-					where: {
-						userId_wordId: {
-							userId: user.id,
-							wordId: body.wordId,
-						},
-					},
+				const result = updateConfidence(vocabMode, body.correct, {
+					confidence: existing?.confidence ?? 0.5,
+					timesTested: existing?.timesTested ?? 0,
+					lastTestedAt: existing?.lastTestedAt ?? null,
+					streak: existing?.streak ?? 0,
+					now,
 				})
 
-				if (knowledge && knowledge.timesTested > 0) {
-					const accuracy = knowledge.timesCorrect / knowledge.timesTested
-					const newProbability = Math.max(0.05, Math.min(0.95, accuracy))
-					const isKnown = newProbability >= 0.95 && knowledge.timesTested >= 3
-
+				if (existing) {
 					await prisma.userWordKnowledge.update({
-						where: { id: knowledge.id },
+						where: { id: existing.id },
 						data: {
-							probability: newProbability,
-							known: isKnown,
+							confidence: result.confidence,
+							timesTested: { increment: 1 },
+							...(body.correct && { timesCorrect: { increment: 1 } }),
+							lastTestedAt: now,
+							lastCorrect: result.lastCorrect,
+							streak: result.streak,
+						},
+					})
+				} else {
+					await prisma.userWordKnowledge.create({
+						data: {
+							userId: user.id,
+							wordId: body.wordId,
+							confidence: result.confidence,
+							timesTested: 1,
+							timesCorrect: body.correct ? 1 : 0,
+							lastTestedAt: now,
+							lastCorrect: result.lastCorrect,
+							streak: result.streak,
 						},
 					})
 				}
@@ -415,36 +676,85 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 		})
 
 		if (session.userId && user?.id === session.userId) {
-			const knownCount = await prisma.userWordKnowledge.count({
-				where: { userId: user.id, known: true },
-			})
-			const targetCount = await prisma.userWordKnowledge.count({
-				where: { userId: user.id, probability: { gte: 0.5 } },
-			})
+			const langs = await resolveClozeLanguageIds(session)
+
+			// For assessment sessions, compute and save the assumed rank
+			if (session.vocabMode === "ASSESSMENT" && langs?.targetLanguageId) {
+				const assessedRank = await computeAssessedRank(session.id)
+
+				if (assessedRank > 0) {
+					await prisma.userLanguageProfile.upsert({
+						where: {
+							userId_languageId: {
+								userId: user.id,
+								languageId: langs.targetLanguageId,
+							},
+						},
+						create: {
+							userId: user.id,
+							languageId: langs.targetLanguageId,
+							assumedRank: assessedRank,
+						},
+						update: {
+							assumedRank: assessedRank,
+						},
+					})
+				}
+			}
+
+			const [knownCount, learningCount, profile] = await Promise.all([
+				prisma.userWordKnowledge.count({
+					where: {
+						userId: user.id,
+						confidence: { gte: 0.95 },
+						timesTested: { gte: 3 },
+					},
+				}),
+				prisma.userWordKnowledge.count({
+					where: { userId: user.id, confidence: { gte: 0.5 } },
+				}),
+				langs?.targetLanguageId
+					? prisma.userLanguageProfile.findUnique({
+							where: {
+								userId_languageId: {
+									userId: user.id,
+									languageId: langs.targetLanguageId,
+								},
+							},
+						})
+					: null,
+			])
+
+			const assumedRank = profile?.assumedRank ?? 0
+			const vocabSize = assumedRank + knownCount
 
 			await prisma.scoreHistory.create({
 				data: {
 					userId: user.id,
-					actualScore: knownCount,
-					targetScore: targetCount,
+					actualScore: vocabSize,
+					targetScore: assumedRank + learningCount,
 					cefrLevel: null,
 				},
 			})
 
 			return c.json({
 				id: ended.id,
+				vocabMode: ended.vocabMode,
 				wordsTestedCount: ended.wordsTestedCount,
 				wordsCorrectCount: ended.wordsCorrectCount,
 				endedAt: ended.endedAt?.toISOString(),
 				newScore: {
-					actualScore: knownCount,
-					targetScore: targetCount,
+					vocabSize,
+					knownWords: knownCount,
+					assumedRank,
+					learningWords: learningCount,
 				},
 			})
 		}
 
 		return c.json({
 			id: ended.id,
+			vocabMode: ended.vocabMode,
 			wordsTestedCount: ended.wordsTestedCount,
 			wordsCorrectCount: ended.wordsCorrectCount,
 			endedAt: ended.endedAt?.toISOString(),

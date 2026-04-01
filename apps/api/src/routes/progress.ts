@@ -82,10 +82,14 @@ export const progressRoute = new Hono()
 			return c.json({ error: "No target language set" }, 400)
 		}
 
-		// Get knowledge counts by status
-		const [knownCount, totalTested, uncertainWords] = await Promise.all([
+		const [knownCount, totalTested, uncertainWords, profile] = await Promise.all([
+			// Derived "known": high confidence + enough tests
 			prisma.userWordKnowledge.count({
-				where: { userId: user.id, known: true },
+				where: {
+					userId: user.id,
+					confidence: { gte: 0.95 },
+					timesTested: { gte: 3 },
+				},
 			}),
 			prisma.userWordKnowledge.count({
 				where: { userId: user.id },
@@ -93,15 +97,26 @@ export const progressRoute = new Hono()
 			prisma.userWordKnowledge.count({
 				where: {
 					userId: user.id,
-					known: false,
-					probability: { gte: 0.3, lte: 0.7 },
+					confidence: { gte: 0.3, lte: 0.7 },
+				},
+			}),
+			prisma.userLanguageProfile.findUnique({
+				where: {
+					userId_languageId: {
+						userId: user.id,
+						languageId: dbUser.targetLanguageId,
+					},
 				},
 			}),
 		])
 
+		const assumedRank = profile?.assumedRank ?? 0
+
 		return c.json({
+			vocabSize: assumedRank + knownCount,
 			knownWords: knownCount,
-			totalTested: totalTested,
+			assumedRank,
+			totalTested,
 			uncertainWords,
 			targetLanguageId: dbUser.targetLanguageId,
 		})
@@ -150,23 +165,46 @@ export const progressRoute = new Hono()
 				},
 				select: {
 					wordId: true,
-					known: true,
-					probability: true,
+					confidence: true,
+					timesTested: true,
 				},
 			})
 
 			const knowledgeMap = new Map(knowledge.map((k) => [k.wordId, k]))
 
+			// Get assumed rank to mark words below it as "assumed known"
+			const profile = await prisma.userLanguageProfile.findUnique({
+				where: {
+					userId_languageId: {
+						userId: user.id,
+						languageId: dbUser.targetLanguageId,
+					},
+				},
+			})
+			const assumedRank = profile?.assumedRank ?? 0
+
 			const cells = words.map((w) => {
 				const k = knowledgeMap.get(w.id)
+				const isKnown = k && k.confidence >= 0.95 && k.timesTested >= 3
+				const isAssumedKnown = w.rank <= assumedRank
+
+				let status: string
+				if (isKnown || isAssumedKnown) {
+					status = "known"
+				} else if (k) {
+					status = "learning"
+				} else {
+					status = "untested"
+				}
+
 				return {
 					rank: w.rank,
 					lemma: w.lemma,
-					status: k ? (k.known ? "known" : "unknown") : "untested",
-					probability: k?.probability ?? null,
+					status,
+					confidence: k?.confidence ?? (isAssumedKnown ? 1.0 : null),
 				}
 			})
 
-			return c.json({ from, to, cells })
+			return c.json({ from, to, assumedRank, cells })
 		},
 	)
