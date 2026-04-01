@@ -130,25 +130,27 @@ export const progressRoute = new Hono()
 			z.object({
 				from: z.coerce.number().min(1).default(1),
 				to: z.coerce.number().min(1).max(10000).default(1000),
+				languageId: z.string().uuid().optional(),
 			}),
 		),
 		async (c) => {
 			const user = c.get("user")
-			const { from, to } = c.req.valid("query")
+			const { from, to, languageId: languageIdParam } = c.req.valid("query")
 
 			const dbUser = await prisma.user.findUnique({
 				where: { id: user.id },
 				select: { targetLanguageId: true },
 			})
 
-			if (!dbUser?.targetLanguageId) {
+			const languageId = languageIdParam ?? dbUser?.targetLanguageId
+			if (!languageId) {
 				return c.json({ error: "No target language set" }, 400)
 			}
 
 			// Get words in the rank range
 			const words = await prisma.word.findMany({
 				where: {
-					languageId: dbUser.targetLanguageId,
+					languageId,
 					rank: { gte: from, lte: to },
 					isOffensive: false,
 				},
@@ -173,15 +175,26 @@ export const progressRoute = new Hono()
 			const knowledgeMap = new Map(knowledge.map((k) => [k.wordId, k]))
 
 			// Get assumed rank to mark words below it as "assumed known"
-			const profile = await prisma.userLanguageProfile.findUnique({
-				where: {
-					userId_languageId: {
-						userId: user.id,
-						languageId: dbUser.targetLanguageId,
+			const [profile, knownWordsInLanguage] = await Promise.all([
+				prisma.userLanguageProfile.findUnique({
+					where: {
+						userId_languageId: {
+							userId: user.id,
+							languageId,
+						},
 					},
-				},
-			})
+				}),
+				prisma.userWordKnowledge.count({
+					where: {
+						userId: user.id,
+						confidence: { gte: 0.95 },
+						timesTested: { gte: 3 },
+						word: { languageId },
+					},
+				}),
+			])
 			const assumedRank = profile?.assumedRank ?? 0
+			const vocabSize = assumedRank + knownWordsInLanguage
 
 			const cells = words.map((w) => {
 				const k = knowledgeMap.get(w.id)
@@ -198,6 +211,7 @@ export const progressRoute = new Hono()
 				}
 
 				return {
+					wordId: w.id,
 					rank: w.rank,
 					lemma: w.lemma,
 					status,
@@ -205,6 +219,14 @@ export const progressRoute = new Hono()
 				}
 			})
 
-			return c.json({ from, to, assumedRank, cells })
+			return c.json({
+				from,
+				to,
+				languageId,
+				assumedRank,
+				knownWords: knownWordsInLanguage,
+				vocabSize,
+				cells,
+			})
 		},
 	)

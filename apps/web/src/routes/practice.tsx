@@ -1,6 +1,8 @@
 import { Link, createFileRoute } from "@tanstack/react-router"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { AuthedAppHeader } from "~/components/authed-app-header"
+import { VocabGraph } from "~/components/vocab-graph"
+import { useDevStore } from "~/stores/dev"
 import { AppHeaderBrand } from "~/components/header"
 import { ThemeToggleButton } from "~/components/theme-toggle-button"
 import { Button } from "~/components/ui/button"
@@ -91,7 +93,14 @@ function PracticePage() {
 	const [reportMsg, setReportMsg] = useState<string | null>(null)
 	/** Maps `wordId:targetSentenceId` → report id for this browser session (withdraw via Unreport). */
 	const [reportIdByQuestionKey, setReportIdByQuestionKey] = useState<Record<string, string>>({})
+	/** Build-mode vocab graph: pulse cell after each saved answer. */
+	const [answerConfidenceFlash, setAnswerConfidenceFlash] = useState<{
+		wordId: string
+		confidence: number
+		tick: number
+	} | null>(null)
 	const answerInputRef = useRef<HTMLInputElement>(null)
+	const devMode = useDevStore((s) => s.devMode)
 
 	useEffect(() => {
 		let cancelled = false
@@ -135,6 +144,7 @@ function PracticePage() {
 		setAssessmentDone(null)
 		setStatus("idle")
 		setReportIdByQuestionKey({})
+		setAnswerConfidenceFlash(null)
 	}
 
 	const nativeLabel = languageOptions.find((l) => l.id === practiceNativeId)?.name
@@ -278,7 +288,15 @@ function PracticePage() {
 			setFeedback("Could not record answer.")
 			return
 		}
-	}, [sessionId, question, answer])
+		const data = (await res.json()) as { confidence?: number }
+		if (typeof data.confidence === "number" && vocabMode === "BUILD") {
+			setAnswerConfidenceFlash({
+				wordId: question.wordId,
+				confidence: data.confidence,
+				tick: Date.now(),
+			})
+		}
+	}, [sessionId, question, answer, vocabMode])
 
 	const toggleClozeReport = useCallback(async () => {
 		if (!question || !practiceNativeId || !practiceTargetId || reportBusy) return
@@ -351,6 +369,7 @@ function PracticePage() {
 		setPracticeTargetId("")
 		setStatus("idle")
 		setReportIdByQuestionKey({})
+		setAnswerConfidenceFlash(null)
 	}
 
 	const reportKeyForQuestion = question ? clozeQuestionReportKey(question) : ""
@@ -511,6 +530,16 @@ function PracticePage() {
 								)}
 							</CardDescription>
 						</CardHeader>
+						{vocabMode === "BUILD" && !isGuest && practiceTargetId ? (
+							<div className="px-6 pb-4 overflow-visible">
+								<VocabGraph
+									languageId={practiceTargetId}
+									activeWordId={sessionId && question ? question.wordId : null}
+									answerFlash={answerConfidenceFlash}
+									showDevGrid={account?.role === "ADMIN" && devMode}
+								/>
+							</div>
+						) : null}
 						<CardContent className="space-y-4">
 							{assessmentDone ? (
 								<div className="py-8 text-center space-y-4">

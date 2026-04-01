@@ -605,6 +605,10 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 				}),
 			])
 
+			let confidenceUpdate:
+				| { confidence: number; previousConfidence: number | null }
+				| undefined
+
 			if (session.userId && user?.id === session.userId) {
 				const now = new Date()
 				const vocabMode = session.vocabMode as VocabMode
@@ -623,6 +627,11 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 					streak: existing?.streak ?? 0,
 					now,
 				})
+
+				confidenceUpdate = {
+					confidence: result.confidence,
+					previousConfidence: existing ? existing.confidence : null,
+				}
 
 				if (existing) {
 					await prisma.userWordKnowledge.update({
@@ -655,6 +664,7 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 			return c.json({
 				answerId: answer.id,
 				correct: body.correct,
+				...confidenceUpdate,
 			})
 		},
 	)

@@ -123,6 +123,19 @@
 	animation: countUp 0.5s ease-out;
 }
 
+@keyframes vocab-graph-cell-pulse {
+	0%,
+	100% {
+		filter: brightness(1);
+	}
+	50% {
+		filter: brightness(1.42);
+	}
+}
+.vocab-graph-cell-qflash {
+	animation: vocab-graph-cell-pulse 0.4s ease-out;
+}
+
 /* Stat card hover */
 @layer utilities {
 	.stat-card {

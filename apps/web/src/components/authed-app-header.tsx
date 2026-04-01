@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "@tanstack/react-router"
-import { Bug, LogOut, UserRound } from "lucide-react"
+import { LogOut, UserRound } from "lucide-react"
 import { AppHeaderBrand } from "~/components/header"
 import { ThemeToggleButton } from "~/components/theme-toggle-button"
 import { Button } from "~/components/ui/button"
@@ -57,17 +57,23 @@ export function AuthedAppHeader({
 				</h1>
 				<div className="flex items-center gap-1 sm:gap-2 shrink-0">
 					<ThemeToggleButton />
-					<Button
-						type="button"
-						variant="ghost"
-						size="icon"
-						className={cn("text-muted-foreground", devMode && "text-brand bg-brand/10")}
-						onClick={toggleDevMode}
-						aria-label={devMode ? "Disable dev mode" : "Enable dev mode"}
-						title="Dev mode"
-					>
-						<Bug className="size-[1.125rem]" />
-					</Button>
+					{isAdmin && (
+						<Button
+							type="button"
+							variant={devMode ? "default" : "outline"}
+							size="xs"
+							className={cn(
+								"min-w-[2.75rem] rounded-sm px-2 font-mono text-[10px] font-semibold tracking-wide uppercase",
+								devMode && "shadow-xs",
+							)}
+							onClick={toggleDevMode}
+							aria-pressed={devMode}
+							aria-label={devMode ? "Disable dev mode" : "Enable dev mode"}
+							title="Toggle dev mode (admin)"
+						>
+							Dev
+						</Button>
+					)}
 					<DropdownMenu>
 						<DropdownMenuTrigger asChild>
 							<Button
@@ -89,7 +95,7 @@ export function AuthedAppHeader({
 											{user.email}
 										</span>
 									)}
-									{devMode && (
+									{devMode && isAdmin && (
 										<span className="text-[10px] font-mono text-muted-foreground/90 pt-1 break-all">
 											id: {user.id}
 										</span>

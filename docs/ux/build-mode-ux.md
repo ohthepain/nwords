@@ -21,28 +21,44 @@ Colors reflect confidence on a continuous scale:
 
 ### Square Size
 
-Based on the user's assumed vocabulary rank in the language:
+Cell edge length (in CSS pixels) depends on how many ranks we **show** in the heatmap (see [Number of squares](#number-of-squares)), not on how many words exist in the corpus:
 
-| Words       | Square size |
-|-------------|-------------|
-| ≤ 100       | 8×8 px      |
-| ≤ 200       | 6×6 px      |
-| ≤ 400       | 4×4 px      |
-| ≤ 1000      | 3×3 px      |
-| ≤ 2000      | 2×2 px      |
-| > 2000      | 1×1 px      |
+| Visible ranks (cap) | Square size |
+| ------------------- | ----------- |
+| ≤ 100               | 16×16 px    |
+| ≤ 200               | 12×12 px    |
+| ≤ 400               | 8×8 px      |
+| ≤ 1000              | 6×6 px      |
+| ≤ 2000              | 4×4 px      |
+| > 2000              | 2×2 px      |
 
-Square size transitions (e.g., crossing from 100 → 101 words) can be jarring — acceptable for now.
+Square size transitions (e.g., crossing from 100 → 101 visible ranks) can be jarring — acceptable for now.
 
 ### Graph Size
 
-| Words       | Width  |
-|-------------|--------|
-| ≤ 400       | 400 px |
-| ≤ 1000      | 600 px |
-| > 2000      | 800 px |
+Total width before the mobile 50% shrink:
 
-Height is derived from width and square size. Scaled to 50% on mobile.
+| Visible ranks (cap) | Width  |
+| ------------------- | ------ |
+| ≤ 400               | 400 px |
+| ≤ 1000              | 600 px |
+| > 1000              | 800 px |
+
+Height is derived from width, square size, gap, and row count. Scaled to **50% width** on narrow mobile (`max-width: 639px`).
+
+### Number of squares
+
+The API can return up to 10k frequency-ranked words; the UI only **renders** a window around the learner so the graph matches vocabulary scale:
+
+1. **Baseline:** `max(assumedRank, vocabSize, 50)`.
+2. **Target count:** `min(loaded cells, ceil(baseline × 1.2))`.
+3. **Displayed count:** that target rounded **up** to a full row: `min(loaded, max(numCols, ceil(target / numCols) × numCols))`, where `numCols` comes from graph width and cell size.
+
+So the block grows with level but stays a small multiple of the user’s estimated vocabulary instead of filling ten thousand cells.
+
+### Admin dev mode
+
+When **DEV** is on (admins only), the subtitle includes row×column count, pixel size of each cell, a sample untested swatch, and a tooltip with how many ranks are shown vs. loaded from the API.
 
 ### Animation
 
