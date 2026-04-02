@@ -15,6 +15,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthRegisterRouteImport } from './routes/auth/register'
 import { Route as AuthLoginRouteImport } from './routes/auth/login'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
+import { Route as AuthedVocabRouteImport } from './routes/_authed/vocab'
 import { Route as AuthedSettingsRouteImport } from './routes/_authed/settings'
 import { Route as AuthedDashboardRouteImport } from './routes/_authed/dashboard'
 import { Route as AuthedAdminRouteImport } from './routes/_authed/_admin'
@@ -55,6 +56,11 @@ const ApiSplatRoute = ApiSplatRouteImport.update({
   id: '/api/$',
   path: '/api/$',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AuthedVocabRoute = AuthedVocabRouteImport.update({
+  id: '/vocab',
+  path: '/vocab',
+  getParentRoute: () => AuthedRoute,
 } as any)
 const AuthedSettingsRoute = AuthedSettingsRouteImport.update({
   id: '/settings',
@@ -120,6 +126,7 @@ export interface FileRoutesByFullPath {
   '/practice': typeof PracticeRoute
   '/dashboard': typeof AuthedDashboardRoute
   '/settings': typeof AuthedSettingsRoute
+  '/vocab': typeof AuthedVocabRoute
   '/api/$': typeof ApiSplatRoute
   '/auth/login': typeof AuthLoginRoute
   '/auth/register': typeof AuthRegisterRoute
@@ -137,6 +144,7 @@ export interface FileRoutesByTo {
   '/practice': typeof PracticeRoute
   '/dashboard': typeof AuthedDashboardRoute
   '/settings': typeof AuthedSettingsRoute
+  '/vocab': typeof AuthedVocabRoute
   '/api/$': typeof ApiSplatRoute
   '/auth/login': typeof AuthLoginRoute
   '/auth/register': typeof AuthRegisterRoute
@@ -157,6 +165,7 @@ export interface FileRoutesById {
   '/_authed/_admin': typeof AuthedAdminRouteWithChildren
   '/_authed/dashboard': typeof AuthedDashboardRoute
   '/_authed/settings': typeof AuthedSettingsRoute
+  '/_authed/vocab': typeof AuthedVocabRoute
   '/api/$': typeof ApiSplatRoute
   '/auth/login': typeof AuthLoginRoute
   '/auth/register': typeof AuthRegisterRoute
@@ -176,6 +185,7 @@ export interface FileRouteTypes {
     | '/practice'
     | '/dashboard'
     | '/settings'
+    | '/vocab'
     | '/api/$'
     | '/auth/login'
     | '/auth/register'
@@ -193,6 +203,7 @@ export interface FileRouteTypes {
     | '/practice'
     | '/dashboard'
     | '/settings'
+    | '/vocab'
     | '/api/$'
     | '/auth/login'
     | '/auth/register'
@@ -212,6 +223,7 @@ export interface FileRouteTypes {
     | '/_authed/_admin'
     | '/_authed/dashboard'
     | '/_authed/settings'
+    | '/_authed/vocab'
     | '/api/$'
     | '/auth/login'
     | '/auth/register'
@@ -278,6 +290,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/$'
       preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_authed/vocab': {
+      id: '/_authed/vocab'
+      path: '/vocab'
+      fullPath: '/vocab'
+      preLoaderRoute: typeof AuthedVocabRouteImport
+      parentRoute: typeof AuthedRoute
     }
     '/_authed/settings': {
       id: '/_authed/settings'
@@ -387,12 +406,14 @@ interface AuthedRouteChildren {
   AuthedAdminRoute: typeof AuthedAdminRouteWithChildren
   AuthedDashboardRoute: typeof AuthedDashboardRoute
   AuthedSettingsRoute: typeof AuthedSettingsRoute
+  AuthedVocabRoute: typeof AuthedVocabRoute
 }
 
 const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedAdminRoute: AuthedAdminRouteWithChildren,
   AuthedDashboardRoute: AuthedDashboardRoute,
   AuthedSettingsRoute: AuthedSettingsRoute,
+  AuthedVocabRoute: AuthedVocabRoute,
 }
 
 const AuthedRouteWithChildren =

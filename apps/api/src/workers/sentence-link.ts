@@ -98,24 +98,30 @@ export async function linkSentencesAndAssignTests(
 
 		for (const s of sentences) {
 			const tokens = tokenBySentence.get(s.id) ?? []
-			const matchedLemmaIds = new Set<string>()
+			// Count each token at most once for quality scoring (homographs expand to many word rows).
+			const matchedTokens = new Set<string>()
 			let position = 0
 			for (const t of tokens) {
 				const wids = lemmaToWordIds.get(t)
-				// Same surface form can map to multiple Word rows (different POS / senses). Without a tagger
-				// we cannot tell which applies, so linking all of them attaches the wrong sense (e.g. noun
-				// "vik" vs verb "vik") and English parallels disagree with the blank. Skip ambiguous tokens.
-				if (wids?.length === 1) {
+				if (!wids?.length) {
+					position++
+					continue
+				}
+				matchedTokens.add(t)
+				if (wids.length === 1) {
 					const [wid] = wids
-					matchedLemmaIds.add(wid)
 					sentenceWordRows.push({ sentenceId: s.id, wordId: wid, position })
+				} else {
+					for (const wid of wids) {
+						sentenceWordRows.push({ sentenceId: s.id, wordId: wid, position })
+					}
 				}
 				position++
 			}
 
 			const { score, isCandidate } = scoreSentenceQuality(
 				s.text,
-				matchedLemmaIds.size,
+				matchedTokens.size,
 				tokens.length,
 			)
 

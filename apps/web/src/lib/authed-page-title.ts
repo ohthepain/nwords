@@ -1,6 +1,7 @@
 /** Leaf route ids (see `FileRouteTypes["id"]` in routeTree.gen). */
 const ROUTE_PAGE_TITLE: Record<string, string> = {
 	"/_authed/dashboard": "Dashboard",
+	"/_authed/vocab": "My Vocab",
 	"/_authed/settings": "Settings",
 	"/_authed/_admin/admin/": "Admin",
 	"/_authed/_admin/admin/settings": "Site settings",

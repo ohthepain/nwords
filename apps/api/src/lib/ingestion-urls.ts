@@ -38,33 +38,13 @@ export function kaikkiByPosJsonlUrls(dictionaryName: string): string[] {
 }
 
 /**
- * Prefer per-POS JSONL files when all four respond to HEAD; otherwise fall back to the monolith URL.
- * Set `KAIKKI_FORCE_MONOLITH=true` to skip probing (e.g. restrictive proxies).
+ * Always uses the monolith JSONL — we now ingest all POS types (not just the four content-word
+ * exports), so the single-file download is the only source that contains everything.
  */
 export async function resolveKaikkiDownloadPlan(
 	dictionaryName: string,
 ): Promise<{ downloadUrls: string[]; mode: KaikkiIngestMode }> {
 	const label = dictionaryName.trim()
-	if (process.env.KAIKKI_FORCE_MONOLITH === "true") {
-		return { downloadUrls: [kaikkiDictionaryJsonlUrl(label)], mode: "monolith" }
-	}
-
-	const byPos = kaikkiByPosJsonlUrls(label)
-	const oks = await Promise.all(
-		byPos.map(async (u) => {
-			try {
-				const r = await fetch(u, { method: "HEAD", redirect: "follow" })
-				return r.ok
-			} catch {
-				return false
-			}
-		}),
-	)
-
-	if (oks.every(Boolean)) {
-		return { downloadUrls: byPos, mode: "by-pos" }
-	}
-
 	return { downloadUrls: [kaikkiDictionaryJsonlUrl(label)], mode: "monolith" }
 }
 

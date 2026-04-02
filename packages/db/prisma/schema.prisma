@@ -123,11 +123,14 @@ model Word {
   language        Language     @relation(fields: [languageId], references: [id])
   lemma           String
   pos             PartOfSpeech
+  alternatePos    PartOfSpeech[] @default([])
   rank            Int
   definitions     Json
   isOffensive     Boolean      @default(false)
   /// Excluded from frequency rank, cloze tests, and vocab graph (abbreviations / initialisms).
   isAbbreviation  Boolean      @default(false)
+  /// Whether this word is presented in vocabulary tests. False for function-word POS types.
+  isTestable      Boolean      @default(true)
   cefrLevel       CefrLevel?
   /// Curated sentence UUIDs suitable for vocabulary tests (ranked by quality).
   testSentenceIds String[]     @default([])
@@ -169,6 +172,14 @@ enum PartOfSpeech {
   VERB
   ADJECTIVE
   ADVERB
+  PRONOUN
+  DETERMINER
+  PREPOSITION
+  CONJUNCTION
+  PARTICLE
+  INTERJECTION
+  NUMERAL
+  PROPER_NOUN
 }
 
 enum CefrLevel {

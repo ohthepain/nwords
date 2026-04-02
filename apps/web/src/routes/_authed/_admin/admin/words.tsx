@@ -1,19 +1,45 @@
+import { auth } from "@nwords/auth/server"
 import { prisma } from "@nwords/db"
+import type { CefrLevel, PartOfSpeech } from "@nwords/db"
 import { cefrLevelForFrequencyRank } from "@nwords/shared"
 import { createFileRoute } from "@tanstack/react-router"
 import { createServerFn } from "@tanstack/react-start"
+import { getRequest } from "@tanstack/react-start/server"
 import { useEffect, useState } from "react"
 import { Button } from "~/components/ui/button"
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogHeader,
+	DialogTitle,
+} from "~/components/ui/dialog"
 import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
+import { getWordSentences, type WordSentence } from "~/lib/get-word-sentences-server-fn"
 
 // ─── Server Functions ────────────────────────────────────
 
-const getAdminLanguages = createServerFn({ method: "GET" }).handler(async () => {
-	return prisma.language.findMany({
+const loadAdminWordsPage = createServerFn({ method: "GET" }).handler(async () => {
+	const request = getRequest()
+	let defaultTargetLanguageId: string | null = null
+	if (request) {
+		const session = await auth.api.getSession({ headers: request.headers })
+		if (session?.user?.id) {
+			const user = await prisma.user.findUnique({
+				where: { id: session.user.id },
+				select: { targetLanguageId: true },
+			})
+			defaultTargetLanguageId = user?.targetLanguageId ?? null
+		}
+	}
+
+	const languages = await prisma.language.findMany({
 		orderBy: { name: "asc" },
 		select: { id: true, name: true, code: true },
 	})
+
+	return { languages, defaultTargetLanguageId }
 })
 
 const searchWords = createServerFn({ method: "POST" })
@@ -21,7 +47,7 @@ const searchWords = createServerFn({ method: "POST" })
 		(data: {
 			languageId: string
 			query: string
-			matchMode: "starts_with" | "contains" | "ends_with"
+			matchMode: "starts_with" | "contains" | "ends_with" | "exact"
 			pos?: string
 			limit: number
 		}) => data,
@@ -40,10 +66,11 @@ const searchWords = createServerFn({ method: "POST" })
 		function mapWordRow(w: {
 			id: string
 			lemma: string
-			pos: "NOUN" | "VERB" | "ADJECTIVE" | "ADVERB"
+			pos: PartOfSpeech
+			alternatePos: PartOfSpeech[]
 			rank: number
 			definitions: unknown
-			cefrLevel: "A1" | "A2" | "B1" | "B2" | "C1" | "C2" | null
+			cefrLevel: CefrLevel | null
 			isOffensive: boolean
 			language: { code: string }
 			_count: { sentenceWords: number }
@@ -52,6 +79,7 @@ const searchWords = createServerFn({ method: "POST" })
 				id: w.id,
 				lemma: w.lemma,
 				pos: w.pos,
+				alternatePos: [...w.alternatePos],
 				rank: w.rank,
 				definitions: w.definitions as string[],
 				cefrLevel: w.cefrLevel ?? cefrLevelForFrequencyRank(w.rank),
@@ -107,11 +135,13 @@ const searchWords = createServerFn({ method: "POST" })
 		const q = query.trim().toLowerCase()
 
 		const lemmaFilter =
-			matchMode === "starts_with"
-				? { startsWith: q }
-				: matchMode === "ends_with"
-					? { endsWith: q }
-					: { contains: q }
+			matchMode === "exact"
+				? { equals: q }
+				: matchMode === "starts_with"
+					? { startsWith: q }
+					: matchMode === "ends_with"
+						? { endsWith: q }
+						: { contains: q }
 
 		const where = {
 			languageId,
@@ -160,7 +190,7 @@ function parseLanguageIdSearch(raw: Record<string, unknown>): { languageId?: str
 
 export const Route = createFileRoute("/_authed/_admin/admin/words")({
 	validateSearch: parseLanguageIdSearch,
-	loader: () => getAdminLanguages(),
+	loader: () => loadAdminWordsPage(),
 	component: AdminWordsPage,
 })
 
@@ -171,6 +201,7 @@ const MATCH_MODES = [
 	{ value: "starts_with", label: "Starts with" },
 	{ value: "contains", label: "Contains" },
 	{ value: "ends_with", label: "Ends with" },
+	{ value: "exact", label: "Is exactly" },
 ] as const
 
 const POS_BADGE_STYLES: Record<string, string> = {
@@ -178,14 +209,42 @@ const POS_BADGE_STYLES: Record<string, string> = {
 	VERB: "bg-emerald-500/15 text-emerald-400",
 	ADJECTIVE: "bg-amber-500/15 text-amber-400",
 	ADVERB: "bg-purple-500/15 text-purple-400",
+	PRONOUN: "bg-pink-500/15 text-pink-400",
+	DETERMINER: "bg-cyan-500/15 text-cyan-400",
+	PREPOSITION: "bg-orange-500/15 text-orange-400",
+	CONJUNCTION: "bg-teal-500/15 text-teal-400",
+	PARTICLE: "bg-rose-500/15 text-rose-400",
+	INTERJECTION: "bg-yellow-500/15 text-yellow-400",
+	NUMERAL: "bg-indigo-500/15 text-indigo-400",
+	PROPER_NOUN: "bg-sky-500/15 text-sky-400",
+}
+
+type AdminWordRow = {
+	id: string
+	lemma: string
+	pos: string
+	alternatePos: string[]
+	rank: number
+	definitions: string[]
+	cefrLevel: string | null
+	isOffensive: boolean
+	langCode: string
+	sentenceCount: number
 }
 
 function AdminWordsPage() {
 	const { languageId: languageIdFromSearch } = Route.useSearch()
-	const languages = Route.useLoaderData()
+	const { languages, defaultTargetLanguageId } = Route.useLoaderData()
+	const { nativeLanguage } = Route.useRouteContext()
 
 	function resolveLanguageId(searchId: string | undefined): string {
 		if (searchId && languages.some((l) => l.id === searchId)) return searchId
+		if (
+			defaultTargetLanguageId &&
+			languages.some((l) => l.id === defaultTargetLanguageId)
+		) {
+			return defaultTargetLanguageId
+		}
 		return languages[0]?.id ?? ""
 	}
 
@@ -197,12 +256,30 @@ function AdminWordsPage() {
 		}
 	}, [languageIdFromSearch, languages])
 	const [query, setQuery] = useState("")
-	const [matchMode, setMatchMode] = useState<"starts_with" | "contains" | "ends_with">(
+	const [matchMode, setMatchMode] = useState<"starts_with" | "contains" | "ends_with" | "exact">(
 		"starts_with",
 	)
 	const [pos, setPos] = useState("ALL")
 	const [results, setResults] = useState<Awaited<ReturnType<typeof searchWords>> | null>(null)
 	const [searching, setSearching] = useState(false)
+
+	const [selectedWord, setSelectedWord] = useState<AdminWordRow | null>(null)
+	const [sentences, setSentences] = useState<WordSentence[]>([])
+	const [loadingSentences, setLoadingSentences] = useState(false)
+
+	async function openWordDetail(word: AdminWordRow) {
+		setSelectedWord(word)
+		setSentences([])
+		setLoadingSentences(true)
+		try {
+			const res = await getWordSentences({
+				data: { wordId: word.id, nativeLanguageId: nativeLanguage?.id ?? null },
+			})
+			setSentences(res.sentences)
+		} finally {
+			setLoadingSentences(false)
+		}
+	}
 
 	async function runWordQuery() {
 		if (!languageId) {
@@ -388,50 +465,143 @@ function AdminWordsPage() {
 							</div>
 							<div className="divide-y divide-border max-h-[60vh] overflow-auto">
 								{results.words.map((word) => (
-									<div
-										key={word.id}
-										className="grid grid-cols-[1fr_80px_70px_70px_52px_1fr] gap-3 items-center px-4 py-2 hover:bg-muted/30 transition-colors"
-									>
-										<span className="text-sm font-medium font-mono">{word.lemma}</span>
-										<span
-											className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full w-fit ${POS_BADGE_STYLES[word.pos] ?? "bg-muted text-muted-foreground"}`}
+										<button
+											type="button"
+											key={word.id}
+											className="group grid grid-cols-[1fr_80px_70px_70px_52px_1fr] gap-3 items-center px-4 py-2 hover:bg-muted/30 transition-colors w-full text-left cursor-pointer"
+											onClick={() => void openWordDetail(word)}
 										>
-											{word.pos.toLowerCase()}
-										</span>
-										<span className="text-sm font-mono tabular-nums text-right text-muted-foreground">
-											{word.rank > 0 ? word.rank.toLocaleString() : "—"}
-										</span>
-										<span
-											className="text-xs font-mono text-muted-foreground"
-											title={
-												word.rank > 0
-													? "Stored on word or inferred from frequency rank"
-													: "Run frequency import so words get rank > 0"
-											}
-										>
-											{word.cefrLevel ?? "—"}
-										</span>
-										<span
-											className="text-sm font-mono tabular-nums text-right text-muted-foreground"
-											title="Distinct sentences this word is linked to"
-										>
-											{word.sentenceCount.toLocaleString()}
-										</span>
-										<span
-											className="text-xs text-muted-foreground truncate"
-											title={Array.isArray(word.definitions) ? word.definitions.join("; ") : ""}
-										>
-											{Array.isArray(word.definitions)
-												? word.definitions.slice(0, 3).join("; ")
-												: "—"}
-										</span>
-									</div>
+											<span className="text-sm font-medium font-mono group-hover:underline underline-offset-2 decoration-foreground/60 truncate text-left">
+												{word.lemma}
+											</span>
+											<span
+												className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full w-fit ${POS_BADGE_STYLES[word.pos] ?? "bg-muted text-muted-foreground"}`}
+											>
+												{word.pos.toLowerCase()}
+											</span>
+											<span className="text-sm font-mono tabular-nums text-right text-muted-foreground">
+												{word.rank > 0 ? word.rank.toLocaleString() : "—"}
+											</span>
+											<span
+												className="text-xs font-mono text-muted-foreground"
+												title={
+													word.rank > 0
+														? "Stored on word or inferred from frequency rank"
+														: "Run frequency import so words get rank > 0"
+												}
+											>
+												{word.cefrLevel ?? "—"}
+											</span>
+											<span
+												className="text-sm font-mono tabular-nums text-right text-muted-foreground"
+												title="Distinct sentences this word is linked to"
+											>
+												{word.sentenceCount.toLocaleString()}
+											</span>
+											<span
+												className="text-xs text-muted-foreground truncate"
+												title={Array.isArray(word.definitions) ? word.definitions.join("; ") : ""}
+											>
+												{Array.isArray(word.definitions)
+													? word.definitions.slice(0, 3).join("; ")
+													: "—"}
+											</span>
+										</button>
 								))}
 							</div>
 						</div>
 					)}
 				</div>
 			)}
+
+			<Dialog open={selectedWord !== null} onOpenChange={(open) => !open && setSelectedWord(null)}>
+				<DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+					{selectedWord && (
+						<>
+							<DialogHeader>
+								<DialogTitle className="flex flex-wrap items-center gap-3">
+									<span className="font-mono text-xl">{selectedWord.lemma}</span>
+									<span
+										className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full ${POS_BADGE_STYLES[selectedWord.pos] ?? "bg-muted text-muted-foreground"}`}
+									>
+										{selectedWord.pos.toLowerCase().replace("_", " ")}
+									</span>
+									{selectedWord.alternatePos.length > 0 && (
+										<div className="flex flex-wrap items-center gap-1.5 basis-full">
+											<span className="text-[10px] text-muted-foreground uppercase tracking-[0.12em]">
+												Also
+											</span>
+											{selectedWord.alternatePos.map((p) => (
+												<span
+													key={p}
+													className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full ring-1 ring-border/50 ${POS_BADGE_STYLES[p] ?? "bg-muted text-muted-foreground"}`}
+												>
+													{p.toLowerCase().replace("_", " ")}
+												</span>
+											))}
+										</div>
+									)}
+								</DialogTitle>
+								<DialogDescription>
+									{Array.isArray(selectedWord.definitions) && selectedWord.definitions.length > 0
+										? selectedWord.definitions.slice(0, 5).join("; ")
+										: "No definitions available"}
+								</DialogDescription>
+							</DialogHeader>
+
+							<div className="grid grid-cols-2 sm:grid-cols-5 gap-3 py-2">
+								<StatCard
+									label="Rank"
+									value={selectedWord.rank > 0 ? selectedWord.rank.toLocaleString() : "—"}
+								/>
+								<StatCard label="CEFR" value={selectedWord.cefrLevel ?? "—"} />
+								<StatCard
+									label="Sentences"
+									value={selectedWord.sentenceCount.toLocaleString()}
+								/>
+								<StatCard label="Language" value={selectedWord.langCode} />
+								<StatCard label="Offensive" value={selectedWord.isOffensive ? "Yes" : "No"} />
+							</div>
+
+							<div className="space-y-2">
+								<h3 className="text-sm font-medium">Sentences</h3>
+								{loadingSentences ? (
+									<p className="text-xs text-muted-foreground py-4 text-center">Loading sentences…</p>
+								) : sentences.length === 0 ? (
+									<p className="text-xs text-muted-foreground py-4 text-center">
+										No sentences linked to this word.
+									</p>
+								) : (
+									<div className="space-y-2 max-h-[40vh] overflow-y-auto">
+										{sentences.map((s) => (
+											<div
+												key={s.id}
+												className="rounded-md border border-border px-3 py-2 text-sm space-y-1"
+											>
+												<p>{s.text}</p>
+												{s.translations.length > 0 && (
+													<p className="text-xs text-muted-foreground italic">
+														{s.translations[0]}
+													</p>
+												)}
+											</div>
+										))}
+									</div>
+								)}
+							</div>
+						</>
+					)}
+				</DialogContent>
+			</Dialog>
+		</div>
+	)
+}
+
+function StatCard({ label, value }: { label: string; value: string }) {
+	return (
+		<div className="rounded-md border border-border px-2 py-1.5 text-center">
+			<p className="text-[10px] text-muted-foreground uppercase tracking-wider">{label}</p>
+			<p className="text-sm font-mono font-medium">{value}</p>
 		</div>
 	)
 }

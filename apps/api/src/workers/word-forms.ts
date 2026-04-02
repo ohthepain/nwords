@@ -24,6 +24,22 @@ const POS_MAP: Record<string, string> = {
 	adv: "ADVERB",
 	adjective: "ADJECTIVE",
 	adverb: "ADVERB",
+	pron: "PRONOUN",
+	pronoun: "PRONOUN",
+	det: "DETERMINER",
+	determiner: "DETERMINER",
+	prep: "PREPOSITION",
+	preposition: "PREPOSITION",
+	prep_phrase: "PREPOSITION",
+	conj: "CONJUNCTION",
+	conjunction: "CONJUNCTION",
+	particle: "PARTICLE",
+	intj: "INTERJECTION",
+	interjection: "INTERJECTION",
+	num: "NUMERAL",
+	numeral: "NUMERAL",
+	name: "PROPER_NOUN",
+	proper_noun: "PROPER_NOUN",
 }
 
 interface KaikkiEntry {

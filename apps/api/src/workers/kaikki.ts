@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs"
 import { createInterface } from "node:readline"
-import type { Prisma } from "@nwords/db"
+import type { Prisma, PartOfSpeech } from "@nwords/db"
 import { prisma } from "@nwords/db"
 import type PgBoss from "pg-boss"
 import { isIngestionJobCancelled, tryMarkIngestionJobRunning } from "../lib/ingestion-job-cancel"
@@ -24,7 +24,31 @@ const POS_MAP: Record<string, string> = {
 	adv: "ADVERB",
 	adjective: "ADJECTIVE",
 	adverb: "ADVERB",
+	pron: "PRONOUN",
+	pronoun: "PRONOUN",
+	det: "DETERMINER",
+	determiner: "DETERMINER",
+	prep: "PREPOSITION",
+	preposition: "PREPOSITION",
+	prep_phrase: "PREPOSITION",
+	conj: "CONJUNCTION",
+	conjunction: "CONJUNCTION",
+	particle: "PARTICLE",
+	intj: "INTERJECTION",
+	interjection: "INTERJECTION",
+	num: "NUMERAL",
+	numeral: "NUMERAL",
+	name: "PROPER_NOUN",
+	proper_noun: "PROPER_NOUN",
 }
+
+/** POS types where the user is tested on vocabulary. */
+const TESTABLE_POS = new Set([
+	"NOUN",
+	"VERB",
+	"ADJECTIVE",
+	"ADVERB",
+])
 
 const OFFENSIVE_TAGS = new Set(["vulgar", "offensive", "slur", "derogatory", "pejorative"])
 
@@ -147,10 +171,11 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 	let batch: Array<{
 		languageId: string
 		lemma: string
-		pos: "NOUN" | "VERB" | "ADJECTIVE" | "ADVERB"
+		pos: PartOfSpeech
 		rank: number
 		definitions: Prisma.InputJsonValue
 		isOffensive: boolean
+		isTestable: boolean
 	}> = []
 
 	async function handleLine(line: string, partIndex: number): Promise<boolean> {
@@ -203,10 +228,11 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 			batch.push({
 				languageId,
 				lemma,
-				pos: mappedPos as "NOUN" | "VERB" | "ADJECTIVE" | "ADVERB",
+				pos: mappedPos as PartOfSpeech,
 				rank: 0,
 				definitions: definitions as Prisma.InputJsonValue,
 				isOffensive: false,
+				isTestable: TESTABLE_POS.has(mappedPos),
 			})
 
 			if (batch.length >= BATCH_SIZE) {
@@ -274,6 +300,25 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 		}
 
 		if (await isIngestionJobCancelled(jobId)) return
+
+		// Post-processing: populate alternatePos for each lemma that has multiple POS rows
+		await appendJobLog(jobId, "out", "Kaikki: populating alternatePos for multi-POS lemmas…")
+		await prisma.$executeRaw`
+			UPDATE word w
+			SET "alternatePos" = sub.other_pos
+			FROM (
+				SELECT w1.id,
+					array_agg(DISTINCT w2.pos) FILTER (WHERE w2.pos != w1.pos) AS other_pos
+				FROM word w1
+				JOIN word w2
+					ON w1."languageId" = w2."languageId"
+					AND w1.lemma = w2.lemma
+					AND w1.id != w2.id
+				WHERE w1."languageId" = ${languageId}::uuid
+				GROUP BY w1.id
+			) sub
+			WHERE w.id = sub.id
+		`
 
 		await appendJobLog(
 			jobId,
@@ -346,10 +391,11 @@ async function flushBatch(
 	batch: Array<{
 		languageId: string
 		lemma: string
-		pos: "NOUN" | "VERB" | "ADJECTIVE" | "ADVERB"
+		pos: PartOfSpeech
 		rank: number
 		definitions: Prisma.InputJsonValue
 		isOffensive: boolean
+		isTestable: boolean
 	}>,
 ): Promise<{ inserted: number; errors: number }> {
 	let inserted = 0
@@ -377,6 +423,8 @@ async function flushBatch(
 						definitions: word.definitions,
 						isOffensive: word.isOffensive,
 						isAbbreviation: false,
+						// Never downgrade isTestable from true → false on re-import
+						...(word.isTestable ? { isTestable: true } : {}),
 					},
 				})
 				inserted++

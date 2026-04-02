@@ -1,5 +1,5 @@
 import { Link, useNavigate, useRouter } from "@tanstack/react-router"
-import { ArrowRight, Check, Globe, LogOut, UserRound } from "lucide-react"
+import { ArrowRight, BookOpen, Check, Globe, LogOut, UserRound } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 import { AppHeaderBrand } from "~/components/header"
 import { ThemeToggleButton } from "~/components/theme-toggle-button"
@@ -267,6 +267,12 @@ export function AuthedAppHeader({
 								</div>
 							</DropdownMenuLabel>
 							<DropdownMenuSeparator />
+							<DropdownMenuItem asChild>
+								<Link to="/vocab">
+									<BookOpen className="size-4 opacity-70" />
+									My Vocab
+								</Link>
+							</DropdownMenuItem>
 							<DropdownMenuItem asChild>
 								<Link to="/settings">Settings</Link>
 							</DropdownMenuItem>
