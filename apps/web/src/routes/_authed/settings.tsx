@@ -14,6 +14,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "~/components/ui/select"
+import { VocabGraphColorsSettingsCard } from "~/components/settings/vocab-graph-colors-card"
 import { UI_STYLES, useThemeStore } from "~/stores/theme"
 
 const getSettingsData = createServerFn({ method: "GET" }).handler(async () => {
@@ -109,7 +110,7 @@ function SettingsPage() {
 	}
 
 	return (
-		<div className="max-w-2xl mx-auto px-6 py-8 space-y-6">
+		<div className="max-w-4xl mx-auto px-6 py-8 space-y-6">
 			<div>
 				<p className="text-sm text-muted-foreground mt-1">Configure your languages</p>
 			</div>
@@ -213,6 +214,10 @@ function SettingsPage() {
 					</div>
 				</CardContent>
 			</Card>
+
+			<VocabGraphColorsSettingsCard
+				previewLanguageId={targetId || data.targetLanguageId || null}
+			/>
 		</div>
 	)
 }

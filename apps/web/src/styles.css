@@ -26,6 +26,16 @@
 	--color-unknown: #ef4444;
 	--color-uncertain: #f59e0b;
 
+	/*
+	 * Vocab graph heatmap only: confidence sweeps rose → indigo (not traffic-light green).
+	 * Territory: cool wash for fully verified columns vs neutral field for the rest.
+	 */
+	--vocab-graph-confidence-low: oklch(0.52 0.11 22);
+	--vocab-graph-confidence-high: oklch(0.46 0.09 264);
+	--vocab-graph-untested: oklch(0.91 0.012 278);
+	--vocab-graph-territory-conquered: oklch(0.94 0.028 255);
+	--vocab-graph-territory-open: oklch(0.965 0.01 85);
+
 	/* Brand accent — a subtle steel blue for the "precision tool" feel */
 	--color-brand: #64748b;
 	--color-brand-foreground: #ffffff;
@@ -56,6 +66,12 @@
 		--color-known: #16a34a;
 		--color-unknown: #dc2626;
 		--color-uncertain: #d97706;
+
+		--vocab-graph-confidence-low: oklch(0.62 0.12 22);
+		--vocab-graph-confidence-high: oklch(0.58 0.1 264);
+		--vocab-graph-untested: oklch(0.32 0.024 278);
+		--vocab-graph-territory-conquered: oklch(0.26 0.045 262);
+		--vocab-graph-territory-open: oklch(0.23 0.018 280);
 
 		--color-brand: #94a3b8;
 		--color-brand-foreground: #09090b;

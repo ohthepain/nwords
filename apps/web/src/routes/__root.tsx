@@ -1,6 +1,7 @@
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router"
 import type { ReactNode } from "react"
 import { useEffect } from "react"
+import { VocabGraphThemeSync } from "~/components/vocab-graph-theme-sync"
 import { initPostHog } from "~/lib/posthog"
 import { useThemeStore } from "~/stores/theme"
 import "~/styles.css"
@@ -69,6 +70,7 @@ function RootComponent() {
 	return (
 		<RootDocument>
 			<div className="min-h-screen flex flex-col">
+				<VocabGraphThemeSync />
 				<Outlet />
 			</div>
 		</RootDocument>

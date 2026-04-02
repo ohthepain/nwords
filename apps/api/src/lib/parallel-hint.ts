@@ -756,13 +756,16 @@ export async function pickRandomWordIdForCloze(
 	targetLanguageId: string,
 	excludeWordIds: string[],
 	rankRange?: { min: number; max: number },
+	options?: { restrictToWordIds?: string[] },
 ): Promise<string | null> {
+	const restrict = options?.restrictToWordIds
 	const baseWhere: Prisma.WordWhereInput = {
 		languageId: targetLanguageId,
 		isOffensive: false,
 		isAbbreviation: false,
 		testSentenceIds: { isEmpty: false },
 		...(rankRange ? { rank: { gte: rankRange.min, lte: rankRange.max } } : { rank: { gt: 0 } }),
+		...(restrict && restrict.length > 0 ? { id: { in: restrict } } : {}),
 	}
 
 	let where: Prisma.WordWhereInput = baseWhere
@@ -779,7 +782,8 @@ export async function pickRandomWordIdForCloze(
 	let count = await prisma.word.count({ where })
 
 	// Fall back to any ranked word if the range is empty (sparse frequency data).
-	if (count === 0 && rankRange) {
+	// When restricting to a word-id set (practice graph band), do not widen outside it.
+	if (count === 0 && rankRange && !(restrict && restrict.length > 0)) {
 		const fallbackWhere: Prisma.WordWhereInput = {
 			languageId: targetLanguageId,
 			isOffensive: false,

@@ -1,0 +1,210 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+    branches:
+      - main
+      - dev
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 9.15.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+        env:
+          DATABASE_URL: postgresql://localhost:5432/dummy
+
+      - name: TypeScript check
+        run: pnpm exec tsc --noEmit
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Install Playwright browsers
+        run: pnpm --filter @nwords/web exec playwright install --with-deps chromium
+
+      - name: Build
+        run: pnpm run build
+
+      - name: End-to-end tests
+        run: pnpm run test:e2e
+
+      - name: Upload Playwright output
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: playwright-output
+          path: output/playwright
+
+  deploy-staging:
+    needs: build-and-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    environment: staging
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 25
+    env:
+      TF_VAR_network_state_bucket: ${{ secrets.AWS_TF_STATE_BUCKET }}
+      TF_VAR_environment: staging
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEPLOY }}
+          aws-region: eu-central-1
+          audience: sts.amazonaws.com
+
+      - name: Write Terraform backend.hcl
+        working-directory: terraform
+        run: |
+          {
+            echo "bucket         = \"${{ secrets.AWS_TF_STATE_BUCKET }}\""
+            echo "key            = \"app/terraform.tfstate\""
+            echo "region         = \"eu-central-1\""
+            echo "dynamodb_table = \"${{ secrets.AWS_TF_LOCK_TABLE }}\""
+            echo "encrypt        = true"
+          } > backend.hcl
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Terraform init
+        run: |
+          cd terraform
+          terraform init -backend-config=backend.hcl
+          terraform workspace select staging 2>/dev/null || terraform workspace new staging
+
+      - name: Login to ECR
+        run: |
+          cd terraform
+          ECR_URL=$(terraform output -raw ecr_repository_url)
+          aws ecr get-login-password --region eu-central-1 | docker login --username AWS --password-stdin "${ECR_URL%/*}"
+
+      - name: Build and push Docker image
+        run: |
+          cd terraform
+          ECR_URL=$(terraform output -raw ecr_repository_url)
+          cd ..
+          docker build --platform linux/arm64 -t "$ECR_URL:staging" .
+          docker push "$ECR_URL:staging"
+
+      - name: Deploy to ECS
+        run: |
+          cd terraform
+          CLUSTER=$(terraform output -raw ecs_cluster_name)
+          SERVICE=$(terraform output -raw ecs_service_name)
+          cd ..
+          aws ecs update-service \
+            --cluster "$CLUSTER" \
+            --service "$SERVICE" \
+            --force-new-deployment \
+            --region eu-central-1 \
+            --output text --query 'service.deployments[0].status'
+
+  deploy-production:
+    needs: build-and-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: production
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 25
+    env:
+      TF_VAR_network_state_bucket: ${{ secrets.AWS_TF_STATE_BUCKET }}
+      TF_VAR_environment: production
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEPLOY }}
+          aws-region: eu-central-1
+          audience: sts.amazonaws.com
+
+      - name: Write Terraform backend.hcl
+        working-directory: terraform
+        run: |
+          {
+            echo "bucket         = \"${{ secrets.AWS_TF_STATE_BUCKET }}\""
+            echo "key            = \"app/terraform.tfstate\""
+            echo "region         = \"eu-central-1\""
+            echo "dynamodb_table = \"${{ secrets.AWS_TF_LOCK_TABLE }}\""
+            echo "encrypt        = true"
+          } > backend.hcl
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Terraform init
+        run: |
+          cd terraform
+          terraform init -backend-config=backend.hcl
+          terraform workspace select production 2>/dev/null || terraform workspace new production
+
+      - name: Login to ECR
+        run: |
+          cd terraform
+          ECR_URL=$(terraform output -raw ecr_repository_url)
+          aws ecr get-login-password --region eu-central-1 | docker login --username AWS --password-stdin "${ECR_URL%/*}"
+
+      - name: Build and push Docker image
+        run: |
+          cd terraform
+          ECR_URL=$(terraform output -raw ecr_repository_url)
+          cd ..
+          docker build --platform linux/arm64 -t "$ECR_URL:production" .
+          docker push "$ECR_URL:production"
+
+      - name: Deploy to ECS
+        run: |
+          cd terraform
+          CLUSTER=$(terraform output -raw ecs_cluster_name)
+          SERVICE=$(terraform output -raw ecs_service_name)
+          cd ..
+          aws ecs update-service \
+            --cluster "$CLUSTER" \
+            --service "$SERVICE" \
+            --force-new-deployment \
+            --region eu-central-1 \
+            --output text --query 'service.deployments[0].status'

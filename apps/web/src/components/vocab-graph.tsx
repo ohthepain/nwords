@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 const GAP_PX = 1
+/** Solid territory only includes cells at or above this measured confidence (below assumed rank can still be “learning” in practice). */
+const TERRITORY_MIN_CONFIDENCE = 0.9
 
 export type VocabGraphCell = {
 	wordId: string
@@ -47,38 +49,32 @@ function heatmapTargetCellCount(
 	return Math.min(cellsLength, Math.ceil(baseline * 1.2))
 }
 
-/** Background color for a cell from continuous confidence; null = untested (grey). */
+/** Background color for a cell from continuous confidence; null = untested (neutral). */
 function cellBackground(confidence: number | null): string {
 	if (confidence === null) {
-		return "color-mix(in srgb, var(--color-muted-foreground) 35%, var(--color-muted))"
+		return "var(--vocab-graph-untested)"
 	}
-	if (confidence < 0.5) {
-		const t = confidence / 0.5
-		const alpha = 1 - t * 0.9
-		return `color-mix(in srgb, var(--color-unknown) ${Math.round(alpha * 100)}%, transparent)`
-	}
-	const t = (confidence - 0.5) / 0.5
-	const alpha = 0.1 + t * 0.9
-	return `color-mix(in srgb, var(--color-known) ${Math.round(alpha * 100)}%, transparent)`
+	const lowWeight = Math.round((1 - confidence) * 100)
+	return `color-mix(in oklch, var(--vocab-graph-confidence-low) ${lowWeight}%, var(--vocab-graph-confidence-high))`
 }
 
-function useIsNarrowMobile(): boolean {
-	const [narrow, setNarrow] = useState(false)
-	useEffect(() => {
-		const mq = window.matchMedia("(max-width: 639px)")
-		const apply = () => setNarrow(mq.matches)
-		apply()
-		mq.addEventListener("change", apply)
-		return () => mq.removeEventListener("change", apply)
-	}, [])
-	return narrow
+/** Backdrop behind fully verified columns (“conquered” territory). */
+function territorySlabFill(): string {
+	return "var(--vocab-graph-territory-conquered)"
 }
+
+function cellQualifiesForTerritory(confidence: number | null): boolean {
+	return confidence !== null && confidence >= TERRITORY_MIN_CONFIDENCE
+}
+
+const GRAPH_MIN_WIDTH_PX = 220
 
 export function VocabGraph({
 	languageId,
 	activeWordId,
 	answerFlash,
 	showDevGrid,
+	pointerProbe = true,
 }: {
 	languageId: string
 	/** Current question word — brief highlight when it changes. */
@@ -87,8 +83,11 @@ export function VocabGraph({
 	answerFlash: { wordId: string; confidence: number; tick: number } | null
 	/** When true (admin dev mode), show computed row/column count for the heatmap grid. */
 	showDevGrid?: boolean
+	/** When false, disable drag/hover word list (e.g. settings live preview). */
+	pointerProbe?: boolean
 }) {
-	const narrow = useIsNarrowMobile()
+	const measureRef = useRef<HTMLDivElement>(null)
+	const [measuredWidth, setMeasuredWidth] = useState<number | null>(null)
 	const [cells, setCells] = useState<VocabGraphCell[]>([])
 	const [assumedRank, setAssumedRank] = useState(0)
 	const [vocabSize, setVocabSize] = useState(0)
@@ -130,10 +129,26 @@ export function VocabGraph({
 		}
 	}, [languageId])
 
+	useEffect(() => {
+		const el = measureRef.current
+		if (!el || typeof ResizeObserver === "undefined") return
+		const ro = new ResizeObserver((entries) => {
+			const w = entries[0]?.contentRect.width
+			if (w != null && w > 0) setMeasuredWidth(w)
+		})
+		ro.observe(el)
+		const w0 = el.getBoundingClientRect().width
+		if (w0 > 0) setMeasuredWidth(w0)
+		return () => ro.disconnect()
+	}, [])
+
 	const targetCells = heatmapTargetCellCount(assumedRank, vocabSize, cells.length)
 	const square = squareSizePx(targetCells)
 	const baseW = graphWidthBasePx(targetCells)
-	const graphW = narrow ? Math.round(baseW * 0.5) : baseW
+	const graphW =
+		measuredWidth != null
+			? Math.max(GRAPH_MIN_WIDTH_PX, Math.min(baseW, Math.floor(measuredWidth)))
+			: baseW
 	const step = square + GAP_PX
 	const numCols = Math.max(1, Math.floor((graphW + GAP_PX) / step))
 	const displayCount = Math.min(
@@ -144,6 +159,29 @@ export function VocabGraph({
 	const graphH = numRows * step - GAP_PX
 
 	const visibleCells = useMemo(() => cells.slice(0, displayCount), [cells, displayCount])
+
+	/**
+	 * Leftmost columns where every occupied cell has measured confidence ≥ TERRITORY_MIN_CONFIDENCE.
+	 * (`status` can be “known” below assumed rank while confidence reflects real tests; we follow confidence.)
+	 */
+	const completedColsFromLeft = useMemo(() => {
+		let col = 0
+		for (; col < numCols; col++) {
+			let colOk = true
+			for (let row = 0; row < numRows; row++) {
+				const idx = col * numRows + row
+				if (idx >= visibleCells.length) break
+				if (!cellQualifiesForTerritory(visibleCells[idx].confidence)) {
+					colOk = false
+					break
+				}
+			}
+			if (!colOk) break
+		}
+		return col
+	}, [visibleCells, numCols, numRows])
+
+	const territoryWidthPx = completedColsFromLeft > 0 ? completedColsFromLeft * step - GAP_PX : 0
 
 	const gridIndexForPixel = useCallback(
 		(px: number, py: number): number | null => {
@@ -296,7 +334,10 @@ export function VocabGraph({
 	}
 
 	return (
-		<div className="relative space-y-2">
+		<div
+			ref={measureRef}
+			className="relative flex w-full min-w-0 flex-col items-center space-y-2"
+		>
 			<div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
 				<p className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider shrink-0">
 					Vocabulary graph
@@ -337,21 +378,37 @@ export function VocabGraph({
 				</p>
 			</div>
 			<div
-				className="relative rounded-lg border border-border/60 bg-muted/20 p-2 touch-none select-none"
+				className="relative mx-auto rounded-lg border border-border/60 bg-muted/20 p-2 touch-none select-none"
 				style={{ width: graphW }}
 			>
 				<div
 					role="img"
 					aria-label="Vocabulary confidence graph"
-					className="relative overflow-hidden rounded-md"
-					style={{ width: graphW, height: Number.isFinite(graphH) ? graphH : 8 }}
-					onPointerDown={onPointerDown}
-					onPointerMove={onPointerMove}
-					onPointerUp={onPointerUp}
-					onPointerCancel={onPointerUp}
+					className="relative overflow-hidden rounded-md transition-colors duration-200"
+					style={{
+						width: graphW,
+						height: Number.isFinite(graphH) ? graphH : 8,
+						backgroundColor: "var(--vocab-graph-territory-open)",
+					}}
+					onPointerDown={pointerProbe ? onPointerDown : undefined}
+					onPointerMove={pointerProbe ? onPointerMove : undefined}
+					onPointerUp={pointerProbe ? onPointerUp : undefined}
+					onPointerCancel={pointerProbe ? onPointerUp : undefined}
 				>
+					{territoryWidthPx > 0 ? (
+						<div
+							className="pointer-events-none absolute left-0 top-0 z-0 rounded-l-[3px]"
+							style={{
+								width: territoryWidthPx,
+								height: graphH,
+								backgroundColor: territorySlabFill(),
+							}}
+							aria-hidden
+							title={`${completedColsFromLeft} column${completedColsFromLeft === 1 ? "" : "s"} ≥${Math.round(TERRITORY_MIN_CONFIDENCE * 100)}% confidence throughout`}
+						/>
+					) : null}
 					<div
-						className="grid"
+						className="relative z-10 grid"
 						style={{
 							width: graphW,
 							height: graphH,
@@ -371,10 +428,17 @@ export function VocabGraph({
 
 							const inAnswer = answerAnim?.wordId === c.wordId && answerAnim.step < 8
 							const inQuestionFlash = questionFlashId === c.wordId
+							const inSolidTerritory = col < completedColsFromLeft
 
 							let background = cellBackground(c.confidence)
 							if (inAnswer && answerAnim) {
 								background = answerAnim.useTo ? answerAnim.toBg : answerAnim.fromBg
+							} else if (
+								inSolidTerritory &&
+								!inQuestionFlash &&
+								cellQualifiesForTerritory(c.confidence)
+							) {
+								background = "transparent"
 							}
 
 							const isActive = activeWordId === c.wordId
@@ -382,7 +446,7 @@ export function VocabGraph({
 								inAnswer || inQuestionFlash
 									? "0 0 0 1px color-mix(in srgb, var(--color-ring) 50%, transparent)"
 									: isActive
-										? `0 0 0 1px white`
+										? "0 0 0 1px white"
 										: undefined
 
 							return (
@@ -403,7 +467,7 @@ export function VocabGraph({
 					</div>
 				</div>
 			</div>
-			{probeWords.length > 0 && (
+			{pointerProbe && probeWords.length > 0 && (
 				<div
 					className="fixed bottom-4 left-4 right-4 z-50 max-h-40 overflow-y-auto rounded-lg border border-border/80 bg-card/95 backdrop-blur-md px-3 py-2 text-xs shadow-lg pointer-events-none sm:left-auto sm:right-6 sm:w-72"
 					aria-live="polite"

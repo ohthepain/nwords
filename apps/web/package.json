@@ -6,7 +6,7 @@
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build",
-		"start": "node .output/server/index.mjs",
+		"start": "node dist/server/server.js",
 		"test": "vitest run",
 		"test:e2e": "playwright test",
 		"typecheck": "tsc --noEmit"
@@ -18,9 +18,12 @@
 		"@nwords/shared": "workspace:*",
 		"@tanstack/react-router": "^1.95.1",
 		"@tanstack/react-start": "^1.95.1",
+		"@uiw/color-convert": "^2.9.6",
+		"@uiw/react-color-wheel": "^2.9.6",
 		"better-auth": "^1.2.3",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
+		"colord": "^2.9.3",
 		"hono": "^4.6.0",
 		"lucide-react": "^0.468.0",
 		"posthog-js": "^1.194.0",

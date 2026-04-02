@@ -1,0 +1,6 @@
+# Copy to backend.hcl (same bucket/table as bootstrap outputs).
+bucket         = "nwords-tf-state-123456789012"
+key            = "app/terraform.tfstate"
+region         = "eu-central-1"
+dynamodb_table = "nwords-terraform-locks"
+encrypt        = true

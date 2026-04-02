@@ -494,7 +494,7 @@ function PracticePage() {
       {header}
       <div className="w-full max-w-xl mx-auto px-6 py-8 space-y-6 flex-1 shrink-0">
         {vocabMode === "BUILD" && !isGuest && practiceTargetId ? (
-          <div className="pb-4 overflow-visible">
+          <div className="pb-4 overflow-visible w-full min-w-0">
             <VocabGraph
               languageId={practiceTargetId}
               activeWordId={sessionId && question ? question.wordId : null}

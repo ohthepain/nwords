@@ -1,0 +1,30 @@
+name: Staging down
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Twice daily UTC — adjust for your timezone (e.g. end of CET workday).
+    - cron: "0 19,22 * * *"
+
+concurrency:
+  group: staging-ops
+  cancel-in-progress: false
+
+jobs:
+  staging-down:
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEPLOY }}
+          aws-region: eu-central-1
+          audience: sts.amazonaws.com
+
+      - name: Park staging (ECS 0 + stop RDS)
+        run: ./scripts/staging-down.sh

@@ -1,0 +1,27 @@
+name: Staging up
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: staging-ops
+  cancel-in-progress: false
+
+jobs:
+  staging-up:
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEPLOY }}
+          aws-region: eu-central-1
+          audience: sts.amazonaws.com
+
+      - name: Unpark staging (start RDS + ECS)
+        run: ./scripts/staging-up.sh

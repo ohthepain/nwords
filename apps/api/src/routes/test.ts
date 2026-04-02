@@ -1,6 +1,11 @@
 import { zValidator } from "@hono/zod-validator"
 import { type TestSession, type VocabMode, prisma } from "@nwords/db"
-import { FRUSTRATION_WORD_MIN_TESTS, updateConfidence } from "@nwords/shared"
+import {
+	FRUSTRATION_WORD_MIN_TESTS,
+	KNOWN_CONFIDENCE_THRESHOLD,
+	KNOWN_MIN_TESTS,
+	updateConfidence,
+} from "@nwords/shared"
 import { type Context, Hono } from "hono"
 import { z } from "zod"
 import { computeSynonymFeedback } from "../lib/cloze-synonym-feedback"
@@ -65,22 +70,48 @@ const ASSESSMENT_CONVERGE_THRESHOLD = 50
 const ASSESSMENT_INITIAL_LOW = 1
 const ASSESSMENT_INITIAL_HIGH = 10000
 
-/** BUILD mode bucket weights (see docs/design/vocab-architecture.md). New 35%, shaky 50%, mood 15%. */
-const BUILD_WEIGHT_NEW = 35
-const BUILD_WEIGHT_SHAKY = 50
+/** BUILD mode bucket weights (see docs/design/vocab-architecture.md). New 45%, shaky 40%, mood 15%. */
+const BUILD_WEIGHT_NEW = 45
+const BUILD_WEIGHT_SHAKY = 40
 const BUILD_MOOD_MIN_STREAK_WRONG = 2
 const BUILD_CANDIDATE_CAP = 45
 const BUILD_SESSION_EXCLUSION_SPREAD = 28
 /** New-territory picks stay near the first gap (same band as graph, rank-ordered). */
 const BUILD_NEW_SPREAD = 8
+/** Every Nth build-mode question targets the lowest rank not yet verified known (frontier). */
+const BUILD_FRONTIER_EVERY = 10
 
 /**
- * Max rank for build-mode targets — matches heatmap “visible” extent (baseline × 1.2).
- * @see apps/web/src/components/vocab-graph.tsx heatmapTargetCellCount
+ * Lemma ids in the practice vocab graph band: same filters and rank order as GET /progress/heatmap,
+ * truncated to the first min(total in range, ceil(baseline × 1.2)) rows — matches
+ * apps/web/src/components/vocab-graph.tsx `heatmapTargetCellCount` + `cells.slice(0, targetCells)`.
+ *
+ * Build mode must use this ordinal cap, not `rank <= ceil(baseline × 1.2)` alone; sparse rank
+ * numbering can put higher numeric ranks outside the heatmap slice while still below that bound.
  */
-function buildGraphRankMax(assumedRank: number, vocabSize: number): number {
+async function buildModeGraphVisibleWordIds(
+	languageId: string,
+	assumedRank: number,
+	vocabSize: number,
+): Promise<string[]> {
 	const baseline = Math.max(assumedRank, vocabSize, 50)
-	return Math.min(10_000, Math.ceil(baseline * 1.2))
+	const targetCellCount = Math.ceil(baseline * 1.2)
+	const heatmapWhere = {
+		languageId,
+		rank: { gte: 1, lte: 10_000 },
+		isOffensive: false,
+		isAbbreviation: false,
+	}
+	const total = await prisma.word.count({ where: heatmapWhere })
+	const n = Math.min(total, targetCellCount)
+	if (n <= 0) return []
+	const rows = await prisma.word.findMany({
+		where: heatmapWhere,
+		orderBy: { rank: "asc" },
+		take: n,
+		select: { id: true },
+	})
+	return rows.map((r) => r.id)
 }
 
 function rollBuildBucket(eligibleMood: boolean): "new" | "shaky" | "mood" {
@@ -108,7 +139,7 @@ function pickPreferFreshFromOrderedIds(
 	orderedIds: string[],
 	testedInSession: Set<string>,
 	tried: Set<string>,
-	options?: { spreadCap?: number },
+	options?: { spreadCap?: number; biasTowardHead?: boolean },
 ): string | null {
 	const slice = orderedIds.slice(0, BUILD_CANDIDATE_CAP)
 	let pool = slice.filter((id) => !tried.has(id) && !testedInSession.has(id))
@@ -116,7 +147,10 @@ function pickPreferFreshFromOrderedIds(
 	if (pool.length === 0) return null
 	const cap = options?.spreadCap ?? BUILD_SESSION_EXCLUSION_SPREAD
 	const spread = Math.min(cap, pool.length)
-	return pool[Math.floor(Math.random() * spread)]
+	const idx = options?.biasTowardHead
+		? Math.min(spread - 1, Math.floor(Math.random() * Math.random() * spread))
+		: Math.floor(Math.random() * spread)
+	return pool[idx]
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
@@ -318,9 +352,10 @@ async function handleFrustrationNext(
 }
 
 /**
- * BUILD mode: fill gaps in the vocab graph band (rank ≤ ≈1.2× max(assumedRank, vocabSize)).
+ * BUILD mode: fill gaps in the vocab graph band (first min(corpus, ≈1.2× baseline) lemmas by rank).
  * New territory = first untested words above assumed rank in that band. Shaky = low-rank
  * (common) words first, then lowest confidence — includes holes below the assumed line.
+ * Every 10th question, prefer the lowest rank not yet verified known (frontier) to grow territory.
  * Guests keep the legacy rank-window random walk (no profile / knowledge).
  */
 // biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
@@ -406,8 +441,8 @@ async function handleBuildNext(
 		prisma.userWordKnowledge.count({
 			where: {
 				userId: session.userId,
-				confidence: { gte: 0.95 },
-				timesTested: { gte: 3 },
+				confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD },
+				timesTested: { gte: KNOWN_MIN_TESTS },
 				word: {
 					is: { languageId: langs.targetLanguageId, isAbbreviation: false },
 				},
@@ -417,7 +452,21 @@ async function handleBuildNext(
 
 	const assumedRank = profile?.assumedRank ?? 0
 	const vocabSize = assumedRank + knownVerifiedCount
-	const graphRankMax = buildGraphRankMax(assumedRank, vocabSize)
+	const graphVisibleWordIds = await buildModeGraphVisibleWordIds(
+		langs.targetLanguageId,
+		assumedRank,
+		vocabSize,
+	)
+	if (graphVisibleWordIds.length === 0) {
+		return c.json(
+			{
+				error: "no_question_available",
+				message:
+					"No vocabulary in the graph range for your level. Complete an assessment or try another mode.",
+			},
+			404,
+		)
+	}
 	const rankAboveFloor = Math.max(0, assumedRank)
 
 	const testedInSession = new Set(sessionAnswers.map((a) => a.wordId))
@@ -427,7 +476,8 @@ async function handleBuildNext(
 		prisma.word.findMany({
 			where: {
 				languageId: langs.targetLanguageId,
-				rank: { gt: rankAboveFloor, lte: graphRankMax },
+				id: { in: graphVisibleWordIds },
+				rank: { gt: rankAboveFloor },
 				isOffensive: false,
 				isAbbreviation: false,
 				testSentenceIds: { isEmpty: false },
@@ -444,11 +494,17 @@ async function handleBuildNext(
 		prisma.userWordKnowledge.findMany({
 			where: {
 				userId: session.userId,
-				confidence: { lt: 0.95 },
+				NOT: {
+					AND: [
+						{ confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD } },
+						{ timesTested: { gte: KNOWN_MIN_TESTS } },
+					],
+				},
 				word: {
 					is: {
 						languageId: langs.targetLanguageId,
-						rank: { gte: 1, lte: graphRankMax },
+						id: { in: graphVisibleWordIds },
+						rank: { gte: 1 },
 						isOffensive: false,
 						isAbbreviation: false,
 						testSentenceIds: { isEmpty: false },
@@ -463,12 +519,13 @@ async function handleBuildNext(
 			? prisma.userWordKnowledge.findMany({
 					where: {
 						userId: session.userId,
-						confidence: { gte: 0.95 },
-						timesTested: { gte: 3 },
+						confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD },
+						timesTested: { gte: KNOWN_MIN_TESTS },
 						word: {
 							is: {
 								languageId: langs.targetLanguageId,
-								rank: { gte: 1, lte: graphRankMax },
+								id: { in: graphVisibleWordIds },
+								rank: { gte: 1 },
 								isOffensive: false,
 								isAbbreviation: false,
 								testSentenceIds: { isEmpty: false },
@@ -484,6 +541,55 @@ async function handleBuildNext(
 	const newIds = newWords.map((w) => w.id)
 	const shakyIds = shakyKnowledge.map((k) => k.wordId)
 	const moodIds = moodKnowledge.map((k) => k.wordId)
+
+	const nextBuildQuestionNumber = sessionAnswers.length + 1
+	if (nextBuildQuestionNumber % BUILD_FRONTIER_EVERY === 0) {
+		const frontierWord = await prisma.word.findFirst({
+			where: {
+				languageId: langs.targetLanguageId,
+				id: { in: graphVisibleWordIds },
+				rank: { gt: rankAboveFloor },
+				isOffensive: false,
+				isAbbreviation: false,
+				testSentenceIds: { isEmpty: false },
+				NOT: {
+					userKnowledge: {
+						some: {
+							userId: session.userId,
+							confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD },
+							timesTested: { gte: KNOWN_MIN_TESTS },
+						},
+					},
+				},
+			},
+			orderBy: { rank: "asc" },
+			select: { id: true },
+		})
+		if (frontierWord) {
+			const resolved = await resolveClozeWithHint({
+				wordId: frontierWord.id,
+				nativeLanguageId: langs.nativeLanguageId,
+				targetLanguageId: langs.targetLanguageId,
+			})
+			if (resolved.ok) {
+				return c.json({
+					wordId: resolved.wordId,
+					lemma: resolved.lemma,
+					rank: resolved.rank,
+					targetSentenceId: resolved.targetSentenceId,
+					promptText: resolved.promptText,
+					targetSentenceText: resolved.targetSentenceText,
+					hintText: resolved.hintText,
+					hintSentenceId: resolved.hintSentenceId,
+					hintSource: resolved.hintSource,
+					inlineHint: resolved.inlineHint,
+					answerType: "TRANSLATION_TYPED" as const,
+					sessionMode: session.mode,
+					vocabMode,
+				})
+			}
+		}
+	}
 
 	const primaryBucket = rollBuildBucket(eligibleMood)
 	const bucketOrder: ("new" | "shaky" | "mood")[] =
@@ -502,6 +608,7 @@ async function handleBuildNext(
 			if (bucket === "new") {
 				wordId = pickPreferFreshFromOrderedIds(newIds, testedInSession, tried, {
 					spreadCap: BUILD_NEW_SPREAD,
+					biasTowardHead: true,
 				})
 			} else if (bucket === "shaky") {
 				wordId = pickPreferFreshFromOrderedIds(shakyIds, testedInSession, tried)
@@ -552,23 +659,16 @@ async function handleBuildNext(
 		}
 	}
 
-	// Last resort: random cloze in the graph band above assumed rank, then widen if the band is exhausted.
+	// Last resort: random cloze above assumed rank, still limited to the graph-visible lemma set.
 	const triedFallback = new Set(tried)
-	const fallbackRanges: { min: number; max: number }[] = []
 	const low = rankAboveFloor + 1
-	if (low <= graphRankMax) {
-		fallbackRanges.push({ min: low, max: graphRankMax })
-	}
-	if (low <= 10_000 && graphRankMax < 10_000) {
-		fallbackRanges.push({ min: low, max: 10_000 })
-	}
-
-	for (const rankRange of fallbackRanges) {
+	if (low <= 10_000) {
 		for (let i = 0; i < 20; i++) {
 			const wordId = await pickRandomWordIdForCloze(
 				langs.targetLanguageId,
 				[...triedFallback],
-				rankRange,
+				{ min: low, max: 10_000 },
+				{ restrictToWordIds: graphVisibleWordIds },
 			)
 			if (!wordId) break
 			triedFallback.add(wordId)
