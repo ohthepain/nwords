@@ -5,14 +5,8 @@ import { createServerFn } from "@tanstack/react-start"
 import { getRequest } from "@tanstack/react-start/server"
 import { BookOpen, ChevronDown, ChevronUp } from "lucide-react"
 import { useEffect, useState } from "react"
+import { WordDetailDialog } from "~/components/word-detail-dialog"
 import { Button } from "~/components/ui/button"
-import {
-	Dialog,
-	DialogContent,
-	DialogDescription,
-	DialogHeader,
-	DialogTitle,
-} from "~/components/ui/dialog"
 import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
 import { getWordSentences, type WordSentence } from "~/lib/get-word-sentences-server-fn"
@@ -583,84 +577,16 @@ function VocabPage() {
 				</div>
 			)}
 
-			{/* Word Detail Dialog */}
-			<Dialog open={selectedWord !== null} onOpenChange={(open) => !open && setSelectedWord(null)}>
-				<DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-					{selectedWord && (
-						<>
-							<DialogHeader>
-								<DialogTitle className="flex items-center gap-3">
-									<span className="font-mono text-xl">{selectedWord.lemma}</span>
-									<span
-										className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full ${POS_BADGE_STYLES[selectedWord.pos] ?? "bg-muted text-muted-foreground"}`}
-									>
-										{selectedWord.pos.toLowerCase().replace("_", " ")}
-									</span>
-								</DialogTitle>
-								<DialogDescription>
-									{Array.isArray(selectedWord.definitions) && selectedWord.definitions.length > 0
-										? selectedWord.definitions.slice(0, 5).join("; ")
-										: "No definitions available"}
-								</DialogDescription>
-							</DialogHeader>
-
-							{/* Stats */}
-							<div className="grid grid-cols-3 sm:grid-cols-6 gap-3 py-2">
-								<StatCard label="Confidence" value={`${Math.round(selectedWord.confidence * 100)}%`} />
-								<StatCard label="Tested" value={selectedWord.timesTested.toString()} />
-								<StatCard label="Correct" value={selectedWord.timesCorrect.toString()} />
-								<StatCard
-									label="Accuracy"
-									value={
-										selectedWord.timesTested > 0
-											? `${Math.round((selectedWord.timesCorrect / selectedWord.timesTested) * 100)}%`
-											: "—"
-									}
-								/>
-								<StatCard label="Streak" value={selectedWord.streak.toString()} />
-								<StatCard
-									label="Last correct"
-									value={
-										selectedWord.timesTested > 0
-											? selectedWord.lastCorrect
-												? "Yes"
-												: "No"
-											: "—"
-									}
-								/>
-							</div>
-
-							{/* Sentences */}
-							<div className="space-y-2">
-								<h3 className="text-sm font-medium">Sentences</h3>
-								{loadingSentences ? (
-									<p className="text-xs text-muted-foreground py-4 text-center">Loading sentences…</p>
-								) : sentences.length === 0 ? (
-									<p className="text-xs text-muted-foreground py-4 text-center">
-										No sentences linked to this word.
-									</p>
-								) : (
-									<div className="space-y-2 max-h-[40vh] overflow-y-auto">
-										{sentences.map((s) => (
-											<div
-												key={s.id}
-												className="rounded-md border border-border px-3 py-2 text-sm space-y-1"
-											>
-												<p>{s.text}</p>
-												{s.translations.length > 0 && (
-													<p className="text-xs text-muted-foreground italic">
-														{s.translations[0]}
-													</p>
-												)}
-											</div>
-										))}
-									</div>
-								)}
-							</div>
-						</>
-					)}
-				</DialogContent>
-			</Dialog>
+			<WordDetailDialog
+				open={selectedWord !== null}
+				onOpenChange={(open) => {
+					if (!open) setSelectedWord(null)
+				}}
+				variant="vocab"
+				word={selectedWord}
+				sentences={sentences}
+				loadingSentences={loadingSentences}
+			/>
 		</div>
 	)
 }
@@ -680,11 +606,3 @@ function ConfidenceBadge({ value }: { value: number }) {
 	return <span className={`${color} font-mono text-xs`}>{pct}%</span>
 }
 
-function StatCard({ label, value }: { label: string; value: string }) {
-	return (
-		<div className="rounded-md border border-border px-2 py-1.5 text-center">
-			<p className="text-[10px] text-muted-foreground uppercase tracking-wider">{label}</p>
-			<p className="text-sm font-mono font-medium">{value}</p>
-		</div>
-	)
-}

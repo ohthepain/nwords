@@ -3,6 +3,7 @@ import { type TestSession, type VocabMode, prisma } from "@nwords/db"
 import { FRUSTRATION_WORD_MIN_TESTS, updateConfidence } from "@nwords/shared"
 import { type Context, Hono } from "hono"
 import { z } from "zod"
+import { computeSynonymFeedback } from "../lib/cloze-synonym-feedback"
 import {
 	pickRandomWordIdForCloze,
 	pickWordNearRank,
@@ -510,6 +511,21 @@ async function handleBuildNext(
 			if (!wordId) continue
 			tried.add(wordId)
 
+			// #region agent log
+			fetch("http://127.0.0.1:7794/ingest/99baccff-1168-49a3-aecb-775311639d96", {
+				method: "POST",
+				headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "a3d0a4" },
+				body: JSON.stringify({
+					sessionId: "a3d0a4",
+					location: "test.ts:handleBuildNext",
+					message: "build_pick_word",
+					data: { bucket, wordId },
+					timestamp: Date.now(),
+					hypothesisId: "H3",
+				}),
+			}).catch(() => {})
+			// #endregion
+
 			const resolved = await resolveClozeWithHint({
 				wordId,
 				nativeLanguageId: langs.nativeLanguageId,
@@ -950,42 +966,63 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 				}
 			}
 
-			// ── POS mismatch detection (wrong answers only) ──
+			// ── Synonym feedback, then POS mismatch (wrong answers only; synonym first) ──
+			let synonymFeedback: { kind: "good" | "bad"; message: string } | undefined
 			let posMismatch: { guessPos: string; targetPos: string; message: string } | undefined
 
 			if (!body.correct && body.userAnswer) {
 				const langs = await resolveClozeLanguageIds(session)
 				if (langs) {
-					const targetWord = await prisma.word.findUnique({
-						where: { id: body.wordId },
-						select: { pos: true },
+					const nativeLang = await prisma.language.findUnique({
+						where: { id: langs.nativeLanguageId },
+						select: { code: true },
+					})
+					synonymFeedback = await computeSynonymFeedback({
+						userAnswer: body.userAnswer,
+						targetWordId: body.wordId,
+						targetLanguageId: langs.targetLanguageId,
+						nativeLanguageCode: nativeLang?.code ?? "en",
 					})
 
-					if (targetWord) {
-						const guessResults = await lookupUserAnswerPos(body.userAnswer, langs.targetLanguageId)
+					if (!synonymFeedback) {
+						const targetWord = await prisma.word.findUnique({
+							where: { id: body.wordId },
+							select: { pos: true },
+						})
 
-						// Only report a mismatch when ALL matched POS values differ
-						// from the target.  If any match, the user plausibly meant the
-						// right POS (e.g. "run" is both a noun and a verb).
-						const allDifferent =
-							guessResults.length > 0 && guessResults.every((g) => g.pos !== targetWord.pos)
+						if (targetWord) {
+							const guessResults = await lookupUserAnswerPos(
+								body.userAnswer,
+								langs.targetLanguageId,
+							)
 
-						if (allDifferent) {
-							const guessPos = guessResults[0].pos // most frequent
+							// Only report a mismatch when ALL matched POS values differ
+							// from the target.  If any match, the user plausibly meant the
+							// right POS (e.g. "run" is both a noun and a verb).
+							const allDifferent =
+								guessResults.length > 0 && guessResults.every((g) => g.pos !== targetWord.pos)
 
-							const msg = await prisma.posMismatchMessage.findUnique({
-								where: {
-									languageId_guessPos_targetPos: {
-										languageId: langs.nativeLanguageId,
+							if (allDifferent) {
+								const guessPos = guessResults[0].pos // most frequent
+
+								const msg = await prisma.posMismatchMessage.findUnique({
+									where: {
+										languageId_guessPos_targetPos: {
+											languageId: langs.nativeLanguageId,
+											guessPos,
+											targetPos: targetWord.pos,
+										},
+									},
+									select: { message: true },
+								})
+
+								if (msg) {
+									posMismatch = {
 										guessPos,
 										targetPos: targetWord.pos,
-									},
-								},
-								select: { message: true },
-							})
-
-							if (msg) {
-								posMismatch = { guessPos, targetPos: targetWord.pos, message: msg.message }
+										message: msg.message,
+									}
+								}
 							}
 						}
 					}
@@ -996,6 +1033,7 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 				answerId: answer.id,
 				correct: body.correct,
 				...confidenceUpdate,
+				...(synonymFeedback && { synonymFeedback }),
 				...(posMismatch && { posMismatch }),
 			})
 		},
@@ -1147,6 +1185,7 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 				hintSentenceId: z.string().uuid().nullable().optional(),
 				hintSource: z.enum(["parallel", "definition"]),
 				inlineHint: z.string().nullable().optional(),
+				userGuess: z.string().optional(),
 			}),
 		),
 		async (c) => {
@@ -1182,6 +1221,7 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 					hintSource: b.hintSource,
 					inlineHint: b.inlineHint ?? null,
 					wordLemma: b.wordLemma,
+					userGuess: b.userGuess?.trim() ? b.userGuess.trim() : null,
 				},
 			})
 

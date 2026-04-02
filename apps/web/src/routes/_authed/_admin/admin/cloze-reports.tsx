@@ -4,6 +4,7 @@ import { Link, createFileRoute } from "@tanstack/react-router"
 import { createServerFn } from "@tanstack/react-start"
 import { getRequest } from "@tanstack/react-start/server"
 import { useCallback, useEffect, useState } from "react"
+import { WordDetailDialog } from "~/components/word-detail-dialog"
 import { Button } from "~/components/ui/button"
 import { Label } from "~/components/ui/label"
 import {
@@ -13,6 +14,8 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "~/components/ui/select"
+import { getWordPanelData, type WordPanelWord } from "~/lib/get-word-panel-data-server-fn"
+import { getWordSentences, type WordSentence } from "~/lib/get-word-sentences-server-fn"
 import { cn } from "~/lib/utils"
 
 const loadClozeReportsPage = createServerFn({ method: "GET" }).handler(async () => {
@@ -55,6 +58,7 @@ type ReportRow = {
 	hintText: string
 	hintSource: string
 	inlineHint: string | null
+	userGuess: string | null
 	adminCorrectClue: string | null
 	adminNote: string | null
 }
@@ -79,18 +83,18 @@ const STATUSES = [
 	{ value: "SENTENCE_REMOVED", label: "Sentence removed" },
 	{ value: "CLUE_CORRECTED", label: "Clue corrected" },
 	{ value: "DISMISSED", label: "Dismissed" },
+	{ value: "GOOD_SYNONYM", label: "Resolved — good synonym" },
+	{ value: "BAD_SYNONYM", label: "Resolved — bad synonym" },
 ] as const
 
 function AdminClozeReportsPage() {
 	const { languageId: languageIdFromSearch, status: statusFromSearch } = Route.useSearch()
 	const { languages, defaultTargetLanguageId } = Route.useLoaderData()
+	const { nativeLanguage } = Route.useRouteContext()
 
 	function resolveLanguageId(searchId: string | undefined): string {
 		if (searchId && languages.some((l) => l.id === searchId)) return searchId
-		if (
-			defaultTargetLanguageId &&
-			languages.some((l) => l.id === defaultTargetLanguageId)
-		) {
+		if (defaultTargetLanguageId && languages.some((l) => l.id === defaultTargetLanguageId)) {
 			return defaultTargetLanguageId
 		}
 		return languages[0]?.id ?? ""
@@ -175,6 +179,38 @@ function AdminClozeReportsPage() {
 		await loadReports()
 	}
 
+	async function deleteReport(id: string) {
+		const res = await fetch(`/api/admin/cloze-reports/${id}`, {
+			method: "DELETE",
+			credentials: "include",
+		})
+		if (!res.ok) {
+			const t = await res.text()
+			throw new Error(t || res.statusText)
+		}
+		await loadReports()
+	}
+
+	const [selectedWord, setSelectedWord] = useState<WordPanelWord | null>(null)
+	const [sentences, setSentences] = useState<WordSentence[]>([])
+	const [loadingSentences, setLoadingSentences] = useState(false)
+
+	async function openWordDetail(wordId: string) {
+		setSentences([])
+		setLoadingSentences(true)
+		try {
+			const panel = await getWordPanelData({ data: { wordId } })
+			if (!panel) return
+			setSelectedWord(panel.word)
+			const res = await getWordSentences({
+				data: { wordId, nativeLanguageId: nativeLanguage?.id ?? null },
+			})
+			setSentences(res.sentences)
+		} finally {
+			setLoadingSentences(false)
+		}
+	}
+
 	if (!languages.length) {
 		return (
 			<div className="p-6 max-w-3xl mx-auto">
@@ -256,7 +292,7 @@ function AdminClozeReportsPage() {
 			<ul className="space-y-6">
 				{reports.map((r) => (
 					<li key={r.id}>
-						<ReportCard report={r} onPatch={patchReport} />
+						<ReportCard report={r} onPatch={patchReport} onDelete={deleteReport} onRefresh={loadReports} onOpenWord={openWordDetail} />
 					</li>
 				))}
 			</ul>
@@ -264,6 +300,17 @@ function AdminClozeReportsPage() {
 			{!listError && loadState === "idle" && reports.length === 0 && (
 				<p className="text-sm text-muted-foreground">No reports for this filter.</p>
 			)}
+
+			<WordDetailDialog
+				open={selectedWord !== null}
+				onOpenChange={(open) => {
+					if (!open) setSelectedWord(null)
+				}}
+				variant="admin"
+				word={selectedWord}
+				sentences={sentences}
+				loadingSentences={loadingSentences}
+			/>
 		</div>
 	)
 }
@@ -271,30 +318,100 @@ function AdminClozeReportsPage() {
 function ReportCard({
 	report: r,
 	onPatch,
+	onDelete,
+	onRefresh,
+	onOpenWord,
 }: {
 	report: ReportRow
 	onPatch: (
 		id: string,
 		body: { status: string; adminCorrectClue?: string; adminNote?: string },
 	) => Promise<void>
+	onDelete: (id: string) => Promise<void>
+	onRefresh: () => Promise<void>
+	onOpenWord: (wordId: string) => Promise<void>
 }) {
 	const [correctClue, setCorrectClue] = useState(r.adminCorrectClue ?? "")
 	const [note, setNote] = useState(r.adminNote ?? "")
 	const [busy, setBusy] = useState(false)
 	const [err, setErr] = useState<string | null>(null)
+	const [synonymSaved, setSynonymSaved] = useState<string | null>(null)
+	const [aiVerdict, setAiVerdict] = useState<"GOOD_SYNONYM" | "BAD_SYNONYM" | "NOT_SYNONYM" | null>(
+		null,
+	)
+	const [aiChecking, setAiChecking] = useState(false)
+	const [aiError, setAiError] = useState<string | null>(null)
 
 	useEffect(() => {
 		setCorrectClue(r.adminCorrectClue ?? "")
 		setNote(r.adminNote ?? "")
+		setSynonymSaved(null)
+		setAiVerdict(null)
+		setAiError(null)
 	}, [r.adminCorrectClue, r.adminNote])
 
+	async function checkSynonymWithAi() {
+		setAiChecking(true)
+		setAiError(null)
+		try {
+			const res = await fetch(`/api/admin/cloze-reports/${r.id}/check-synonym`, {
+				method: "POST",
+				credentials: "include",
+			})
+			const payload = (await res.json().catch(() => null)) as {
+				verdict?: string
+				error?: string
+			} | null
+			if (!res.ok) throw new Error(payload?.error ?? res.statusText)
+			const v = payload?.verdict as typeof aiVerdict
+			if (v === "GOOD_SYNONYM" || v === "BAD_SYNONYM" || v === "NOT_SYNONYM") {
+				setAiVerdict(v)
+			}
+		} catch (e) {
+			setAiError(e instanceof Error ? e.message : "AI check failed")
+		} finally {
+			setAiChecking(false)
+		}
+	}
+
+	async function registerSynonym(quality: "GOOD" | "BAD") {
+		setErr(null)
+		setSynonymSaved(null)
+		setBusy(true)
+		try {
+			const res = await fetch(`/api/admin/cloze-reports/${r.id}/synonym`, {
+				method: "POST",
+				credentials: "include",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ quality }),
+			})
+			const payload = (await res.json().catch(() => null)) as {
+				error?: string
+				guessLemma?: string
+				targetLemma?: string
+				quality?: string
+			} | null
+			if (!res.ok) {
+				throw new Error(payload?.error ?? res.statusText)
+			}
+			const okBody = payload as { guessLemma?: string; targetLemma?: string; quality?: string }
+			if (okBody.guessLemma && okBody.targetLemma) {
+				setSynonymSaved(
+					`Registered ${okBody.quality ?? quality} synonym: ${okBody.guessLemma} ↔ ${okBody.targetLemma}`,
+				)
+			} else {
+				setSynonymSaved("Synonym pair saved.")
+			}
+			await onRefresh()
+		} catch (e) {
+			setErr(e instanceof Error ? e.message : "Could not save synonym")
+		} finally {
+			setBusy(false)
+		}
+	}
+
 	async function go(
-		status:
-			| "REMOVE_CANDIDATE"
-			| "SENTENCE_REMOVED"
-			| "CLUE_CORRECTED"
-			| "DISMISSED"
-			| "PENDING",
+		status: "REMOVE_CANDIDATE" | "SENTENCE_REMOVED" | "CLUE_CORRECTED" | "DISMISSED" | "PENDING",
 		opts?: { requireClue?: boolean },
 	) {
 		setErr(null)
@@ -329,8 +446,101 @@ function ReportCard({
 
 			<div className="space-y-1">
 				<p className="text-xs font-mono uppercase tracking-wider text-muted-foreground">Word</p>
-				<p className="font-medium">{r.wordLemma}</p>
+				<button
+					type="button"
+					className="font-medium underline decoration-muted-foreground/40 hover:decoration-foreground cursor-pointer"
+					onClick={() => void onOpenWord(r.wordId)}
+				>
+					{r.wordLemma}
+				</button>
 			</div>
+
+			{r.userGuess != null && r.userGuess !== "" && (
+				<div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
+					<p className="text-xs font-mono uppercase tracking-wider text-muted-foreground">
+						User&apos;s guess
+					</p>
+					<p className="text-sm leading-relaxed font-medium">{r.userGuess}</p>
+					<div className="flex flex-wrap gap-2 pt-1">
+						{aiVerdict === null ? (
+							<>
+								<Button
+									type="button"
+									size="sm"
+									variant="secondary"
+									disabled={busy || aiChecking}
+									onClick={() => void checkSynonymWithAi()}
+								>
+									{aiChecking ? "Checking…" : "Check synonym"}
+								</Button>
+								<Button
+									type="button"
+									size="sm"
+									disabled={busy}
+									onClick={() => void registerSynonym("GOOD")}
+								>
+									Good synonym
+								</Button>
+								<Button
+									type="button"
+									size="sm"
+									variant="outline"
+									disabled={busy}
+									onClick={() => void registerSynonym("BAD")}
+								>
+									Bad synonym
+								</Button>
+							</>
+						) : aiVerdict === "NOT_SYNONYM" ? (
+							<>
+								<p className="text-xs text-muted-foreground self-center">
+									AI says: not a synonym
+								</p>
+								<Button
+									type="button"
+									size="sm"
+									variant="outline"
+									disabled={busy}
+									onClick={() => void registerSynonym("BAD")}
+								>
+									Bad synonym
+								</Button>
+								<Button
+									type="button"
+									size="sm"
+									variant="ghost"
+									onClick={() => setAiVerdict(null)}
+								>
+									Reset
+								</Button>
+							</>
+						) : (
+							<>
+								<Button
+									type="button"
+									size="sm"
+									disabled={busy}
+									onClick={() =>
+										void registerSynonym(aiVerdict === "GOOD_SYNONYM" ? "GOOD" : "BAD")
+									}
+								>
+									{aiVerdict === "GOOD_SYNONYM" ? "Good synonym" : "Bad synonym"}
+								</Button>
+								<Button
+									type="button"
+									size="sm"
+									variant="ghost"
+									onClick={() => setAiVerdict(null)}
+								>
+									Reset
+								</Button>
+							</>
+						)}
+					</div>
+					{aiError && <p className="text-xs text-destructive">{aiError}</p>}
+					{synonymSaved && <p className="text-xs text-muted-foreground">{synonymSaved}</p>}
+				</div>
+			)}
 
 			<div className="space-y-1">
 				<p className="text-xs font-mono uppercase tracking-wider text-muted-foreground">
@@ -426,6 +636,27 @@ function ReportCard({
 				>
 					Reopen
 				</Button>
+				{r.status === "DISMISSED" && (
+					<Button
+						type="button"
+						size="sm"
+						variant="destructive"
+						disabled={busy}
+						onClick={async () => {
+							setBusy(true)
+							setErr(null)
+							try {
+								await onDelete(r.id)
+							} catch (e) {
+								setErr(e instanceof Error ? e.message : "Delete failed")
+							} finally {
+								setBusy(false)
+							}
+						}}
+					>
+						Delete
+					</Button>
+				)}
 			</div>
 		</div>
 	)

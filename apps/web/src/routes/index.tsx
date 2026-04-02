@@ -1,11 +1,18 @@
 import { Link, createFileRoute } from "@tanstack/react-router"
 import { AppHeaderBrand } from "~/components/header"
+import { getSession } from "~/lib/auth-session"
 
 export const Route = createFileRoute("/")({
+	beforeLoad: async () => {
+		const session = await getSession()
+		return { isSignedIn: Boolean(session?.user) }
+	},
 	component: HomePage,
 })
 
 function HomePage() {
+	const { isSignedIn } = Route.useRouteContext()
+
 	return (
 		<div className="flex-1 flex flex-col">
 			{/* Nav */}
@@ -13,18 +20,38 @@ function HomePage() {
 				<div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between gap-4">
 					<AppHeaderBrand />
 					<nav className="flex items-center gap-4">
-						<Link
-							to="/auth/login"
-							className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-						>
-							Sign in
-						</Link>
-						<Link
-							to="/auth/register"
-							className="text-sm bg-primary text-primary-foreground px-4 py-2 rounded-md font-medium hover:opacity-90 transition-opacity"
-						>
-							Get started
-						</Link>
+						{isSignedIn ? (
+							<>
+								<Link
+									to="/dashboard"
+									className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+								>
+									Dashboard
+								</Link>
+								<Link
+									to="/practice"
+									search={{ vocabMode: "BUILD" }}
+									className="text-sm bg-primary text-primary-foreground px-4 py-2 rounded-md font-medium hover:opacity-90 transition-opacity"
+								>
+									Enter build mode
+								</Link>
+							</>
+						) : (
+							<>
+								<Link
+									to="/auth/login"
+									className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+								>
+									Sign in
+								</Link>
+								<Link
+									to="/auth/register"
+									className="text-sm bg-primary text-primary-foreground px-4 py-2 rounded-md font-medium hover:opacity-90 transition-opacity"
+								>
+									Get started
+								</Link>
+							</>
+						)}
 					</nav>
 				</div>
 			</header>
@@ -61,10 +88,10 @@ function HomePage() {
 							Start measuring
 						</Link>
 						<Link
-							to="/auth/register"
+							to={isSignedIn ? "/dashboard" : "/auth/register"}
 							className="border border-border px-6 py-3 rounded-md text-sm font-medium hover:bg-accent transition-all"
 						>
-							Save progress
+							{isSignedIn ? "Dashboard" : "Save progress"}
 						</Link>
 						<a
 							href="#how-it-works"

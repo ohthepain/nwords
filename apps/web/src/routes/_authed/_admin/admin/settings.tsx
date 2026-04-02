@@ -2,6 +2,15 @@ import { Link, createFileRoute } from "@tanstack/react-router"
 import { useCallback, useEffect, useState } from "react"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
+import { Label } from "~/components/ui/label"
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "~/components/ui/select"
+import { cn } from "~/lib/utils"
 
 export const Route = createFileRoute("/_authed/_admin/admin/settings")({
 	component: AdminSiteSettingsPage,
@@ -10,6 +19,9 @@ export const Route = createFileRoute("/_authed/_admin/admin/settings")({
 type AppSettingsResponse = {
 	id: string
 	showHints: boolean
+	aiProvider: string | null
+	aiModel: string | null
+	aiApiKeySet: boolean
 	updatedAt: string
 }
 
@@ -191,6 +203,132 @@ function AdminSiteSettingsPage() {
 					) : null}
 				</CardContent>
 			</Card>
+
+			<AiConfigCard settings={settings} onSaved={setSettings} />
 		</div>
+	)
+}
+
+const AI_PROVIDERS = [
+	{ value: "anthropic", label: "Anthropic" },
+	{ value: "openai", label: "OpenAI" },
+]
+
+function AiConfigCard({
+	settings,
+	onSaved,
+}: { settings: AppSettingsResponse | null; onSaved: (s: AppSettingsResponse) => void }) {
+	const [provider, setProvider] = useState(settings?.aiProvider ?? "")
+	const [model, setModel] = useState(settings?.aiModel ?? "")
+	const [apiKey, setApiKey] = useState("")
+	const [saving, setSaving] = useState(false)
+	const [error, setError] = useState<string | null>(null)
+	const [saved, setSaved] = useState(false)
+
+	useEffect(() => {
+		setProvider(settings?.aiProvider ?? "")
+		setModel(settings?.aiModel ?? "")
+	}, [settings?.aiProvider, settings?.aiModel])
+
+	async function save() {
+		setSaving(true)
+		setError(null)
+		setSaved(false)
+		const body: Record<string, string> = {}
+		if (provider) body.aiProvider = provider
+		if (model) body.aiModel = model
+		if (apiKey) body.aiApiKey = apiKey
+		const res = await fetch("/api/admin/settings", {
+			method: "PATCH",
+			credentials: "include",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body),
+		})
+		setSaving(false)
+		if (!res.ok) {
+			const b = (await res.json().catch(() => ({}))) as { error?: string }
+			setError(b.error ?? "Save failed.")
+			return
+		}
+		const data = (await res.json()) as AppSettingsResponse
+		onSaved(data)
+		setApiKey("")
+		setSaved(true)
+	}
+
+	const inputCn = cn(
+		"flex w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none",
+		"placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+		"dark:bg-input/30",
+	)
+
+	return (
+		<Card>
+			<CardHeader>
+				<CardTitle className="text-base">AI / LLM configuration</CardTitle>
+				<CardDescription>
+					Configure the AI provider and model used for synonym checking and other AI-powered
+					features.
+				</CardDescription>
+			</CardHeader>
+			<CardContent className="space-y-4">
+				<div className="space-y-2">
+					<Label htmlFor="ai-provider">Provider</Label>
+					<Select value={provider} onValueChange={setProvider}>
+						<SelectTrigger id="ai-provider" className="w-full max-w-xs">
+							<SelectValue placeholder="Select provider" />
+						</SelectTrigger>
+						<SelectContent>
+							{AI_PROVIDERS.map((p) => (
+								<SelectItem key={p.value} value={p.value}>
+									{p.label}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+				</div>
+
+				<div className="space-y-2">
+					<Label htmlFor="ai-model">Model</Label>
+					<input
+						id="ai-model"
+						value={model}
+						onChange={(e) => setModel(e.target.value)}
+						placeholder="e.g. claude-sonnet-4-20250514"
+						className={cn(inputCn, "max-w-xs")}
+					/>
+				</div>
+
+				<div className="space-y-2">
+					<Label htmlFor="ai-api-key">API key</Label>
+					<input
+						id="ai-api-key"
+						type="password"
+						value={apiKey}
+						onChange={(e) => setApiKey(e.target.value)}
+						placeholder={settings?.aiApiKeySet ? "••••••••  (key is set)" : "Enter API key"}
+						className={cn(inputCn, "max-w-xs")}
+					/>
+					{settings?.aiApiKeySet && !apiKey && (
+						<p className="text-xs text-muted-foreground">
+							A key is already saved. Enter a new one to replace it.
+						</p>
+					)}
+				</div>
+
+				{error && (
+					<p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-3 py-2">
+						{error}
+					</p>
+				)}
+				{saved && (
+					<p className="text-sm text-muted-foreground">AI settings saved.</p>
+				)}
+
+				<Button type="button" disabled={saving || !provider || !model} onClick={() => void save()}>
+					{saving ? "Saving…" : "Save AI settings"}
+				</Button>
+			</CardContent>
+		</Card>
 	)
 }

@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs"
 import { createInterface } from "node:readline"
 import type { Prisma, PartOfSpeech } from "@nwords/db"
+import { ABBREV_TITLE_LEMMAS } from "@nwords/shared"
 import { prisma } from "@nwords/db"
 import type PgBoss from "pg-boss"
 import { isIngestionJobCancelled, tryMarkIngestionJobRunning } from "../lib/ingestion-job-cancel"
@@ -176,6 +177,7 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 		definitions: Prisma.InputJsonValue
 		isOffensive: boolean
 		isTestable: boolean
+		isAbbreviation: boolean
 	}> = []
 
 	async function handleLine(line: string, partIndex: number): Promise<boolean> {
@@ -225,6 +227,7 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 				return true
 			}
 
+			const isTitleAbbrev = ABBREV_TITLE_LEMMAS.has(lemma)
 			batch.push({
 				languageId,
 				lemma,
@@ -232,7 +235,8 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 				rank: 0,
 				definitions: definitions as Prisma.InputJsonValue,
 				isOffensive: false,
-				isTestable: TESTABLE_POS.has(mappedPos),
+				isTestable: TESTABLE_POS.has(mappedPos) && !isTitleAbbrev,
+				isAbbreviation: isTitleAbbrev,
 			})
 
 			if (batch.length >= BATCH_SIZE) {
@@ -396,6 +400,7 @@ async function flushBatch(
 		definitions: Prisma.InputJsonValue
 		isOffensive: boolean
 		isTestable: boolean
+		isAbbreviation: boolean
 	}>,
 ): Promise<{ inserted: number; errors: number }> {
 	let inserted = 0
@@ -422,8 +427,15 @@ async function flushBatch(
 					update: {
 						definitions: word.definitions,
 						isOffensive: word.isOffensive,
-						isAbbreviation: false,
-						// Never downgrade isTestable from true → false on re-import
+						...(word.isAbbreviation
+							? {
+									isAbbreviation: true,
+									isTestable: false,
+									rank: 0,
+									testSentenceIds: [],
+									cefrLevel: null,
+								}
+							: {}),
 						...(word.isTestable ? { isTestable: true } : {}),
 					},
 				})

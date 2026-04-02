@@ -38,3 +38,31 @@ export async function lookupUserAnswerPos(
 
 	return result
 }
+
+/** Dictionary entries matching a typed cloze answer (lemma or surface form), best rank first. */
+export async function lookupUserAnswerWords(
+	userAnswer: string,
+	targetLanguageId: string,
+): Promise<Array<{ id: string; lemma: string; rank: number }>> {
+	const normalized = userAnswer.trim().toLowerCase()
+	if (!normalized) return []
+
+	const words = await prisma.word.findMany({
+		where: {
+			languageId: targetLanguageId,
+			OR: [{ lemma: normalized }, { forms: { some: { form: normalized } } }],
+		},
+		select: { id: true, lemma: true, rank: true },
+		orderBy: { rank: "asc" },
+	})
+
+	const seen = new Set<string>()
+	const result: Array<{ id: string; lemma: string; rank: number }> = []
+	for (const w of words) {
+		if (!seen.has(w.id)) {
+			seen.add(w.id)
+			result.push(w)
+		}
+	}
+	return result
+}

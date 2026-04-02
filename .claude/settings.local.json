@@ -24,7 +24,10 @@
       "Bash(find /Users/paulwilkinson/projects/claude/nwords/docs -type f \\\\\\(-name *.md \\\\\\))",
       "Read(//opt/homebrew/Cellar/node/23.10.0_1/bin/**)",
       "Read(//usr/local/bin/**)",
-      "Read(//opt/homebrew/**)"
+      "Read(//opt/homebrew/**)",
+      "Bash(/Users/paulwilkinson/projects/claude/nwords/node_modules/.bin/tsc --noEmit -p /Users/paulwilkinson/projects/claude/nwords/apps/api/tsconfig.json)",
+      "Bash(node_modules/.bin/tsc --noEmit -p apps/api/tsconfig.json)",
+      "Bash(node_modules/.bin/tsc --noEmit -p apps/web/tsconfig.json)"
     ]
   },
   "allowed_tools": [

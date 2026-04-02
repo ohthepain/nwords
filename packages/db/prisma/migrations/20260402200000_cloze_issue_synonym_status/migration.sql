@@ -1,0 +1,3 @@
+-- AlterEnum
+ALTER TYPE "ClozeIssueStatus" ADD VALUE 'GOOD_SYNONYM';
+ALTER TYPE "ClozeIssueStatus" ADD VALUE 'BAD_SYNONYM';

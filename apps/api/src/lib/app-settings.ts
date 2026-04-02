@@ -12,3 +12,9 @@ export async function getAppSettings() {
 		update: {},
 	})
 }
+
+export async function getAiConfig() {
+	const s = await getAppSettings()
+	if (!s.aiProvider || !s.aiModel || !s.aiApiKey) return null
+	return { provider: s.aiProvider, model: s.aiModel, apiKey: s.aiApiKey }
+}

@@ -111,6 +111,7 @@ model Language {
   clozeReportsAsNative ClozeIssueReport[] @relation("ClozeReportNative")
   clozeReportsAsTarget ClozeIssueReport[] @relation("ClozeReportTarget")
   posMismatchMessages  PosMismatchMessage[]
+  wordSynonymPairs     WordSynonymPair[]
 
   @@map("language")
 }
@@ -141,6 +142,8 @@ model Word {
   userKnowledge UserWordKnowledge[]
   forms         WordForm[]
   clozeIssueReports ClozeIssueReport[]
+  synonymPairsAsLow  WordSynonymPair[] @relation("SynonymWordLow")
+  synonymPairsAsHigh WordSynonymPair[] @relation("SynonymWordHigh")
 
   @@unique([languageId, lemma, pos])
   @@index([languageId, rank])
@@ -165,6 +168,32 @@ model WordForm {
   @@index([languageId, form])
   @@index([wordId])
   @@map("word_form")
+}
+
+/// Admin-curated same-language word pairs for cloze synonym feedback (bidirectional).
+enum SynonymQuality {
+  GOOD
+  BAD
+}
+
+model WordSynonymPair {
+  id         String         @id @default(uuid()) @db.Uuid
+  languageId String         @db.Uuid
+  language   Language       @relation(fields: [languageId], references: [id], onDelete: Restrict)
+  /// Always `min(wordA.id, wordB.id)` — enforced when writing.
+  wordIdLow  String         @db.Uuid
+  /// Always `max(wordA.id, wordB.id)`.
+  wordIdHigh String         @db.Uuid
+  wordLow    Word           @relation("SynonymWordLow", fields: [wordIdLow], references: [id], onDelete: Cascade)
+  wordHigh   Word           @relation("SynonymWordHigh", fields: [wordIdHigh], references: [id], onDelete: Cascade)
+  quality    SynonymQuality
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  @@unique([languageId, wordIdLow, wordIdHigh])
+  @@index([languageId, wordIdLow])
+  @@index([languageId, wordIdHigh])
+  @@map("word_synonym_pair")
 }
 
 enum PartOfSpeech {
@@ -376,6 +405,10 @@ enum ClozeIssueStatus {
   SENTENCE_REMOVED
   CLUE_CORRECTED
   DISMISSED
+  /// Reporter's guess registered as an acceptable synonym for the target word.
+  GOOD_SYNONYM
+  /// Reporter's guess registered as a non-synonym (explicit mismatch) for the target word.
+  BAD_SYNONYM
 }
 
 model ClozeIssueReport {
@@ -397,6 +430,8 @@ model ClozeIssueReport {
   hintText         String           @db.Text
   hintSource       String
   inlineHint       String?          @db.Text
+  /// What the user typed when they reported (if any).
+  userGuess        String?          @db.Text
   wordLemma        String
   status           ClozeIssueStatus @default(PENDING)
   adminCorrectClue String?          @db.Text
@@ -461,6 +496,9 @@ model PosMismatchMessage {
 model AppSettings {
   id        String   @id
   showHints Boolean  @default(false)
+  aiProvider String?  @map("ai_provider")
+  aiModel    String?  @map("ai_model")
+  aiApiKey   String?  @map("ai_api_key")
   updatedAt DateTime @updatedAt
 
   @@map("app_settings")

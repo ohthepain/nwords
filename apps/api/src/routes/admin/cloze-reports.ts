@@ -2,6 +2,9 @@ import { zValidator } from "@hono/zod-validator"
 import { prisma } from "@nwords/db"
 import { Hono } from "hono"
 import { z } from "zod"
+import { checkSynonymWithLlm } from "../../lib/ai"
+import { lookupUserAnswerWords } from "../../lib/pos-lookup"
+import { upsertWordSynonymPair } from "../../lib/word-synonym-pair"
 import { adminMiddleware } from "../../middleware/admin"
 import { authMiddleware } from "../../middleware/auth"
 
@@ -11,6 +14,8 @@ const statusSchema = z.enum([
 	"SENTENCE_REMOVED",
 	"CLUE_CORRECTED",
 	"DISMISSED",
+	"GOOD_SYNONYM",
+	"BAD_SYNONYM",
 ])
 
 export const adminClozeReportsRoute = new Hono()
@@ -32,7 +37,9 @@ export const adminClozeReportsRoute = new Hono()
 			const reports = await prisma.clozeIssueReport.findMany({
 				where: {
 					...(targetLanguageId ? { targetLanguageId } : {}),
-					...(status ? { status } : {}),
+					...(status
+						? { status }
+						: { status: { not: "DISMISSED" } }),
 				},
 				orderBy: { createdAt: "desc" },
 				take: limit,
@@ -59,12 +66,91 @@ export const adminClozeReportsRoute = new Hono()
 					hintText: r.hintText,
 					hintSource: r.hintSource,
 					inlineHint: r.inlineHint,
+					userGuess: r.userGuess,
 					adminCorrectClue: r.adminCorrectClue,
 					adminNote: r.adminNote,
 				})),
 			})
 		},
 	)
+
+	.post(
+		"/:id/synonym",
+		zValidator("json", z.object({ quality: z.enum(["GOOD", "BAD"]) })),
+		async (c) => {
+			const { id } = c.req.param()
+			const { quality } = c.req.valid("json")
+
+			const report = await prisma.clozeIssueReport.findUnique({ where: { id } })
+			if (!report) {
+				return c.json({ error: "Report not found" }, 404)
+			}
+
+			const guessRaw = report.userGuess?.trim()
+			if (!guessRaw) {
+				return c.json({ error: "Report has no user guess to map to a word" }, 400)
+			}
+
+			const candidates = await lookupUserAnswerWords(guessRaw, report.targetLanguageId)
+			if (candidates.length === 0) {
+				return c.json(
+					{
+						error: "Could not resolve the guess to a dictionary word in the target language",
+					},
+					400,
+				)
+			}
+
+			const guessWord = candidates[0]
+			if (guessWord.id === report.wordId) {
+				return c.json({ error: "Guess resolves to the same word as the cloze target" }, 400)
+			}
+
+			await upsertWordSynonymPair(report.targetLanguageId, guessWord.id, report.wordId, quality)
+
+			const nextStatus = quality === "GOOD" ? "GOOD_SYNONYM" : "BAD_SYNONYM"
+			await prisma.clozeIssueReport.update({
+				where: { id },
+				data: { status: nextStatus },
+			})
+
+			return c.json({
+				ok: true,
+				quality,
+				status: nextStatus,
+				guessLemma: guessWord.lemma,
+				targetLemma: report.wordLemma,
+			})
+		},
+	)
+
+	.post("/:id/check-synonym", async (c) => {
+		const { id } = c.req.param()
+		const report = await prisma.clozeIssueReport.findUnique({
+			where: { id },
+			include: {
+				targetLanguage: { select: { code: true } },
+				nativeLanguage: { select: { code: true } },
+			},
+		})
+		if (!report) return c.json({ error: "Report not found" }, 404)
+		if (!report.userGuess?.trim()) return c.json({ error: "Report has no user guess" }, 400)
+
+		try {
+			const verdict = await checkSynonymWithLlm({
+				wordLemma: report.wordLemma,
+				userGuess: report.userGuess.trim(),
+				targetSentenceText: report.targetSentenceText,
+				promptText: report.promptText,
+				targetLanguageCode: report.targetLanguage.code,
+				nativeLanguageCode: report.nativeLanguage.code,
+			})
+			return c.json({ verdict })
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : "LLM check failed"
+			return c.json({ error: msg }, 500)
+		}
+	})
 
 	.patch(
 		"/:id",
@@ -148,9 +234,25 @@ export const adminClozeReportsRoute = new Hono()
 					hintText: updated.hintText,
 					hintSource: updated.hintSource,
 					inlineHint: updated.inlineHint,
+					userGuess: updated.userGuess,
 					adminCorrectClue: updated.adminCorrectClue,
 					adminNote: updated.adminNote,
 				},
 			})
 		},
 	)
+
+	.delete("/:id", async (c) => {
+		const { id } = c.req.param()
+
+		const report = await prisma.clozeIssueReport.findUnique({ where: { id } })
+		if (!report) {
+			return c.json({ error: "Report not found" }, 404)
+		}
+		if (report.status !== "DISMISSED") {
+			return c.json({ error: "Only dismissed reports can be deleted" }, 400)
+		}
+
+		await prisma.clozeIssueReport.delete({ where: { id } })
+		return c.json({ ok: true })
+	})

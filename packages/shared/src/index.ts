@@ -1,5 +1,7 @@
+export * from "./constants/abbrev-lemmas"
 export * from "./constants/cefr"
 export * from "./constants/confidence"
 export * from "./constants/languages"
 export * from "./constants/pos-mismatch-messages"
+export * from "./constants/synonym-feedback-messages"
 export * from "./constants/scoring"
