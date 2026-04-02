@@ -92,7 +92,8 @@ export function tatoebaPairLinksBz2Url(baseIso639_3: string, otherIso639_3: stri
 
 const HERMITDAVE_CONTENT_API =
 	"https://api.github.com/repos/hermitdave/FrequencyWords/contents/content"
-const HERMITDAVE_RAW_BASE = "https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content"
+const HERMITDAVE_RAW_BASE =
+	"https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content"
 
 interface GitHubContentsEntry {
 	name: string
@@ -140,8 +141,7 @@ export async function resolveHermitDaveFrequencyUrl(
 		.map((i) => i.name)
 		.sort((a, b) => b.localeCompare(a))
 
-	const urlForYear = (year: string) =>
-		`${HERMITDAVE_RAW_BASE}/${year}/${lang}/${lang}_50k.txt`
+	const urlForYear = (year: string) => `${HERMITDAVE_RAW_BASE}/${year}/${lang}/${lang}_50k.txt`
 
 	const verifyHead = async (url: string): Promise<boolean> => {
 		try {

@@ -27,8 +27,12 @@ function AuthedLayout() {
 				pageTitle={pageTitle}
 				user={{ id: user.id, name: user.name, email: user.email }}
 				isAdmin={isAdmin}
-				nativeLanguage={nativeLanguage ? { id: nativeLanguage.id, code: nativeLanguage.code } : null}
-				targetLanguage={targetLanguage ? { id: targetLanguage.id, code: targetLanguage.code } : null}
+				nativeLanguage={
+					nativeLanguage ? { id: nativeLanguage.id, code: nativeLanguage.code } : null
+				}
+				targetLanguage={
+					targetLanguage ? { id: targetLanguage.id, code: targetLanguage.code } : null
+				}
 			/>
 			<main className="flex-1 min-h-0 flex flex-col">
 				<Outlet />

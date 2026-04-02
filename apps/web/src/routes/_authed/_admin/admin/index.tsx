@@ -1,5 +1,12 @@
 import { Link, createFileRoute } from "@tanstack/react-router"
-import { BookOpen, Flag, Languages, ListTodo, MessageSquareText, SlidersHorizontal } from "lucide-react"
+import {
+	BookOpen,
+	Flag,
+	Languages,
+	ListTodo,
+	MessageSquareText,
+	SlidersHorizontal,
+} from "lucide-react"
 import { Button } from "~/components/ui/button"
 
 export const Route = createFileRoute("/_authed/_admin/admin/")({

@@ -1,7 +1,11 @@
 import type { Prisma } from "@nwords/db"
 import { prisma } from "@nwords/db"
 import { appendJobLog, snapshotJobMetadata } from "./job-logs"
-import { chainFrequencyFromKaikki, chainTatoebaFromFrequency, chainWordFormsFromTatoeba } from "./pipeline-chain"
+import {
+	chainFrequencyFromKaikki,
+	chainTatoebaFromFrequency,
+	chainWordFormsFromTatoeba,
+} from "./pipeline-chain"
 
 function asMetaRecord(metadata: unknown): Record<string, unknown> {
 	if (metadata !== null && typeof metadata === "object" && !Array.isArray(metadata)) {
@@ -14,10 +18,9 @@ function asMetaRecord(metadata: unknown): Record<string, unknown> {
  * Operator-only: mark a stuck RUNNING/PENDING job as COMPLETED (assume work is already in DB),
  * append a log line, and enqueue the next pipeline step when `metadata.chainPipeline` is true.
  */
-export async function skipIngestionJobAndContinuePipeline(jobId: string): Promise<
-	| { ok: true }
-	| { ok: false; error: string; status: number }
-> {
+export async function skipIngestionJobAndContinuePipeline(
+	jobId: string,
+): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
 	const job = await prisma.ingestionJob.findUnique({ where: { id: jobId } })
 	if (!job) {
 		return { ok: false, error: "Job not found", status: 404 }

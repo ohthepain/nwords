@@ -129,7 +129,9 @@ function AdminSiteSettingsPage() {
 								className="mt-1 rounded border-border shrink-0"
 							/>
 							<div className="space-y-1">
-								<span className="text-sm font-medium leading-tight block">Show inline blank hints</span>
+								<span className="text-sm font-medium leading-tight block">
+									Show inline blank hints
+								</span>
 								<p className="text-xs text-muted-foreground font-mono tabular-nums">
 									Last updated: {new Date(settings.updatedAt).toLocaleString()}
 								</p>
@@ -141,9 +143,7 @@ function AdminSiteSettingsPage() {
 							{saveError}
 						</p>
 					)}
-					{settings && saving ? (
-						<p className="text-xs text-muted-foreground">Saving…</p>
-					) : null}
+					{settings && saving ? <p className="text-xs text-muted-foreground">Saving…</p> : null}
 				</CardContent>
 			</Card>
 
@@ -152,8 +152,8 @@ function AdminSiteSettingsPage() {
 					<CardTitle className="text-base">Part-of-speech feedback</CardTitle>
 					<CardDescription>
 						Re-import user-facing sentences when the learner’s guess is the wrong part of speech
-						(e.g. noun vs verb). Copy lives in code; this writes the latest text into the database for
-						all enabled languages.
+						(e.g. noun vs verb). Copy lives in code; this writes the latest text into the database
+						for all enabled languages.
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">

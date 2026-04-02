@@ -1,7 +1,6 @@
 import type { Prisma } from "@nwords/db"
-import { prisma } from "@nwords/db"
-import { LAST_WORKER_ACTIVITY_AT_KEY } from "./job-logs"
 import { runIngestJobMetaSerial } from "./ingest-job-meta-serial"
+import { LAST_WORKER_ACTIVITY_AT_KEY } from "./job-logs"
 
 /**
  * Merge ingestion speed samples into job metadata for the admin "speedometer".

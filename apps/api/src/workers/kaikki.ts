@@ -3,8 +3,8 @@ import { createInterface } from "node:readline"
 import type { Prisma } from "@nwords/db"
 import { prisma } from "@nwords/db"
 import type PgBoss from "pg-boss"
-import type { KaikkiIngestMode } from "../lib/ingestion-urls"
 import { isIngestionJobCancelled, tryMarkIngestionJobRunning } from "../lib/ingestion-job-cancel"
+import type { KaikkiIngestMode } from "../lib/ingestion-urls"
 import { appendJobLog } from "../lib/job-logs"
 import { updateIngestionProgress } from "../lib/job-progress"
 import { nodeReadableFromWeb } from "../lib/node-streams"
@@ -251,11 +251,19 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 			for (let p = 0; p < downloadUrls.length; p++) {
 				const url = downloadUrls[p]
 				const partIndex = p + 1
-				await appendJobLog(jobId, "out", `Kaikki: downloading part ${partIndex}/${downloadUrls.length}…`)
+				await appendJobLog(
+					jobId,
+					"out",
+					`Kaikki: downloading part ${partIndex}/${downloadUrls.length}…`,
+				)
 				for await (const line of linesFromUrl(url)) {
 					if (!(await handleLine(line, partIndex))) return
 				}
-				await appendJobLog(jobId, "out", `Kaikki: finished part ${partIndex}/${downloadUrls.length}`)
+				await appendJobLog(
+					jobId,
+					"out",
+					`Kaikki: finished part ${partIndex}/${downloadUrls.length}`,
+				)
 			}
 		}
 

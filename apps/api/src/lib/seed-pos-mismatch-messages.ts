@@ -1,9 +1,5 @@
 import { prisma } from "@nwords/db"
-import {
-	POS_MISMATCH_MESSAGES,
-	type PosKey,
-	getPosMismatchMessage,
-} from "@nwords/shared"
+import { POS_MISMATCH_MESSAGES, type PosKey, getPosMismatchMessage } from "@nwords/shared"
 
 const POS_KEYS: PosKey[] = ["NOUN", "VERB", "ADJECTIVE", "ADVERB"]
 

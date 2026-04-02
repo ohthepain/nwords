@@ -1,15 +1,15 @@
 import { access, mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { zValidator } from "@hono/zod-validator"
-import { prisma, type Prisma } from "@nwords/db"
+import { type Prisma, prisma } from "@nwords/db"
 import { Hono } from "hono"
 import { z } from "zod"
 import { sendIngestJob } from "../../lib/boss"
 import { INGEST_QUEUE } from "../../lib/ingestion-queues"
-import { adminMiddleware } from "../../middleware/admin"
-import { authMiddleware } from "../../middleware/auth"
 import { jobMetadataForRetry } from "../../lib/job-logs"
 import { skipIngestionJobAndContinuePipeline } from "../../lib/skip-ingestion-chain"
+import { adminMiddleware } from "../../middleware/admin"
+import { authMiddleware } from "../../middleware/auth"
 
 const UPLOAD_DIR = path.join(process.cwd(), "uploads")
 
@@ -323,7 +323,13 @@ export const adminJobsRoute = new Hono()
 			z.object({
 				status: z.enum(["PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"]).optional(),
 				type: z
-					.enum(["KAIKKI_WORDS", "FREQUENCY_LIST", "TATOEBA_SENTENCES", "WORD_FORMS", "AUDIO_FILES"])
+					.enum([
+						"KAIKKI_WORDS",
+						"FREQUENCY_LIST",
+						"TATOEBA_SENTENCES",
+						"WORD_FORMS",
+						"AUDIO_FILES",
+					])
 					.optional(),
 				limit: z.coerce.number().min(1).max(100).default(20),
 				offset: z.coerce.number().min(0).default(0),

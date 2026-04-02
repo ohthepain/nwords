@@ -1,13 +1,13 @@
 "use client"
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { Button } from "~/components/ui/button"
 import {
 	JOB_TYPE_LABELS,
+	type PersistedJobLogLine,
 	jobMetadataError,
 	parseJobLogLines,
-	type PersistedJobLogLine,
 } from "~/lib/admin-ingest-jobs"
-import { Button } from "~/components/ui/button"
 
 type AdminJobDetail = {
 	id: string
@@ -66,7 +66,9 @@ export function JobOutputViewer({
 		async function load() {
 			try {
 				const res = await fetch(`/api/admin/jobs/${resolvedJobId}`, { credentials: "include" })
-				const body = (await res.json().catch(() => ({}))) as { error?: string } & Partial<AdminJobDetail>
+				const body = (await res.json().catch(() => ({}))) as {
+					error?: string
+				} & Partial<AdminJobDetail>
 				if (!res.ok) {
 					throw new Error(body.error ?? `HTTP ${res.status}`)
 				}
@@ -136,13 +138,13 @@ export function JobOutputViewer({
 						<h2 id="job-output-title" className="text-sm font-semibold text-foreground truncate">
 							Output — {typeLabel}
 						</h2>
-						<p className="text-[11px] font-mono text-muted-foreground truncate mt-0.5" title={jobId}>
+						<p
+							className="text-[11px] font-mono text-muted-foreground truncate mt-0.5"
+							title={jobId}
+						>
 							{jobId}
 							{detail ? (
-								<span className="text-muted-foreground/70">
-									{" "}
-									· {detail.status.toLowerCase()}
-								</span>
+								<span className="text-muted-foreground/70"> · {detail.status.toLowerCase()}</span>
 							) : null}
 						</p>
 					</div>
@@ -194,9 +196,7 @@ export function JobOutputViewer({
 				</div>
 
 				<div className="flex-1 min-h-0 flex flex-col p-3">
-					{loadError ? (
-						<p className="text-sm text-destructive px-1 py-2">{loadError}</p>
-					) : null}
+					{loadError ? <p className="text-sm text-destructive px-1 py-2">{loadError}</p> : null}
 					{tab === "err" && summaryError ? (
 						<div className="mb-2 rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 shrink-0">
 							<p className="text-[10px] font-mono uppercase tracking-wider text-destructive/80 mb-1">
@@ -229,8 +229,8 @@ export function JobOutputViewer({
 												{detail.errorCount > 0
 													? ` · ${detail.errorCount.toLocaleString()} errors`
 													: ""}
-												. If this stays empty while counts move, metadata merges were racing
-												(update deployed — or run only one ingest worker process via{" "}
+												. If this stays empty while counts move, metadata merges were racing (update
+												deployed — or run only one ingest worker process via{" "}
 												<span className="font-mono">DISABLE_INGEST_WORKERS</span> on the app that
 												should not host workers).
 											</span>
@@ -245,8 +245,7 @@ export function JobOutputViewer({
 						) : (
 							shownLines.map((l, i) => (
 								<span key={`${l.t}-${i}`} className="block">
-									<span className="text-muted-foreground">{formatLogTime(l.t)}</span>{" "}
-									{l.m}
+									<span className="text-muted-foreground">{formatLogTime(l.t)}</span> {l.m}
 								</span>
 							))
 						)}

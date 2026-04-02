@@ -153,9 +153,7 @@ function DashboardPage() {
 							{hasAssumedRank ? data.assumedRank.toLocaleString() : "—"}
 						</div>
 						<p className="text-xs text-muted-foreground mt-2">
-							{hasAssumedRank
-								? "words assumed known"
-								: "take an assessment to find out"}
+							{hasAssumedRank ? "words assumed known" : "take an assessment to find out"}
 						</p>
 					</CardContent>
 				</Card>
@@ -202,8 +200,8 @@ function DashboardPage() {
 						</CardHeader>
 						<CardContent className="space-y-3">
 							<p className="text-sm text-muted-foreground leading-relaxed">
-								Re-assess your vocabulary level. Binary search finds your
-								boundary — correct means you know it, wrong means you don&apos;t.
+								Re-assess your vocabulary level. Binary search finds your boundary — correct means
+								you know it, wrong means you don&apos;t.
 							</p>
 							<Button asChild variant="outline" size="sm" className="w-full">
 								<Link to="/practice" search={{ vocabMode: "ASSESSMENT" }}>
@@ -219,8 +217,8 @@ function DashboardPage() {
 						</CardHeader>
 						<CardContent className="space-y-3">
 							<p className="text-sm text-muted-foreground leading-relaxed">
-								Expand your vocabulary above rank {data.assumedRank.toLocaleString()}.
-								New words, shaky words, and the occasional confidence boost.
+								Expand your vocabulary above rank {data.assumedRank.toLocaleString()}. New words,
+								shaky words, and the occasional confidence boost.
 							</p>
 							<Button asChild size="sm" className="w-full">
 								<Link to="/practice" search={{ vocabMode: "BUILD" }}>
@@ -239,19 +237,19 @@ function DashboardPage() {
 								{data.frustrationWordCount >= 5 ? (
 									<>
 										Attack your {data.frustrationWordCount} stubbornest{" "}
-										{data.frustrationWordCount === 1 ? "word" : "words"}.
-										Short bursts, repeat throughout the day.
+										{data.frustrationWordCount === 1 ? "word" : "words"}. Short bursts, repeat
+										throughout the day.
 									</>
 								) : data.frustrationWordCount > 0 ? (
 									<>
 										Only {data.frustrationWordCount} frustration{" "}
-										{data.frustrationWordCount === 1 ? "word" : "words"} so far
-										— need at least 5 to start a drill.
+										{data.frustrationWordCount === 1 ? "word" : "words"} so far — need at least 5 to
+										start a drill.
 									</>
 								) : (
 									<>
-										No frustration words yet. Keep building your vocabulary
-										and any trouble words will show up here.
+										No frustration words yet. Keep building your vocabulary and any trouble words
+										will show up here.
 									</>
 								)}
 							</p>

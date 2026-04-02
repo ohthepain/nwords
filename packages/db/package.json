@@ -1,34 +1,34 @@
 {
-  "name": "@nwords/db",
-  "version": "0.0.1",
-  "private": true,
-  "type": "module",
-  "exports": {
-    ".": "./src/index.ts"
-  },
-  "scripts": {
-    "db:generate": "prisma generate",
-    "predb:push": "prisma generate",
-    "db:push": "prisma db push",
-    "predb:migrate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "predb:studio": "prisma generate",
-    "db:studio": "prisma studio",
-    "db:seed": "tsx prisma/seed.ts",
-    "build": "tsc"
-  },
-  "dependencies": {
-    "@prisma/adapter-pg": "^7.5.0",
-    "@prisma/client": "^7.5.0",
-    "pg": "^8.16.0"
-  },
-  "devDependencies": {
-    "@types/pg": "^8.15.0",
-    "@nwords/shared": "workspace:*",
-    "better-auth": "^1.5.6",
-    "dotenv": "^16.4.7",
-    "tsx": "^4.19.2",
-    "prisma": "^7.5.0",
-    "typescript": "^5.7.3"
-  }
+	"name": "@nwords/db",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"db:generate": "prisma generate",
+		"predb:push": "prisma generate",
+		"db:push": "prisma db push",
+		"predb:migrate": "prisma generate",
+		"db:migrate": "prisma migrate dev",
+		"predb:studio": "prisma generate",
+		"db:studio": "prisma studio",
+		"db:seed": "tsx prisma/seed.ts",
+		"build": "tsc"
+	},
+	"dependencies": {
+		"@prisma/adapter-pg": "^7.5.0",
+		"@prisma/client": "^7.5.0",
+		"pg": "^8.16.0"
+	},
+	"devDependencies": {
+		"@types/pg": "^8.15.0",
+		"@nwords/shared": "workspace:*",
+		"better-auth": "^1.5.6",
+		"dotenv": "^16.4.7",
+		"tsx": "^4.19.2",
+		"prisma": "^7.5.0",
+		"typescript": "^5.7.3"
+	}
 }

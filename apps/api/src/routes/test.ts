@@ -1,7 +1,6 @@
 import { zValidator } from "@hono/zod-validator"
 import { type TestSession, type VocabMode, prisma } from "@nwords/db"
 import { FRUSTRATION_WORD_MIN_TESTS, updateConfidence } from "@nwords/shared"
-import { lookupUserAnswerPos } from "../lib/pos-lookup"
 import { type Context, Hono } from "hono"
 import { z } from "zod"
 import {
@@ -9,6 +8,7 @@ import {
 	pickWordNearRank,
 	resolveClozeWithHint,
 } from "../lib/parallel-hint"
+import { lookupUserAnswerPos } from "../lib/pos-lookup"
 import type { AuthUser } from "../middleware/auth"
 import { type OptionalAuthEnv, optionalAuth } from "../middleware/auth"
 

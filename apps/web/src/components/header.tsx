@@ -19,10 +19,7 @@ export function AppHeaderBrand({ className, compact }: AppHeaderBrandProps) {
 			aria-label="nwords.live home"
 		>
 			<span
-				className={cn(
-					"font-bold tracking-tight",
-					compact ? "text-base sm:text-lg" : "text-xl",
-				)}
+				className={cn("font-bold tracking-tight", compact ? "text-base sm:text-lg" : "text-xl")}
 			>
 				nwords
 			</span>

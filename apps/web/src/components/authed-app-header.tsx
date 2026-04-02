@@ -94,7 +94,10 @@ function NativeLanguageMenuButton({
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ nativeLanguageId: id }),
 			})
-			const body = (await res.json().catch(() => ({}))) as { error?: string; nativeLanguage?: HeaderLanguageRow }
+			const body = (await res.json().catch(() => ({}))) as {
+				error?: string
+				nativeLanguage?: HeaderLanguageRow
+			}
 			if (!res.ok) {
 				setSaveError(body.error ?? "Could not update your language.")
 				setBusy(false)
@@ -138,12 +141,8 @@ function NativeLanguageMenuButton({
 				<DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
 					Your language
 				</DropdownMenuLabel>
-				{loadError && (
-					<p className="px-2 py-1.5 text-xs text-destructive">{loadError}</p>
-				)}
-				{saveError && (
-					<p className="px-2 py-1.5 text-xs text-destructive">{saveError}</p>
-				)}
+				{loadError && <p className="px-2 py-1.5 text-xs text-destructive">{loadError}</p>}
+				{saveError && <p className="px-2 py-1.5 text-xs text-destructive">{saveError}</p>}
 				<DropdownMenuSeparator />
 				{rows.length === 0 && !loadError ? (
 					<p className="px-2 py-2 text-xs text-muted-foreground">Loading…</p>

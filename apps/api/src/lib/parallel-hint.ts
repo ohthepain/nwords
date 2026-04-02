@@ -300,7 +300,10 @@ const PARALLEL_HINT_ALIGN_WINDOW = 4
  * Use the native-language parallel token at the same index as the blank when it is not a
  * blocked function word; used when we have no expanded sense tokens to score.
  */
-function tryParallelAlignedInlineHint(parallelText: string, blankTokenIndex: number): string | null {
+function tryParallelAlignedInlineHint(
+	parallelText: string,
+	blankTokenIndex: number,
+): string | null {
 	const runs = wordRunsInOrder(parallelText)
 	if (blankTokenIndex < 0 || blankTokenIndex >= runs.length) return null
 	const raw = runs[blankTokenIndex]!
@@ -323,7 +326,7 @@ function withinEditDistance(a: string, b: string, max: number): boolean {
 	for (let j = 0; j <= n; j++) dp[0]![j] = j
 
 	for (let i = 1; i <= m; i++) {
-		let rowMin = Infinity
+		let rowMin = Number.POSITIVE_INFINITY
 		for (let j = 1; j <= n; j++) {
 			const cost = a[i - 1] === b[j - 1] ? 0 : 1
 			const v = Math.min(dp[i - 1]![j]! + 1, dp[i]![j - 1]! + 1, dp[i - 1]![j - 1]! + cost)
@@ -361,7 +364,9 @@ async function resolveGlossStringForPivot(
 	targetLanguageId: string,
 ): Promise<string | null> {
 	if (!Array.isArray(definitions) || definitions.length === 0) return null
-	const firstGloss = definitions.find((d): d is string => typeof d === "string" && d.trim().length > 0)
+	const firstGloss = definitions.find(
+		(d): d is string => typeof d === "string" && d.trim().length > 0,
+	)
 	if (!firstGloss) return null
 
 	let glossToUse = firstGloss
@@ -454,7 +459,11 @@ async function tryParallelInlineHintWithWindow(
 			blankTokenIndex >= 0 && blankTokenIndex < runs.length
 				? runs[blankTokenIndex]!.toLowerCase()
 				: null
-		if (alignedRaw != null && alignedRaw.length >= 2 && !INLINE_HINT_ALIGNMENT_JUNK.has(alignedRaw)) {
+		if (
+			alignedRaw != null &&
+			alignedRaw.length >= 2 &&
+			!INLINE_HINT_ALIGNMENT_JUNK.has(alignedRaw)
+		) {
 			bestTok = alignedRaw
 		}
 	}
@@ -483,12 +492,38 @@ async function translateViaGlossPivot(
 
 	// Grammatical terms that should never be used as inline hints — safety net beyond form-of detection.
 	const GRAMMAR_BLOCKLIST = new Set([
-		"past", "present", "future", "tense", "form", "plural", "singular",
-		"definite", "indefinite", "indicative", "subjunctive", "imperative",
-		"conditional", "infinitive", "gerund", "participle", "superlative",
-		"comparative", "nominative", "genitive", "dative", "accusative",
-		"ablative", "preterite", "imperfect", "active", "passive",
-		"perfect", "continuous", "simple", "progressive", "inflection",
+		"past",
+		"present",
+		"future",
+		"tense",
+		"form",
+		"plural",
+		"singular",
+		"definite",
+		"indefinite",
+		"indicative",
+		"subjunctive",
+		"imperative",
+		"conditional",
+		"infinitive",
+		"gerund",
+		"participle",
+		"superlative",
+		"comparative",
+		"nominative",
+		"genitive",
+		"dative",
+		"accusative",
+		"ablative",
+		"preterite",
+		"imperfect",
+		"active",
+		"passive",
+		"perfect",
+		"continuous",
+		"simple",
+		"progressive",
+		"inflection",
 	])
 
 	// Extract meaningful content words — filter out short function words by requiring length ≥ 4
@@ -529,9 +564,7 @@ async function translateViaGlossPivot(
 
 	// Tier 2: definition overlap — find native words whose English definitions share content words
 	// with the target word's glosses. Rank by overlap count then frequency.
-	const defMatch = await prisma.$queryRaw<
-		Array<{ lemma: string; rank: number; overlap: number }>
-	>`
+	const defMatch = await prisma.$queryRaw<Array<{ lemma: string; rank: number; overlap: number }>>`
 		SELECT w."lemma", w."rank",
 		  (
 		    SELECT count(DISTINCT t.tok)::int

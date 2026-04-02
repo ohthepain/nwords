@@ -111,9 +111,7 @@ function SettingsPage() {
 	return (
 		<div className="max-w-2xl mx-auto px-6 py-8 space-y-6">
 			<div>
-				<p className="text-sm text-muted-foreground mt-1">
-					Configure your languages
-				</p>
+				<p className="text-sm text-muted-foreground mt-1">Configure your languages</p>
 			</div>
 
 			<Card>

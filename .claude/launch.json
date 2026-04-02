@@ -1,11 +1,11 @@
 {
-  "version": "0.0.1",
-  "configurations": [
-    {
-      "name": "web",
-      "runtimeExecutable": "/bin/zsh",
-      "runtimeArgs": ["-c", "source ~/.zshrc && pnpm --filter @nwords/web dev"],
-      "port": 3000
-    }
-  ]
+	"version": "0.0.1",
+	"configurations": [
+		{
+			"name": "web",
+			"runtimeExecutable": "/bin/zsh",
+			"runtimeArgs": ["-c", "source ~/.zshrc && pnpm --filter @nwords/web dev"],
+			"port": 3000
+		}
+	]
 }

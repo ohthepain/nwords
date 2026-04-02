@@ -143,10 +143,7 @@ export function VocabGraph({
 	const numRows = Math.max(1, Math.ceil(displayCount / numCols))
 	const graphH = numRows * step - GAP_PX
 
-	const visibleCells = useMemo(
-		() => cells.slice(0, displayCount),
-		[cells, displayCount],
-	)
+	const visibleCells = useMemo(() => cells.slice(0, displayCount), [cells, displayCount])
 
 	const gridIndexForPixel = useCallback(
 		(px: number, py: number): number | null => {
@@ -165,16 +162,19 @@ export function VocabGraph({
 	const probeSetRef = useRef<Set<string>>(new Set())
 	const rafClearRef = useRef<number | null>(null)
 
-	const pushProbeIndex = useCallback((idx: number | null) => {
-		if (idx === null) return
-		const lemma = visibleCells[idx]?.lemma
-		if (!lemma) return
-		const s = probeSetRef.current
-		if (!s.has(lemma)) {
-			s.add(lemma)
-			setProbeWords((prev) => [...prev, lemma])
-		}
-	}, [visibleCells])
+	const pushProbeIndex = useCallback(
+		(idx: number | null) => {
+			if (idx === null) return
+			const lemma = visibleCells[idx]?.lemma
+			if (!lemma) return
+			const s = probeSetRef.current
+			if (!s.has(lemma)) {
+				s.add(lemma)
+				setProbeWords((prev) => [...prev, lemma])
+			}
+		},
+		[visibleCells],
+	)
 
 	const scheduleClearProbes = useCallback(() => {
 		if (rafClearRef.current != null) cancelAnimationFrame(rafClearRef.current)
@@ -265,9 +265,7 @@ export function VocabGraph({
 			setAnswerAnim((a) => (a && a.wordId === animWordId ? { ...a, useTo, step } : a))
 			if (step >= 8) {
 				clearInterval(id)
-				setAnswerAnim((a) =>
-					a && a.wordId === animWordId ? { ...a, useTo: true, step: 8 } : a,
-				)
+				setAnswerAnim((a) => (a && a.wordId === animWordId ? { ...a, useTo: true, step: 8 } : a))
 				window.setTimeout(() => {
 					setAnswerAnim((a) => (a?.wordId === animWordId ? null : a))
 				}, 150)
@@ -371,9 +369,7 @@ export function VocabGraph({
 								gridRow: rowFromTop + 1,
 							}
 
-							const inAnswer =
-								answerAnim?.wordId === c.wordId &&
-								answerAnim.step < 8
+							const inAnswer = answerAnim?.wordId === c.wordId && answerAnim.step < 8
 							const inQuestionFlash = questionFlashId === c.wordId
 
 							let background = cellBackground(c.confidence)
@@ -381,10 +377,13 @@ export function VocabGraph({
 								background = answerAnim.useTo ? answerAnim.toBg : answerAnim.fromBg
 							}
 
+							const isActive = activeWordId === c.wordId
 							const ring =
 								inAnswer || inQuestionFlash
 									? "0 0 0 1px color-mix(in srgb, var(--color-ring) 50%, transparent)"
-									: undefined
+									: isActive
+										? `0 0 0 1px white`
+										: undefined
 
 							return (
 								<div

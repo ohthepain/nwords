@@ -51,7 +51,7 @@ const searchSentences = createServerFn({ method: "POST" })
 				include: {
 					language: { select: { code: true } },
 					sentenceWords: {
-						include: { word: { select: { lemma: true, pos: true } } },
+						include: { word: { select: { lemma: true } } },
 						orderBy: { position: "asc" },
 						take: 10,
 					},
@@ -70,8 +70,8 @@ const searchSentences = createServerFn({ method: "POST" })
 				testQualityScore: s.testQualityScore,
 				langCode: s.language.code,
 				linkedWords: s.sentenceWords.map((sw) => ({
+					id: sw.id,
 					lemma: sw.word.lemma,
-					pos: sw.word.pos,
 				})),
 			})),
 			total,
@@ -109,15 +109,10 @@ function AdminSentencesPage() {
 		return languages[0]?.id ?? ""
 	}
 
-	const [languageId, setLanguageId] = useState(() =>
-		resolveLanguageId(languageIdFromSearch),
-	)
+	const [languageId, setLanguageId] = useState(() => resolveLanguageId(languageIdFromSearch))
 
 	useEffect(() => {
-		if (
-			languageIdFromSearch &&
-			languages.some((l) => l.id === languageIdFromSearch)
-		) {
+		if (languageIdFromSearch && languages.some((l) => l.id === languageIdFromSearch)) {
 			setLanguageId(languageIdFromSearch)
 		}
 	}, [languageIdFromSearch, languages])
@@ -142,15 +137,15 @@ function AdminSentencesPage() {
 
 	return (
 		<div className="p-6 space-y-6">
-			<p className="text-sm text-muted-foreground">
-				Search imported sentences by pattern
-			</p>
+			<p className="text-sm text-muted-foreground">Search imported sentences by pattern</p>
 
 			{/* Search form */}
 			<form onSubmit={handleSearch} className="space-y-4">
 				<div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
 					<div className="space-y-1.5">
-						<Label htmlFor="sent-lang" className="text-xs">Language</Label>
+						<Label htmlFor="sent-lang" className="text-xs">
+							Language
+						</Label>
 						<select
 							id="sent-lang"
 							value={languageId}
@@ -165,7 +160,9 @@ function AdminSentencesPage() {
 						</select>
 					</div>
 					<div className="space-y-1.5">
-						<Label htmlFor="sent-match" className="text-xs">Match</Label>
+						<Label htmlFor="sent-match" className="text-xs">
+							Match
+						</Label>
 						<select
 							id="sent-match"
 							value={matchMode}
@@ -180,7 +177,9 @@ function AdminSentencesPage() {
 						</select>
 					</div>
 					<div className="space-y-1.5">
-						<Label htmlFor="sent-query" className="text-xs">Pattern</Label>
+						<Label htmlFor="sent-query" className="text-xs">
+							Pattern
+						</Label>
 						<div className="flex gap-2">
 							<Input
 								id="sent-query"
@@ -259,9 +258,9 @@ function AdminSentencesPage() {
 										</span>
 										<div className="flex flex-wrap gap-1">
 											{sentence.linkedWords.length > 0 ? (
-												sentence.linkedWords.map((w, i) => (
+												sentence.linkedWords.map((w) => (
 													<span
-														key={`${w.lemma}-${w.pos}-${i}`}
+														key={w.id}
 														className="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground"
 													>
 														{w.lemma}

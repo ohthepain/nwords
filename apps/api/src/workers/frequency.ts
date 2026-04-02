@@ -1,8 +1,8 @@
 import { createReadStream } from "node:fs"
 import type { Prisma } from "@nwords/db"
 import { prisma } from "@nwords/db"
-import type PgBoss from "pg-boss"
 import { cefrLevelForFrequencyRank } from "@nwords/shared"
+import type PgBoss from "pg-boss"
 import { isIngestionJobCancelled, tryMarkIngestionJobRunning } from "../lib/ingestion-job-cancel"
 import { appendJobLog, snapshotJobMetadata } from "../lib/job-logs"
 import { updateIngestionProgress } from "../lib/job-progress"
@@ -439,9 +439,7 @@ async function flushRankBatch(
 			select: { id: true, lemma: true, isAbbreviation: true },
 		})
 
-		const abbrevWordIds = new Set(
-			existingWords.filter((w) => w.isAbbreviation).map((w) => w.id),
-		)
+		const abbrevWordIds = new Set(existingWords.filter((w) => w.isAbbreviation).map((w) => w.id))
 
 		const wordByLemma = new Map<string, string[]>()
 		for (const w of existingWords) {

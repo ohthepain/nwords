@@ -19,10 +19,7 @@ export async function lookupUserAnswerPos(
 	const words = await prisma.word.findMany({
 		where: {
 			languageId: targetLanguageId,
-			OR: [
-				{ lemma: normalized },
-				{ forms: { some: { form: normalized } } },
-			],
+			OR: [{ lemma: normalized }, { forms: { some: { form: normalized } } }],
 		},
 		select: { pos: true, rank: true },
 		orderBy: { rank: "asc" },

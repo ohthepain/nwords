@@ -1,16 +1,16 @@
 /// <reference path="../types/unbzip2-stream.d.ts" />
 import { createReadStream } from "node:fs"
 import { createInterface } from "node:readline"
-import { prisma, type Prisma } from "@nwords/db"
+import { type Prisma, prisma } from "@nwords/db"
 import type PgBoss from "pg-boss"
 import bz2 from "unbzip2-stream"
 import { isIngestionJobCancelled, tryMarkIngestionJobRunning } from "../lib/ingestion-job-cancel"
+import { tatoebaPairLinksBz2Url } from "../lib/ingestion-urls"
 import { appendJobLog, snapshotJobMetadata } from "../lib/job-logs"
 import { updateIngestionProgress } from "../lib/job-progress"
-import { tatoebaPairLinksBz2Url } from "../lib/ingestion-urls"
-import { chainWordFormsFromTatoeba } from "../lib/pipeline-chain"
 import { nodeReadableFromWeb } from "../lib/node-streams"
-import { linkSentencesAndAssignTests, type LinkingProgressEvent } from "./sentence-link"
+import { chainWordFormsFromTatoeba } from "../lib/pipeline-chain"
+import { type LinkingProgressEvent, linkSentencesAndAssignTests } from "./sentence-link"
 
 /**
  * Tatoeba sentence import: plain TSV (upload) or .tsv.bz2 per-language export (HTTP).
@@ -131,7 +131,11 @@ export async function processTatoebaJob(job: PgBoss.Job<TatoebaJobData>) {
 				where: { id: jobId },
 				data: { totalItems: totalLines },
 			})
-			await appendJobLog(jobId, "out", `Tatoeba: file has ${totalLines.toLocaleString()} lines (all langs)`)
+			await appendJobLog(
+				jobId,
+				"out",
+				`Tatoeba: file has ${totalLines.toLocaleString()} lines (all langs)`,
+			)
 		}
 		// HTTP downloads: total line count unknown up front (no double-fetch of multi‑GB bz2).
 
@@ -248,7 +252,11 @@ export async function processTatoebaJob(job: PgBoss.Job<TatoebaJobData>) {
 		if (translationLinksPath) {
 			await appendJobLog(jobId, "out", "Tatoeba: processing translation links file…")
 			translationsLinked += await processTranslationLinks(translationLinksPath)
-			await appendJobLog(jobId, "out", `Tatoeba: linked ${translationsLinked} translation pairs (total incl. exports)`)
+			await appendJobLog(
+				jobId,
+				"out",
+				`Tatoeba: linked ${translationsLinked} translation pairs (total incl. exports)`,
+			)
 		} else if (translationsLinked > 0) {
 			await appendJobLog(
 				jobId,
@@ -449,7 +457,10 @@ async function processTranslationLinks(linksPath: string): Promise<number> {
  * Import Tatoeba `{base}-{partner}_links.tsv.bz2` for each other enabled language so cloze hints can use parallels.
  * Pairs are only stored when both Tatoeba sentence ids already exist (run after each language’s sentence import).
  */
-async function importCrossLanguageLinksFromTatoeba(jobId: string, baseLangCode3: string): Promise<number> {
+async function importCrossLanguageLinksFromTatoeba(
+	jobId: string,
+	baseLangCode3: string,
+): Promise<number> {
 	const self = baseLangCode3.toLowerCase()
 	const partners = await prisma.language.findMany({
 		where: { enabled: true, code3: { not: null } },
