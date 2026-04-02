@@ -44,10 +44,10 @@ gain = 1 / (timesTested + 1)
 timeBonus = min(daysSinceLastTest / 30, 1.0) * 0.5
 adjustedGain = gain + timeBonus
 rawConfidence = confidence + (1.0 - confidence) * adjustedGain
-newConfidence = max(rawConfidence, confidence + 0.05)   // minimum bump of 0.05
+newConfidence = max(rawConfidence, confidence + 0.2)   // minimum bump of 0.2
 ```
 
-Every correct answer always increases confidence by at least 0.05, even if the
+Every correct answer always increases confidence by at least 0.2, even if the
 formula would produce a smaller move (e.g., high timesTested, already high
 confidence). The time bonus rewards recalling a word you haven't seen in a while —
 nailing a word after 3 weeks is more impressive than after 5 minutes.
@@ -89,7 +89,7 @@ On **correct** answer:
 ```
 gain = 1 / (timesTested + 1)
 rawConfidence = confidence + (1.0 - confidence) * gain * 0.5
-newConfidence = max(rawConfidence, confidence + 0.05)   // minimum bump of 0.05
+newConfidence = max(rawConfidence, confidence + 0.2)   // minimum bump of 0.2
 ```
 
 The 0.5 dampening means correct answers in frustration mode build
@@ -215,6 +215,6 @@ model UserWordKnowledge {
 - **Frustration word threshold:** a word must have `timesTested >= 5` to
   qualify as a frustration word. Below that it's just new/learning.
 - **No confidence floor.** Confidence can drop to 0.0 (and does in Assessment).
-  Instead, every correct answer has a **minimum confidence bump** of 0.05 —
-  so even a word at 0.0 confidence moves to at least 0.05 on a correct answer.
+  Instead, every correct answer in Build/Frustration has a **minimum confidence bump** of 0.2 —
+  so even a word at 0.0 confidence moves to at least 0.2 on a correct answer.
   This means no word is ever truly dead; one correct answer always makes progress.

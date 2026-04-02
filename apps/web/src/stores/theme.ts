@@ -24,10 +24,20 @@ export const useThemeStore = create<ThemeState>()(
 					}
 					return { dark: next }
 				}),
-			setUiStyle: (uiStyle) => set({ uiStyle }),
+			setUiStyle: (uiStyle) => {
+				if (typeof document !== "undefined") {
+					document.documentElement.dataset.uiStyle = uiStyle
+				}
+				set({ uiStyle })
+			},
 		}),
 		{
 			name: "nwords-theme",
+			onRehydrateStorage: () => (state) => {
+				if (state && typeof document !== "undefined") {
+					document.documentElement.dataset.uiStyle = state.uiStyle
+				}
+			},
 		},
 	),
 )

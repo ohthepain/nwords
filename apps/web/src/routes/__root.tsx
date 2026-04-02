@@ -29,7 +29,7 @@ export const Route = createRootRoute({
 			},
 			{
 				rel: "stylesheet",
-				href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap",
+				href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,400;600&display=swap",
 			},
 		],
 	}),
@@ -52,6 +52,7 @@ function RootDocument({ children }: { children: ReactNode }) {
 
 function RootComponent() {
 	const dark = useThemeStore((s) => s.dark)
+	const uiStyle = useThemeStore((s) => s.uiStyle)
 
 	useEffect(() => {
 		initPostHog()
@@ -60,6 +61,10 @@ function RootComponent() {
 	useEffect(() => {
 		document.documentElement.classList.toggle("dark", dark)
 	}, [dark])
+
+	useEffect(() => {
+		document.documentElement.dataset.uiStyle = uiStyle
+	}, [uiStyle])
 
 	return (
 		<RootDocument>

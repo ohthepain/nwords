@@ -146,3 +146,93 @@
 		box-shadow: 0 4px 12px color-mix(in srgb, var(--color-foreground) 5%, transparent);
 	}
 }
+
+/* Settings → UI style: applied via `html[data-ui-style="…"]` from theme store */
+html[data-ui-style="brutalist"] {
+	--radius: 0;
+}
+
+html[data-ui-style="brutalist"] body {
+	letter-spacing: -0.01em;
+}
+
+html[data-ui-style="brutalist"]:not(.dark) {
+	--color-border: #0a0a0a;
+	--color-input: #0a0a0a;
+}
+
+html[data-ui-style="brutalist"].dark {
+	--color-border: #fafafa;
+	--color-input: #fafafa;
+}
+
+html[data-ui-style="glass"]:not(.dark) {
+	--color-card: rgb(255 255 255 / 0.72);
+	--color-popover: rgb(255 255 255 / 0.88);
+}
+
+html[data-ui-style="glass"].dark {
+	--color-card: rgb(17 17 19 / 0.55);
+	--color-popover: rgb(17 17 19 / 0.72);
+}
+
+html[data-ui-style="glass"] header[class*="border-b"] {
+	backdrop-filter: blur(12px);
+}
+
+html[data-ui-style="terminal"] body {
+	font-family: "JetBrains Mono", ui-monospace, monospace;
+	font-feature-settings: normal;
+}
+
+html[data-ui-style="terminal"]:not(.dark) {
+	--color-background: #f8faf8;
+	--color-foreground: #14532d;
+	--color-primary: #166534;
+	--color-primary-foreground: #ecfdf5;
+	--color-muted-foreground: #3f6212;
+	--color-border: #bbf7d0;
+	--color-input: #bbf7d0;
+	--color-ring: #166534;
+}
+
+html[data-ui-style="terminal"].dark {
+	--color-background: #030712;
+	--color-foreground: #86efac;
+	--color-card: #052e16;
+	--color-card-foreground: #bbf7d0;
+	--color-popover: #052e16;
+	--color-popover-foreground: #bbf7d0;
+	--color-primary: #22c55e;
+	--color-primary-foreground: #052e16;
+	--color-secondary: #064e3b;
+	--color-secondary-foreground: #a7f3d0;
+	--color-muted: #064e3b;
+	--color-muted-foreground: #6ee7b7;
+	--color-accent: #064e3b;
+	--color-accent-foreground: #d1fae5;
+	--color-border: #14532d;
+	--color-input: #14532d;
+	--color-ring: #4ade80;
+}
+
+html[data-ui-style="ink"] body {
+	font-family: "Newsreader", Georgia, "Times New Roman", serif;
+	font-feature-settings: normal;
+}
+
+html[data-ui-style="ink"]:not(.dark) {
+	--color-background: #f4f1ea;
+	--color-foreground: #1c1917;
+	--color-card: #fffcf5;
+	--color-muted: #e7e2d9;
+	--color-border: #d6d0c4;
+}
+
+html[data-ui-style="ink"].dark {
+	--color-background: #141210;
+	--color-foreground: #e8e4dc;
+	--color-card: #1f1c18;
+	--color-muted: #292524;
+	--color-border: #3f3a36;
+}
