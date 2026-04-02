@@ -242,7 +242,11 @@ async function loadClozeCandidates(
 			select: { sentenceId: true, position: true },
 		}),
 		prisma.sentence.findMany({
-			where: { id: { in: testSentenceIds }, languageId: targetLanguageId },
+			where: {
+				id: { in: testSentenceIds },
+				languageId: targetLanguageId,
+				markedForRemoval: false,
+			},
 			select: { id: true, text: true },
 		}),
 	])

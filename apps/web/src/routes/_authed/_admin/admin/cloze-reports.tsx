@@ -1,6 +1,8 @@
+import { auth } from "@nwords/auth/server"
 import { prisma } from "@nwords/db"
 import { Link, createFileRoute } from "@tanstack/react-router"
 import { createServerFn } from "@tanstack/react-start"
+import { getRequest } from "@tanstack/react-start/server"
 import { useCallback, useEffect, useState } from "react"
 import { Button } from "~/components/ui/button"
 import { Label } from "~/components/ui/label"
@@ -13,11 +15,26 @@ import {
 } from "~/components/ui/select"
 import { cn } from "~/lib/utils"
 
-const getAdminLanguages = createServerFn({ method: "GET" }).handler(async () => {
-	return prisma.language.findMany({
+const loadClozeReportsPage = createServerFn({ method: "GET" }).handler(async () => {
+	let defaultTargetLanguageId: string | null = null
+	const request = getRequest()
+	if (request) {
+		const session = await auth.api.getSession({ headers: request.headers })
+		if (session?.user?.id) {
+			const user = await prisma.user.findUnique({
+				where: { id: session.user.id },
+				select: { targetLanguageId: true },
+			})
+			defaultTargetLanguageId = user?.targetLanguageId ?? null
+		}
+	}
+
+	const languages = await prisma.language.findMany({
 		orderBy: { name: "asc" },
 		select: { id: true, name: true, code: true },
 	})
+
+	return { languages, defaultTargetLanguageId }
 })
 
 type Lang = { id: string; name: string; code: string }
@@ -51,24 +68,31 @@ function parseSearch(raw: Record<string, unknown>): { languageId?: string; statu
 
 export const Route = createFileRoute("/_authed/_admin/admin/cloze-reports")({
 	validateSearch: parseSearch,
-	loader: () => getAdminLanguages(),
+	loader: () => loadClozeReportsPage(),
 	component: AdminClozeReportsPage,
 })
 
 const STATUSES = [
 	{ value: "all", label: "All statuses" },
 	{ value: "PENDING", label: "Pending" },
-	{ value: "REMOVE_CANDIDATE", label: "Removal" },
+	{ value: "REMOVE_CANDIDATE", label: "Removal candidate" },
+	{ value: "SENTENCE_REMOVED", label: "Sentence removed" },
 	{ value: "CLUE_CORRECTED", label: "Clue corrected" },
 	{ value: "DISMISSED", label: "Dismissed" },
 ] as const
 
 function AdminClozeReportsPage() {
 	const { languageId: languageIdFromSearch, status: statusFromSearch } = Route.useSearch()
-	const languages = Route.useLoaderData()
+	const { languages, defaultTargetLanguageId } = Route.useLoaderData()
 
 	function resolveLanguageId(searchId: string | undefined): string {
 		if (searchId && languages.some((l) => l.id === searchId)) return searchId
+		if (
+			defaultTargetLanguageId &&
+			languages.some((l) => l.id === defaultTargetLanguageId)
+		) {
+			return defaultTargetLanguageId
+		}
 		return languages[0]?.id ?? ""
 	}
 
@@ -265,7 +289,12 @@ function ReportCard({
 	}, [r.adminCorrectClue, r.adminNote])
 
 	async function go(
-		status: "REMOVE_CANDIDATE" | "CLUE_CORRECTED" | "DISMISSED" | "PENDING",
+		status:
+			| "REMOVE_CANDIDATE"
+			| "SENTENCE_REMOVED"
+			| "CLUE_CORRECTED"
+			| "DISMISSED"
+			| "PENDING",
 		opts?: { requireClue?: boolean },
 	) {
 		setErr(null)
@@ -361,8 +390,14 @@ function ReportCard({
 			{err && <p className="text-sm text-destructive">{err}</p>}
 
 			<div className="flex flex-wrap gap-2 pt-1">
-				<Button type="button" size="sm" disabled={busy} onClick={() => void go("REMOVE_CANDIDATE")}>
-					Mark removal
+				<Button
+					type="button"
+					size="sm"
+					variant="destructive"
+					disabled={busy}
+					onClick={() => void go("SENTENCE_REMOVED")}
+				>
+					Remove sentence
 				</Button>
 				<Button
 					type="button"

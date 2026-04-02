@@ -1,6 +1,37 @@
 {
-  "allowed_tools": ["read_file", "write_file", "run_command"],
-
+  "permissions": {
+    "allow": [
+      "Bash(pnpm:*)",
+      "Bash(npm:*)",
+      "Bash(npx:*)",
+      "Bash(git:*)",
+      "Bash(node:*)",
+      "Bash(tsx:*)",
+      "Bash(tsc:*)",
+      "Bash(docker:*)",
+      "Bash(psql:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(xargs:*)",
+      "Bash(curl:*)",
+      "Bash(timeout:*)",
+      "Bash(export:*)",
+      "Bash(source:*)",
+      "Read(/Users/paulwilkinson/projects/claude/nwords/**)",
+      "Read(/Users/paulwilkinson/.local/share/mise/**)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(find /Users/paulwilkinson/projects/claude/nwords/docs -type f \\\\\\(-name *.md \\\\\\))",
+      "Read(//opt/homebrew/Cellar/node/23.10.0_1/bin/**)",
+      "Read(//usr/local/bin/**)",
+      "Read(//opt/homebrew/**)"
+    ]
+  },
+  "allowed_tools": [
+    "read_file",
+    "write_file",
+    "run_command"
+  ],
   "command_whitelist": [
     "pnpm",
     "npm",
@@ -17,36 +48,5 @@
     "tsc",
     "curl",
     "prisma"
-  ],
-
-  "permissions": {
-    "allow": [
-      "Bash(pnpm:*)",
-      "Bash(npm:*)",
-      "Bash(npx:*)",
-      "Bash(git:*)",
-      "Bash(node:*)",
-      "Bash(tsx:*)",
-      "Bash(tsc:*)",
-      "Bash(docker:*)",
-
-      "Bash(psql:*)",
-
-      "Bash(find:*)",
-      "Bash(grep:*)",
-      "Bash(ls:*)",
-      "Bash(xargs:*)",
-
-      "Bash(curl:*)",
-
-      "Bash(timeout:*)",
-      "Bash(export:*)",
-      "Bash(source:*)",
-
-      "Read(/Users/paulwilkinson/projects/claude/nwords/**)",
-      "Read(/Users/paulwilkinson/.local/share/mise/**)",
-
-      "mcp__Claude_Preview__preview_start"
-    ]
-  }
+  ]
 }

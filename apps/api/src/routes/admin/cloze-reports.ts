@@ -5,7 +5,13 @@ import { z } from "zod"
 import { adminMiddleware } from "../../middleware/admin"
 import { authMiddleware } from "../../middleware/auth"
 
-const statusSchema = z.enum(["PENDING", "REMOVE_CANDIDATE", "CLUE_CORRECTED", "DISMISSED"])
+const statusSchema = z.enum([
+	"PENDING",
+	"REMOVE_CANDIDATE",
+	"SENTENCE_REMOVED",
+	"CLUE_CORRECTED",
+	"DISMISSED",
+])
 
 export const adminClozeReportsRoute = new Hono()
 	.use("*", authMiddleware, adminMiddleware)
@@ -93,6 +99,37 @@ export const adminClozeReportsRoute = new Hono()
 					targetLanguage: { select: { id: true, name: true, code: true } },
 				},
 			})
+
+			// When a report is handled by sentence removal, flag the target sentence
+			// so it is excluded from cloze tests at runtime.
+			if (body.status === "SENTENCE_REMOVED" && prev.targetSentenceId) {
+				await prisma.sentence.update({
+					where: { id: prev.targetSentenceId },
+					data: { markedForRemoval: true },
+				})
+			}
+
+			// If the admin reverts from SENTENCE_REMOVED, un-flag the sentence —
+			// but only if no other SENTENCE_REMOVED report references the same sentence.
+			if (
+				prev.status === "SENTENCE_REMOVED" &&
+				body.status !== "SENTENCE_REMOVED" &&
+				prev.targetSentenceId
+			) {
+				const otherRemoval = await prisma.clozeIssueReport.findFirst({
+					where: {
+						targetSentenceId: prev.targetSentenceId,
+						status: "SENTENCE_REMOVED",
+						id: { not: id },
+					},
+				})
+				if (!otherRemoval) {
+					await prisma.sentence.update({
+						where: { id: prev.targetSentenceId },
+						data: { markedForRemoval: false },
+					})
+				}
+			}
 
 			return c.json({
 				report: {

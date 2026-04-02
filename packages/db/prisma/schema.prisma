@@ -218,6 +218,8 @@ model Sentence {
   /// Heuristic 0–1 quality for use in translation / cloze tests.
   testQualityScore Float?
   isTestCandidate  Boolean  @default(false)
+  /// Flagged by admin via cloze issue report — excluded from cloze tests at runtime.
+  markedForRemoval Boolean  @default(false)
   createdAt  DateTime @default(now())
 
   translations  SentenceTranslation[] @relation("OriginalSentence")
@@ -371,6 +373,7 @@ enum AnswerType {
 enum ClozeIssueStatus {
   PENDING
   REMOVE_CANDIDATE
+  SENTENCE_REMOVED
   CLUE_CORRECTED
   DISMISSED
 }
