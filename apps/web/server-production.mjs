@@ -20,7 +20,6 @@ const __dirname = path.dirname(__filename)
 // automatically serve Vite's static client assets. Serve them explicitly so
 // CSS/JS are available at their hashed `/assets/...` URLs.
 const viteClientDir = path.join(__dirname, "dist", "client")
-const viteAssetsDir = path.join(viteClientDir, "assets")
 
 const mimeByExt = {
 	".css": "text/css; charset=utf-8",
@@ -77,9 +76,7 @@ async function tryServeStaticFile(req) {
 			status: 200,
 			headers: {
 				"content-type": getMimeType(filePath),
-				"cache-control": isHashed
-					? "public, max-age=31536000, immutable"
-					: "public, max-age=3600",
+				"cache-control": isHashed ? "public, max-age=31536000, immutable" : "public, max-age=3600",
 			},
 		})
 	} catch (err) {
