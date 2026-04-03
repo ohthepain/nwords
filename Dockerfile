@@ -4,11 +4,12 @@ FROM node:22-bookworm-slim AS builder
 ARG GOOGLE_AUTH_ENABLED=false
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates git \
 	&& rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
+COPY .git ./.git
 COPY pnpm-lock.yaml package.json pnpm-workspace.yaml turbo.json tsconfig.base.json ./
 COPY apps ./apps
 COPY packages ./packages
