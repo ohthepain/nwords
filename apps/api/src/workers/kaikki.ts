@@ -1,8 +1,8 @@
 import { createReadStream } from "node:fs"
 import { createInterface } from "node:readline"
-import type { Prisma, PartOfSpeech } from "@nwords/db"
-import { ABBREV_TITLE_LEMMAS } from "@nwords/shared"
+import type { PartOfSpeech, Prisma } from "@nwords/db"
 import { prisma } from "@nwords/db"
+import { ABBREV_TITLE_LEMMAS } from "@nwords/shared"
 import type PgBoss from "pg-boss"
 import { isIngestionJobCancelled, tryMarkIngestionJobRunning } from "../lib/ingestion-job-cancel"
 import type { KaikkiIngestMode } from "../lib/ingestion-urls"
@@ -44,12 +44,7 @@ const POS_MAP: Record<string, string> = {
 }
 
 /** POS types where the user is tested on vocabulary. */
-const TESTABLE_POS = new Set([
-	"NOUN",
-	"VERB",
-	"ADJECTIVE",
-	"ADVERB",
-])
+const TESTABLE_POS = new Set(["NOUN", "VERB", "ADJECTIVE", "ADVERB"])
 
 const OFFENSIVE_TAGS = new Set(["vulgar", "offensive", "slur", "derogatory", "pejorative"])
 
@@ -157,7 +152,7 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 		jobId,
 		"out",
 		filePath
-			? `Kaikki: importing from file`
+			? "Kaikki: importing from file"
 			: `Kaikki: streaming ${downloadUrls.length} URL(s), mode ${kaikkiMode ?? "default"}`,
 	)
 

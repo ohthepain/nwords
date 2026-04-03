@@ -334,9 +334,7 @@ function AiConfigCard({
 						{error}
 					</p>
 				)}
-				{saved && (
-					<p className="text-sm text-muted-foreground">AI settings saved.</p>
-				)}
+				{saved && <p className="text-sm text-muted-foreground">AI settings saved.</p>}
 
 				<Button type="button" disabled={saving || !provider || !model} onClick={() => void save()}>
 					{saving ? "Saving…" : "Save AI settings"}

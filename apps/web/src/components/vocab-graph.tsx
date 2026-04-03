@@ -277,6 +277,7 @@ export function VocabGraph({
 	}, [activeWordId, visibleCells])
 
 	// Answer: 8 half-steps (150ms) toggling between old and new fill + ring
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally keyed on tick only
 	useEffect(() => {
 		if (!answerFlash) return
 		const { wordId, confidence: nextConf } = answerFlash
@@ -334,10 +335,7 @@ export function VocabGraph({
 	}
 
 	return (
-		<div
-			ref={measureRef}
-			className="relative flex w-full min-w-0 flex-col items-center space-y-2"
-		>
+		<div ref={measureRef} className="relative flex w-full min-w-0 flex-col items-center space-y-2">
 			<div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
 				<p className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider shrink-0">
 					Vocabulary graph

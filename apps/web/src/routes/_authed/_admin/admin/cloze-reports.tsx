@@ -4,7 +4,6 @@ import { Link, createFileRoute } from "@tanstack/react-router"
 import { createServerFn } from "@tanstack/react-start"
 import { getRequest } from "@tanstack/react-start/server"
 import { useCallback, useEffect, useState } from "react"
-import { WordDetailDialog } from "~/components/word-detail-dialog"
 import { Button } from "~/components/ui/button"
 import { Label } from "~/components/ui/label"
 import {
@@ -14,8 +13,9 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "~/components/ui/select"
-import { getWordPanelData, type WordPanelWord } from "~/lib/get-word-panel-data-server-fn"
-import { getWordSentences, type WordSentence } from "~/lib/get-word-sentences-server-fn"
+import { WordDetailDialog } from "~/components/word-detail-dialog"
+import { type WordPanelWord, getWordPanelData } from "~/lib/get-word-panel-data-server-fn"
+import { type WordSentence, getWordSentences } from "~/lib/get-word-sentences-server-fn"
 import { cn } from "~/lib/utils"
 
 const loadClozeReportsPage = createServerFn({ method: "GET" }).handler(async () => {
@@ -292,7 +292,13 @@ function AdminClozeReportsPage() {
 			<ul className="space-y-6">
 				{reports.map((r) => (
 					<li key={r.id}>
-						<ReportCard report={r} onPatch={patchReport} onDelete={deleteReport} onRefresh={loadReports} onOpenWord={openWordDetail} />
+						<ReportCard
+							report={r}
+							onPatch={patchReport}
+							onDelete={deleteReport}
+							onRefresh={loadReports}
+							onOpenWord={openWordDetail}
+						/>
 					</li>
 				))}
 			</ul>
@@ -493,9 +499,7 @@ function ReportCard({
 							</>
 						) : aiVerdict === "NOT_SYNONYM" ? (
 							<>
-								<p className="text-xs text-muted-foreground self-center">
-									AI says: not a synonym
-								</p>
+								<p className="text-xs text-muted-foreground self-center">AI says: not a synonym</p>
 								<Button
 									type="button"
 									size="sm"
@@ -505,12 +509,7 @@ function ReportCard({
 								>
 									Bad synonym
 								</Button>
-								<Button
-									type="button"
-									size="sm"
-									variant="ghost"
-									onClick={() => setAiVerdict(null)}
-								>
+								<Button type="button" size="sm" variant="ghost" onClick={() => setAiVerdict(null)}>
 									Reset
 								</Button>
 							</>
@@ -526,12 +525,7 @@ function ReportCard({
 								>
 									{aiVerdict === "GOOD_SYNONYM" ? "Good synonym" : "Bad synonym"}
 								</Button>
-								<Button
-									type="button"
-									size="sm"
-									variant="ghost"
-									onClick={() => setAiVerdict(null)}
-								>
+								<Button type="button" size="sm" variant="ghost" onClick={() => setAiVerdict(null)}>
 									Reset
 								</Button>
 							</>

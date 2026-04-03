@@ -119,11 +119,7 @@ export async function linkSentencesAndAssignTests(
 				position++
 			}
 
-			const { score, isCandidate } = scoreSentenceQuality(
-				s.text,
-				matchedTokens.size,
-				tokens.length,
-			)
+			const { score, isCandidate } = scoreSentenceQuality(s.text, matchedTokens.size, tokens.length)
 
 			await prisma.sentence.update({
 				where: { id: s.id },

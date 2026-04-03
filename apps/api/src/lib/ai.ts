@@ -12,7 +12,8 @@ export async function checkSynonymWithLlm(context: {
 	nativeLanguageCode: string
 }) {
 	const config = await getAiConfig()
-	if (!config) throw new Error("AI is not configured. Set provider, model, and API key in admin settings.")
+	if (!config)
+		throw new Error("AI is not configured. Set provider, model, and API key in admin settings.")
 
 	const model = createModel(config)
 

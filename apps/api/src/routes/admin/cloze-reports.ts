@@ -37,9 +37,7 @@ export const adminClozeReportsRoute = new Hono()
 			const reports = await prisma.clozeIssueReport.findMany({
 				where: {
 					...(targetLanguageId ? { targetLanguageId } : {}),
-					...(status
-						? { status }
-						: { status: { not: "DISMISSED" } }),
+					...(status ? { status } : { status: { not: "DISMISSED" } }),
 				},
 				orderBy: { createdAt: "desc" },
 				take: limit,

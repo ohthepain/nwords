@@ -3,12 +3,4 @@
  * should not appear in cloze or frequency-ranked vocabulary — even when Kaikki leaves
  * a non–sense-tagged gloss (e.g. Swedish "dr" for "doktor").
  */
-export const ABBREV_TITLE_LEMMAS = new Set([
-	"dr",
-	"mr",
-	"mrs",
-	"ms",
-	"mx",
-	"jr",
-	"sr",
-])
+export const ABBREV_TITLE_LEMMAS = new Set(["dr", "mr", "mrs", "ms", "mx", "jr", "sr"])

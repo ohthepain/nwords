@@ -1,9 +1,9 @@
 import type { ColorResult } from "@uiw/color-convert"
 import Wheel from "@uiw/react-color-wheel"
-import { VocabGraph } from "~/components/vocab-graph"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { Label } from "~/components/ui/label"
+import { VocabGraph } from "~/components/vocab-graph"
 import { cn } from "~/lib/utils"
 import { useThemeStore } from "~/stores/theme"
 import {
@@ -16,7 +16,8 @@ const STOP_META: { key: VocabGraphColorKey; title: string; description: string }
 	{
 		key: "before",
 		title: "Before",
-		description: "Low confidence end of the scale (heatmap cells trending toward “still learning”).",
+		description:
+			"Low confidence end of the scale (heatmap cells trending toward “still learning”).",
 	},
 	{
 		key: "after",
@@ -31,7 +32,8 @@ const STOP_META: { key: VocabGraphColorKey; title: string; description: string }
 	{
 		key: "unconquered",
 		title: "Unconquered",
-		description: "Open field behind the heatmap and grid gaps; untested cells blend slightly toward muted text.",
+		description:
+			"Open field behind the heatmap and grid gaps; untested cells blend slightly toward muted text.",
 	},
 ]
 
@@ -58,19 +60,19 @@ function HsvaWheelBlock({
 			</div>
 			<div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start">
 				<div className="shrink-0 rounded-full ring-1 ring-border/50 shadow-inner overflow-hidden">
-					<Wheel
-						width={168}
-						height={168}
-						color={hsva}
-						onChange={onWheel}
-					/>
+					<Wheel width={168} height={168} color={hsva} onChange={onWheel} />
 				</div>
 				<div className="w-full max-w-[200px] space-y-2 sm:pt-1">
 					<div className="flex items-center justify-between gap-2">
-						<Label htmlFor={`vocab-bri-${id}`} className="text-xs font-mono uppercase tracking-wider text-muted-foreground">
+						<Label
+							htmlFor={`vocab-bri-${id}`}
+							className="text-xs font-mono uppercase tracking-wider text-muted-foreground"
+						>
 							Brightness
 						</Label>
-						<span className="text-xs tabular-nums text-muted-foreground">{Math.round(hsva.v)}%</span>
+						<span className="text-xs tabular-nums text-muted-foreground">
+							{Math.round(hsva.v)}%
+						</span>
 					</div>
 					<input
 						id={`vocab-bri-${id}`}
@@ -164,7 +166,8 @@ export function VocabGraphColorsSettingsCard({
 							Reset to recommended ({dark ? "dark" : "light"})
 						</Button>
 						<p className="text-xs text-muted-foreground">
-							Defaults match the built-in theme. Switch appearance and reset again for the other palette.
+							Defaults match the built-in theme. Switch appearance and reset again for the other
+							palette.
 						</p>
 					</div>
 				</div>

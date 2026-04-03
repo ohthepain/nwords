@@ -194,10 +194,12 @@ async function findBestNativeParallelForSense(
 		row.originalSentenceId === targetSentenceId ? row.translatedSentence : row.originalSentence,
 	)
 
+	// biome-ignore lint/style/noNonNullAssertion: mapped is non-empty (rows is non-empty)
 	let best = mapped[0]!
 	let bestScore = scoreParallelForSense(best.text, sense)
 
 	for (let i = 1; i < mapped.length; i++) {
+		// biome-ignore lint/style/noNonNullAssertion: index within bounds
 		const par = mapped[i]!
 		const sc = scoreParallelForSense(par.text, sense)
 		if (sc > bestScore) {
@@ -310,6 +312,7 @@ function tryParallelAlignedInlineHint(
 ): string | null {
 	const runs = wordRunsInOrder(parallelText)
 	if (blankTokenIndex < 0 || blankTokenIndex >= runs.length) return null
+	// biome-ignore lint/style/noNonNullAssertion: bounds checked above
 	const raw = runs[blankTokenIndex]!
 	const tok = raw.toLowerCase()
 	if (tok.length < 2) return null
@@ -326,19 +329,24 @@ function withinEditDistance(a: string, b: string, max: number): boolean {
 	if (Math.abs(m - n) > max) return false
 
 	const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0))
+	// biome-ignore lint/style/noNonNullAssertion: dp indices are within bounds by construction
 	for (let i = 0; i <= m; i++) dp[i]![0] = i
+	// biome-ignore lint/style/noNonNullAssertion: dp indices are within bounds by construction
 	for (let j = 0; j <= n; j++) dp[0]![j] = j
 
 	for (let i = 1; i <= m; i++) {
 		let rowMin = Number.POSITIVE_INFINITY
 		for (let j = 1; j <= n; j++) {
 			const cost = a[i - 1] === b[j - 1] ? 0 : 1
+			// biome-ignore lint/style/noNonNullAssertion: dp indices are within bounds by construction
 			const v = Math.min(dp[i - 1]![j]! + 1, dp[i]![j - 1]! + 1, dp[i - 1]![j - 1]! + cost)
+			// biome-ignore lint/style/noNonNullAssertion: dp indices are within bounds by construction
 			dp[i]![j] = v
 			if (v < rowMin) rowMin = v
 		}
 		if (rowMin > max) return false
 	}
+	// biome-ignore lint/style/noNonNullAssertion: dp indices are within bounds by construction
 	return dp[m]![n]! <= max
 }
 
@@ -439,6 +447,7 @@ async function tryParallelInlineHintWithWindow(
 	let bestIdx = blankTokenIndex
 
 	for (let i = from; i <= to; i++) {
+		// biome-ignore lint/style/noNonNullAssertion: index within bounds
 		const raw = runs[i]!
 		const tok = raw.toLowerCase()
 		if (tok.length < 2) continue
@@ -461,7 +470,7 @@ async function tryParallelInlineHintWithWindow(
 	if (bestTok == null) {
 		const alignedRaw =
 			blankTokenIndex >= 0 && blankTokenIndex < runs.length
-				? runs[blankTokenIndex]!.toLowerCase()
+				? runs[blankTokenIndex]?.toLowerCase()
 				: null
 		if (
 			alignedRaw != null &&

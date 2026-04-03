@@ -5,11 +5,11 @@ import { createServerFn } from "@tanstack/react-start"
 import { getRequest } from "@tanstack/react-start/server"
 import { BookOpen, ChevronDown, ChevronUp } from "lucide-react"
 import { useEffect, useState } from "react"
-import { WordDetailDialog } from "~/components/word-detail-dialog"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
-import { getWordSentences, type WordSentence } from "~/lib/get-word-sentences-server-fn"
+import { WordDetailDialog } from "~/components/word-detail-dialog"
+import { type WordSentence, getWordSentences } from "~/lib/get-word-sentences-server-fn"
 
 // ─── Types ──────────────────────────────────────────────
 
@@ -71,7 +71,17 @@ const searchVocab = createServerFn({ method: "POST" })
 		const session = await auth.api.getSession({ headers: request.headers })
 		if (!session?.user?.id) return { words: [], total: 0 }
 
-		const { languageId, knowledgeFilter, matchMode, query, pos, sortField, sortDir, limit, offset } = data
+		const {
+			languageId,
+			knowledgeFilter,
+			matchMode,
+			query,
+			pos,
+			sortField,
+			sortDir,
+			limit,
+			offset,
+		} = data
 
 		// Build the where clause for UserWordKnowledge
 		const where: Record<string, unknown> = {
@@ -88,7 +98,7 @@ const searchVocab = createServerFn({ method: "POST" })
 
 		// POS filter
 		if (pos && pos !== "ALL") {
-			where.word = { ...where.word as Record<string, unknown>, pos }
+			where.word = { ...(where.word as Record<string, unknown>), pos }
 		}
 
 		// Text search filter
@@ -104,14 +114,20 @@ const searchVocab = createServerFn({ method: "POST" })
 							: { contains: q }
 
 			where.word = {
-				...where.word as Record<string, unknown>,
+				...(where.word as Record<string, unknown>),
 				lemma: { ...lemmaFilter, mode: "insensitive" },
 			}
 		}
 
 		// Build orderBy
 		const wordSortFields = ["lemma", "pos"]
-		const knowledgeSortFields = ["confidence", "timesTested", "timesCorrect", "lastTestedAt", "streak"]
+		const knowledgeSortFields = [
+			"confidence",
+			"timesTested",
+			"timesCorrect",
+			"lastTestedAt",
+			"streak",
+		]
 
 		let orderBy: Record<string, unknown>
 		if (wordSortFields.includes(sortField)) {
@@ -214,7 +230,14 @@ const POS_BADGE_STYLES: Record<string, string> = {
 
 const PAGE_SIZE = 50
 
-type SortField = "lemma" | "pos" | "confidence" | "timesTested" | "timesCorrect" | "lastTestedAt" | "streak"
+type SortField =
+	| "lemma"
+	| "pos"
+	| "confidence"
+	| "timesTested"
+	| "timesCorrect"
+	| "lastTestedAt"
+	| "streak"
 
 // ─── Component ──────────────────────────────────────────
 
@@ -229,7 +252,9 @@ function VocabPage() {
 		return languages[0]?.id ?? ""
 	})
 	const [knowledgeFilter, setKnowledgeFilter] = useState<"all" | "known" | "unknown">("all")
-	const [matchMode, setMatchMode] = useState<"all" | "exact" | "contains" | "starts_with" | "ends_with">("all")
+	const [matchMode, setMatchMode] = useState<
+		"all" | "exact" | "contains" | "starts_with" | "ends_with"
+	>("all")
 	const [query, setQuery] = useState("")
 	const [pos, setPos] = useState("ALL")
 	const [sortField, setSortField] = useState<SortField>("confidence")
@@ -268,6 +293,7 @@ function VocabPage() {
 	}
 
 	// Auto-search when filters change
+	// biome-ignore lint/correctness/useExhaustiveDependencies: query is submitted explicitly, not on every keystroke
 	useEffect(() => {
 		if (!languageId) {
 			setResults(null)
@@ -455,7 +481,8 @@ function VocabPage() {
 						{results.total.toLocaleString()} word{results.total !== 1 ? "s" : ""} tested
 						{results.total > PAGE_SIZE && (
 							<>
-								{" "}— page {page + 1} of {totalPages}
+								{" "}
+								— page {page + 1} of {totalPages}
 							</>
 						)}
 					</p>
@@ -473,25 +500,53 @@ function VocabPage() {
 									<div className="min-w-[700px]">
 										{/* Header */}
 										<div className="grid grid-cols-[1fr_80px_70px_70px_70px_90px_50px_50px] gap-2 text-[10px] font-mono text-muted-foreground uppercase tracking-[0.12em] px-4 py-2.5 bg-muted/50 border-b border-border">
-											<button type="button" className="text-left hover:text-foreground transition-colors" onClick={() => handleSort("lemma")}>
+											<button
+												type="button"
+												className="text-left hover:text-foreground transition-colors"
+												onClick={() => handleSort("lemma")}
+											>
 												Word <SortIcon field="lemma" />
 											</button>
-											<button type="button" className="text-left hover:text-foreground transition-colors" onClick={() => handleSort("pos")}>
+											<button
+												type="button"
+												className="text-left hover:text-foreground transition-colors"
+												onClick={() => handleSort("pos")}
+											>
 												POS <SortIcon field="pos" />
 											</button>
-											<button type="button" className="text-right hover:text-foreground transition-colors" onClick={() => handleSort("confidence")}>
+											<button
+												type="button"
+												className="text-right hover:text-foreground transition-colors"
+												onClick={() => handleSort("confidence")}
+											>
 												Conf <SortIcon field="confidence" />
 											</button>
-											<button type="button" className="text-right hover:text-foreground transition-colors" onClick={() => handleSort("timesTested")}>
+											<button
+												type="button"
+												className="text-right hover:text-foreground transition-colors"
+												onClick={() => handleSort("timesTested")}
+											>
 												Tested <SortIcon field="timesTested" />
 											</button>
-											<button type="button" className="text-right hover:text-foreground transition-colors" onClick={() => handleSort("timesCorrect")}>
+											<button
+												type="button"
+												className="text-right hover:text-foreground transition-colors"
+												onClick={() => handleSort("timesCorrect")}
+											>
 												Correct <SortIcon field="timesCorrect" />
 											</button>
-											<button type="button" className="text-left hover:text-foreground transition-colors" onClick={() => handleSort("lastTestedAt")}>
+											<button
+												type="button"
+												className="text-left hover:text-foreground transition-colors"
+												onClick={() => handleSort("lastTestedAt")}
+											>
 												Last test <SortIcon field="lastTestedAt" />
 											</button>
-											<button type="button" className="text-right hover:text-foreground transition-colors" onClick={() => handleSort("streak")}>
+											<button
+												type="button"
+												className="text-right hover:text-foreground transition-colors"
+												onClick={() => handleSort("streak")}
+											>
 												Streak <SortIcon field="streak" />
 											</button>
 											<span className="text-center">Last</span>
@@ -605,4 +660,3 @@ function ConfidenceBadge({ value }: { value: number }) {
 					: "text-red-400"
 	return <span className={`${color} font-mono text-xs`}>{pct}%</span>
 }
-

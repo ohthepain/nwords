@@ -4,6 +4,7 @@ import { createFileRoute } from "@tanstack/react-router"
 import { createServerFn } from "@tanstack/react-start"
 import { getRequest } from "@tanstack/react-start/server"
 import { useState } from "react"
+import { VocabGraphColorsSettingsCard } from "~/components/settings/vocab-graph-colors-card"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { Label } from "~/components/ui/label"
@@ -14,7 +15,6 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "~/components/ui/select"
-import { VocabGraphColorsSettingsCard } from "~/components/settings/vocab-graph-colors-card"
 import { UI_STYLES, useThemeStore } from "~/stores/theme"
 
 const getSettingsData = createServerFn({ method: "GET" }).handler(async () => {
@@ -215,9 +215,7 @@ function SettingsPage() {
 				</CardContent>
 			</Card>
 
-			<VocabGraphColorsSettingsCard
-				previewLanguageId={targetId || data.targetLanguageId || null}
-			/>
+			<VocabGraphColorsSettingsCard previewLanguageId={targetId || data.targetLanguageId || null} />
 		</div>
 	)
 }

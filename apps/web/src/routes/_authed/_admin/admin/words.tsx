@@ -6,11 +6,11 @@ import { createFileRoute } from "@tanstack/react-router"
 import { createServerFn } from "@tanstack/react-start"
 import { getRequest } from "@tanstack/react-start/server"
 import { useEffect, useState } from "react"
-import { WordDetailDialog } from "~/components/word-detail-dialog"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
-import { getWordSentences, type WordSentence } from "~/lib/get-word-sentences-server-fn"
+import { WordDetailDialog } from "~/components/word-detail-dialog"
+import { type WordSentence, getWordSentences } from "~/lib/get-word-sentences-server-fn"
 
 // ─── Server Functions ────────────────────────────────────
 
@@ -233,10 +233,7 @@ function AdminWordsPage() {
 
 	function resolveLanguageId(searchId: string | undefined): string {
 		if (searchId && languages.some((l) => l.id === searchId)) return searchId
-		if (
-			defaultTargetLanguageId &&
-			languages.some((l) => l.id === defaultTargetLanguageId)
-		) {
+		if (defaultTargetLanguageId && languages.some((l) => l.id === defaultTargetLanguageId)) {
 			return defaultTargetLanguageId
 		}
 		return languages[0]?.id ?? ""
@@ -296,6 +293,7 @@ function AdminWordsPage() {
 		void runWordQuery()
 	}
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reload on language/POS change only; query/matchMode submitted explicitly
 	useEffect(() => {
 		if (!languageId) {
 			setResults(null)
@@ -314,8 +312,6 @@ function AdminWordsPage() {
 		return () => {
 			cancelled = true
 		}
-		/* Reload when language or POS filter changes only; pattern is submitted explicitly. */
-		// eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally omit query, matchMode
 	}, [languageId, pos])
 
 	return (
@@ -459,48 +455,48 @@ function AdminWordsPage() {
 							</div>
 							<div className="divide-y divide-border max-h-[60vh] overflow-auto">
 								{results.words.map((word) => (
-										<button
-											type="button"
-											key={word.id}
-											className="group grid grid-cols-[1fr_80px_70px_70px_52px_1fr] gap-3 items-center px-4 py-2 hover:bg-muted/30 transition-colors w-full text-left cursor-pointer"
-											onClick={() => void openWordDetail(word)}
+									<button
+										type="button"
+										key={word.id}
+										className="group grid grid-cols-[1fr_80px_70px_70px_52px_1fr] gap-3 items-center px-4 py-2 hover:bg-muted/30 transition-colors w-full text-left cursor-pointer"
+										onClick={() => void openWordDetail(word)}
+									>
+										<span className="text-sm font-medium font-mono group-hover:underline underline-offset-2 decoration-foreground/60 truncate text-left">
+											{word.lemma}
+										</span>
+										<span
+											className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full w-fit ${POS_BADGE_STYLES[word.pos] ?? "bg-muted text-muted-foreground"}`}
 										>
-											<span className="text-sm font-medium font-mono group-hover:underline underline-offset-2 decoration-foreground/60 truncate text-left">
-												{word.lemma}
-											</span>
-											<span
-												className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full w-fit ${POS_BADGE_STYLES[word.pos] ?? "bg-muted text-muted-foreground"}`}
-											>
-												{word.pos.toLowerCase()}
-											</span>
-											<span className="text-sm font-mono tabular-nums text-right text-muted-foreground">
-												{word.rank > 0 ? word.rank.toLocaleString() : "—"}
-											</span>
-											<span
-												className="text-xs font-mono text-muted-foreground"
-												title={
-													word.rank > 0
-														? "Stored on word or inferred from frequency rank"
-														: "Run frequency import so words get rank > 0"
-												}
-											>
-												{word.cefrLevel ?? "—"}
-											</span>
-											<span
-												className="text-sm font-mono tabular-nums text-right text-muted-foreground"
-												title="Distinct sentences this word is linked to"
-											>
-												{word.sentenceCount.toLocaleString()}
-											</span>
-											<span
-												className="text-xs text-muted-foreground truncate"
-												title={Array.isArray(word.definitions) ? word.definitions.join("; ") : ""}
-											>
-												{Array.isArray(word.definitions)
-													? word.definitions.slice(0, 3).join("; ")
-													: "—"}
-											</span>
-										</button>
+											{word.pos.toLowerCase()}
+										</span>
+										<span className="text-sm font-mono tabular-nums text-right text-muted-foreground">
+											{word.rank > 0 ? word.rank.toLocaleString() : "—"}
+										</span>
+										<span
+											className="text-xs font-mono text-muted-foreground"
+											title={
+												word.rank > 0
+													? "Stored on word or inferred from frequency rank"
+													: "Run frequency import so words get rank > 0"
+											}
+										>
+											{word.cefrLevel ?? "—"}
+										</span>
+										<span
+											className="text-sm font-mono tabular-nums text-right text-muted-foreground"
+											title="Distinct sentences this word is linked to"
+										>
+											{word.sentenceCount.toLocaleString()}
+										</span>
+										<span
+											className="text-xs text-muted-foreground truncate"
+											title={Array.isArray(word.definitions) ? word.definitions.join("; ") : ""}
+										>
+											{Array.isArray(word.definitions)
+												? word.definitions.slice(0, 3).join("; ")
+												: "—"}
+										</span>
+									</button>
 								))}
 							</div>
 						</div>
@@ -521,4 +517,3 @@ function AdminWordsPage() {
 		</div>
 	)
 }
-

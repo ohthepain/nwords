@@ -1,11 +1,11 @@
-import { defineConfig, devices } from "@playwright/test";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import path from "node:path"
+import { fileURLToPath } from "node:url"
+import { defineConfig, devices } from "@playwright/test"
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const baseURL = process.env.E2E_BASE_URL ?? "http://127.0.0.1:3000";
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const baseURL = process.env.E2E_BASE_URL ?? "http://127.0.0.1:3000"
 /** Set PLAYWRIGHT_SKIP_WEB_SERVER=1 when something else already serves `baseURL`. */
-const skipWebServer = process.env.PLAYWRIGHT_SKIP_WEB_SERVER === "1";
+const skipWebServer = process.env.PLAYWRIGHT_SKIP_WEB_SERVER === "1"
 
 export default defineConfig({
 	testDir: "e2e",
@@ -33,4 +33,4 @@ export default defineConfig({
 				reuseExistingServer: !process.env.CI,
 				timeout: 120_000,
 			},
-});
+})

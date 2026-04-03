@@ -223,7 +223,7 @@ function AdminSentencesPage() {
 										className="grid grid-cols-[1fr_80px_80px_1fr] gap-3 items-start px-4 py-2.5 hover:bg-muted/30 transition-colors"
 									>
 										<div className="space-y-1">
-											<HighlightedText text={sentence.text} query={query} matchMode={matchMode} />
+											<HighlightedText text={sentence.text} query={query} />
 											<div className="flex items-center gap-2">
 												{sentence.isTestCandidate && (
 													<span className="text-[10px] font-mono bg-known/15 text-known px-1.5 py-0.5 rounded-full">
@@ -284,11 +284,9 @@ function AdminSentencesPage() {
 function HighlightedText({
 	text,
 	query,
-	matchMode,
 }: {
 	text: string
 	query: string
-	matchMode: "starts_with" | "contains" | "ends_with"
 }) {
 	if (!query.trim()) return <span className="text-sm">{text}</span>
 

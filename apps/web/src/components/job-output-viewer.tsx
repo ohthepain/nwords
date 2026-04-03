@@ -103,6 +103,7 @@ export function JobOutputViewer({
 	const shownLines = linesForTab(allLines, tab)
 	const summaryError = detail ? jobMetadataError(detail.metadata) : null
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: shownLines/tab/summaryError are intentional triggers to auto-scroll on content change
 	useLayoutEffect(() => {
 		if (!autoScroll || !preRef.current) return
 		const el = preRef.current
@@ -130,6 +131,7 @@ export function JobOutputViewer({
 		>
 			<div
 				className="flex flex-col w-full max-w-4xl max-h-[min(88vh,900px)] rounded-lg border border-border bg-background shadow-xl"
+				// biome-ignore lint/a11y/useSemanticElements: custom positioned modal, not using native dialog
 				role="dialog"
 				aria-labelledby="job-output-title"
 			>

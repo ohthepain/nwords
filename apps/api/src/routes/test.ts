@@ -153,8 +153,8 @@ function pickPreferFreshFromOrderedIds(
 	return pool[idx]
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
 async function handleAssessmentNext(
+	// biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
 	c: Context<any>,
 	session: TestSession,
 	langs: { nativeLanguageId: string; targetLanguageId: string },
@@ -265,8 +265,8 @@ async function handleAssessmentNext(
 /**
  * Frustration mode: pick from words with high test count and low confidence.
  */
-// biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
 async function handleFrustrationNext(
+	// biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
 	c: Context<any>,
 	session: TestSession,
 	langs: { nativeLanguageId: string; targetLanguageId: string },
@@ -358,8 +358,8 @@ async function handleFrustrationNext(
  * Every 10th question, prefer the lowest rank not yet verified known (frontier) to grow territory.
  * Guests keep the legacy rank-window random walk (no profile / knowledge).
  */
-// biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
 async function handleBuildGuestNext(
+	// biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
 	c: Context<any>,
 	session: TestSession,
 	langs: { nativeLanguageId: string; targetLanguageId: string },
@@ -413,8 +413,8 @@ async function handleBuildGuestNext(
 	)
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
 async function handleBuildNext(
+	// biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
 	c: Context<any>,
 	session: TestSession,
 	langs: { nativeLanguageId: string; targetLanguageId: string },

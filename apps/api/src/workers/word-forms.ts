@@ -113,7 +113,7 @@ function senseHasAbbreviationTag(sense: {
 }
 
 export async function processWordFormsJob(job: PgBoss.Job<WordFormsJobData>) {
-	const { jobId, languageId, filePath, downloadUrl, chainPipeline, kaikkiMode } = job.data
+	const { jobId, languageId, filePath, downloadUrl, kaikkiMode } = job.data
 	const downloadUrls = job.data.downloadUrls?.length
 		? job.data.downloadUrls
 		: downloadUrl
@@ -149,7 +149,7 @@ export async function processWordFormsJob(job: PgBoss.Job<WordFormsJobData>) {
 		jobId,
 		"out",
 		filePath
-			? `Word forms: importing from file`
+			? "Word forms: importing from file"
 			: `Word forms: streaming ${downloadUrls.length} URL(s), mode ${kaikkiMode ?? "default"}`,
 	)
 
