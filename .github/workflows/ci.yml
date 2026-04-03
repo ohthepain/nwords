@@ -18,6 +18,9 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # @nwords/db instantiates Prisma at module load; vite build imports it. No real DB required for build.
+      DATABASE_URL: postgresql://localhost:5432/dummy
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -38,8 +41,6 @@ jobs:
 
       - name: Generate Prisma client
         run: pnpm db:generate
-        env:
-          DATABASE_URL: postgresql://localhost:5432/dummy
 
       - name: TypeScript check
         run: pnpm exec tsc --noEmit

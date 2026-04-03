@@ -20,7 +20,9 @@ The selected workspace **must** match `environment` in the tfvars file (enforced
 
 ## GitHub Actions / OIDC
 
-Configure GitHub environments **staging** and **production** with repository secrets:
+### Secrets on environments `staging` and `production`
+
+These are the **only** GitHub secrets required for Terraform-backed deploy jobs (`ci.yml` deploy steps) and for **Staging up/down** workflows (they use `AWS_ROLE_ARN_DEPLOY` only):
 
 | Secret | Purpose |
 |--------|---------|
@@ -30,7 +32,20 @@ Configure GitHub environments **staging** and **production** with repository sec
 
 The deploy role needs at least: ECR push/pull to the shared repo, `ecs:UpdateService` / `Describe*` on the env cluster and service, and read access to Terraform state (S3 objects under the app state prefix + DynamoDB lock table). Narrow ARNs to your account.
 
-CI sets `TF_VAR_network_state_bucket` and `TF_VAR_environment` so `terraform output` works without committing secrets.
+Deploy jobs set `TF_VAR_network_state_bucket` and `TF_VAR_environment` so `terraform output` works without committing secrets.
+
+### Application database URL (not a GitHub secret)
+
+`DATABASE_URL` for **running** the app in ECS is created by Terraform in **AWS Secrets Manager** (`terraform/secrets.tf`) and injected into the task definition (`terraform/ecs.tf`). You do **not** add `DATABASE_URL` to GitHub for deploy.
+
+The **`build-and-test`** job in CI uses a **dummy** `DATABASE_URL` in the workflow so `pnpm run build` can load `@nwords/db` (Prisma is initialized at import time). That is unrelated to Terraform secrets.
+
+### Optional repo-level secrets (other workflows)
+
+| Secret | Used by |
+|--------|---------|
+| `SNYK_TOKEN` | `snyk-security.yml` |
+| `ROLLUP_GH_TOKEN`, `OPENAI_API_KEY` | `dependabot-rollup.yml` |
 
 ## Container image
 
