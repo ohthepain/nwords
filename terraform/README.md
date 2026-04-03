@@ -57,7 +57,16 @@ The **`build-and-test`** job in CI uses a **dummy** `DATABASE_URL` in the workfl
 
 ## Database migrations
 
-After RDS is available (and after **staging up** if RDS was stopped), run migrations using `terraform output -raw database_url` (sensitive) or the `DATABASE_URL` key in Secrets Manager. Stopping RDS does not change Terraform state.
+Each ECS task runs **`prisma migrate deploy`** on startup (see `scripts/docker-entrypoint.sh` in the repo) so the schema stays in sync with the image. RDS is not publicly reachable, so migrations are not run from GitHub Actions.
+
+For a **local** or emergency run against the real URL, use `terraform output -raw database_url` (sensitive) or the `DATABASE_URL` key in Secrets Manager, then from the repo: `pnpm db:migrate:deploy`. Stopping RDS does not change Terraform state.
+
+### Initial seed (languages + default admin)
+
+Seeding is **not** automatic on deploy. After the first successful migration, run once per environment (from a machine that can reach RDS, or override the ECS container command to run seed only):
+
+- `pnpm db:seed` with `DATABASE_URL` and `SEED_ADMIN_PASSWORD` set, or
+- In the container: `cd /app/packages/db && npx prisma db seed` (requires `SEED_ADMIN_PASSWORD` in the task secrets, already present for ECS).
 
 ### Prisma P1010 (“denied access on the database `nwords`”)
 

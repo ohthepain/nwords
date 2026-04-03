@@ -36,6 +36,10 @@ ENV PORT=3000
 
 COPY --from=builder /app /app
 
+COPY scripts/docker-entrypoint.sh /app/scripts/docker-entrypoint.sh
+RUN chmod +x /app/scripts/docker-entrypoint.sh
+
 WORKDIR /app/apps/web
 EXPOSE 3000
+ENTRYPOINT ["/app/scripts/docker-entrypoint.sh"]
 CMD ["node", "server-production.mjs"]

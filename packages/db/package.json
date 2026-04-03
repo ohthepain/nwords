@@ -3,6 +3,9 @@
 	"version": "0.0.1",
 	"private": true,
 	"type": "module",
+	"prisma": {
+		"seed": "tsx prisma/seed.ts"
+	},
 	"exports": {
 		".": "./src/index.ts"
 	},
@@ -12,6 +15,7 @@
 		"db:push": "prisma db push",
 		"predb:migrate": "prisma generate",
 		"db:migrate": "prisma migrate dev",
+		"db:migrate:deploy": "prisma migrate deploy",
 		"predb:studio": "prisma generate",
 		"db:studio": "prisma studio",
 		"db:seed": "tsx prisma/seed.ts",
