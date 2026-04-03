@@ -1,3 +1,6 @@
+import fs from "node:fs/promises"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
 /**
  * TanStack Start's Vite build emits a Web Fetch handler only (no HTTP listen).
  * Running `node dist/server/server.js` loads the module and exits 0 — ECS sees
@@ -6,9 +9,6 @@
  */
 import { serve } from "@hono/node-server"
 import server from "./dist/server/server.js"
-import fs from "node:fs/promises"
-import path from "node:path"
-import { fileURLToPath } from "node:url"
 
 const port = Number(process.env.PORT) || 3000
 const hostname = process.env.HOST ?? "0.0.0.0"
