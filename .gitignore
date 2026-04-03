@@ -13,7 +13,7 @@ packages/db/src/generated
 coverage
 playwright-report
 test-results
-output/playwright
+apps/web/output/
 uploads
 
 # Terraform local backend config (copy from *.example); CI generates backend.hcl.
