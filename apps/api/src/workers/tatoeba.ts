@@ -470,7 +470,7 @@ async function importCrossLanguageLinksFromTatoeba(
 	let total = 0
 	for (const row of partners) {
 		const other = row.code3?.toLowerCase()
-		if (other === self) continue
+		if (!other || other === self) continue
 
 		if (await isIngestionJobCancelled(jobId)) {
 			return total
