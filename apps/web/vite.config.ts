@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import tailwindcss from "@tailwindcss/vite"
@@ -38,5 +39,11 @@ export default defineConfig(({ mode }) => {
 			}),
 			tailwindcss(),
 		],
+		test: {
+			// Only unit tests in this app; do not pick up Playwright e2e or dependency packages' tests.
+			include: ["src/**/*.{test,spec}.{ts,tsx}"],
+			exclude: ["**/e2e/**"],
+			passWithNoTests: true,
+		},
 	}
 })
