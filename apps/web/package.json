@@ -6,12 +6,13 @@
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build",
-		"start": "node dist/server/server.js",
+		"start": "node server-production.mjs",
 		"test": "vitest run",
 		"test:e2e": "playwright test",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@hono/node-server": "^1.14.0",
 		"@nwords/api": "workspace:*",
 		"@nwords/auth": "workspace:*",
 		"@nwords/db": "workspace:*",

@@ -31,4 +31,4 @@ COPY --from=builder /app /app
 
 WORKDIR /app/apps/web
 EXPOSE 3000
-CMD ["node", "dist/server/server.js"]
+CMD ["node", "server-production.mjs"]
