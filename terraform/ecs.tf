@@ -49,7 +49,7 @@ resource "aws_ecs_task_definition" "app" {
         # API's Tatoeba audio hydration checks S3_BUCKET.
         { name = "S3_BUCKET", value = aws_s3_bucket.uploads.bucket },
         # Better Auth needs the public base URL for trusted origins/callback generation.
-        { name = "BETTER_AUTH_URL", value = "http://${aws_lb.main.dns_name}" },
+        { name = "BETTER_AUTH_URL", value = "https://${aws_lb.main.dns_name}" },
       ]
 
       secrets = [
@@ -123,5 +123,5 @@ resource "aws_ecs_service" "app" {
     container_port   = var.app_port
   }
 
-  depends_on = [aws_lb_listener.http]
+  depends_on = [aws_lb_listener.https]
 }

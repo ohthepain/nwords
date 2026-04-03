@@ -16,8 +16,8 @@ output "alb_dns_name" {
 }
 
 output "app_url" {
-  description = "HTTP URL via ALB (use HTTPS after CloudFront/ACM)."
-  value       = "http://${aws_lb.main.dns_name}"
+  description = "HTTPS URL via ALB."
+  value       = "https://${aws_lb.main.dns_name}"
 }
 
 output "database_url" {
@@ -48,5 +48,5 @@ output "rds_identifier" {
 
 output "google_auth_enabled_ui" {
   description = "Whether the built web UI should show the Google OAuth button."
-  value = var.google_auth_enabled
+  value       = var.google_auth_enabled
 }

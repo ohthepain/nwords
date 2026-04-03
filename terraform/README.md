@@ -12,6 +12,7 @@ Layout:
 2. Copy `terraform/network/backend.hcl.example` → `terraform/network/backend.hcl` and set `bucket` / `dynamodb_table` from bootstrap outputs.
 3. `cd terraform/network && terraform init -backend-config=backend.hcl && terraform apply`
 4. In `terraform/environments/staging/terraform.tfvars` and `production/terraform.tfvars`, set `network_state_bucket` to the same bucket as bootstrap (not a secret).
+   Also set `alb_certificate_arn` to an ACM certificate in `eu-central-1` for each environment.
 5. Copy `terraform/backend.hcl.example` → `terraform/backend.hcl` with the same bucket and lock table.
 6. `./scripts/tf-init.sh`
 7. `./scripts/tf-plan.sh staging` then `./scripts/tf-apply.sh staging` (repeat for `production` after `terraform workspace new production` or `select`).
@@ -52,6 +53,7 @@ The **`build-and-test`** job in CI uses a **dummy** `DATABASE_URL` in the workfl
 - Root **Dockerfile**: multi-stage build, **linux/arm64**, serves TanStack Start (`apps/web` `dist/server/server.js`) on port **3000**.
 - Task definition uses image `{ecr_url}:staging` or `:production` matching the workspace.
 - ALB health check: **`/api/health`**.
+- Public traffic is terminated at the ALB on **HTTPS (443)** with **HTTP (80) -> HTTPS redirect**.
 
 ## Database migrations
 

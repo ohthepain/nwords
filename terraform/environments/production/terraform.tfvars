@@ -1,6 +1,7 @@
 environment = "production"
 
 network_state_bucket = "nwords-terraform-state"
+alb_certificate_arn  = "arn:aws:acm:eu-central-1:320205321328:certificate/558d0af5-a4b8-49b1-9449-60d21a8906e4"
 
 ecs_desired_count = 1
 ecs_cpu           = 1024

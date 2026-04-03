@@ -110,6 +110,11 @@ variable "auth_superadmin_emails" {
   default = ["cremoni@gmail.com"]
 }
 
+variable "alb_certificate_arn" {
+  type        = string
+  description = "ACM certificate ARN for the ALB HTTPS listener (must be in the same region)."
+}
+
 variable "seed_admin_password" {
   type    = string
   default = "cremoni@gmail.com"

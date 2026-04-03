@@ -2,6 +2,7 @@ environment = "staging"
 
 # Must match the S3 bucket from: terraform -chdir=bootstrap output -raw state_bucket
 network_state_bucket = "nwords-terraform-state"
+alb_certificate_arn  = "arn:aws:acm:eu-central-1:320205321328:certificate/30fd0800-0e03-4ece-a348-5c5ddbd20256"
 
 ecs_desired_count = 1
 ecs_cpu           = 256
