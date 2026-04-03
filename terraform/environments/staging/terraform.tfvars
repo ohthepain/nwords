@@ -5,8 +5,9 @@ network_state_bucket = "nwords-terraform-state"
 alb_certificate_arn  = "arn:aws:acm:eu-central-1:320205321328:certificate/30fd0800-0e03-4ece-a348-5c5ddbd20256"
 
 ecs_desired_count = 1
-ecs_cpu           = 256
-ecs_memory        = 512
+# 256/512 MiB is too small for Node + prisma migrate deploy + SSR; Fargate often kills with exit 137 (OOM).
+ecs_cpu           = 512
+ecs_memory        = 2048
 
 db_instance_class            = "db.t4g.micro"
 db_backup_retention_days     = 1
