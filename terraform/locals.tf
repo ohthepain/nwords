@@ -10,8 +10,11 @@ check "workspace_matches_environment" {
   }
 }
 
+# Network stack is not workspace-scoped; app uses staging/production workspaces.
 data "terraform_remote_state" "network" {
-  backend = "s3"
+  backend   = "s3"
+  workspace = "default"
+
   config = {
     bucket = var.network_state_bucket
     key    = var.network_state_key

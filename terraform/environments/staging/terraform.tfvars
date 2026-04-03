@@ -1,7 +1,7 @@
 environment = "staging"
 
 # Must match the S3 bucket from: terraform -chdir=bootstrap output -raw state_bucket
-network_state_bucket = "nwords-tf-state-REPLACE_AWS_ACCOUNT_ID"
+network_state_bucket = "nwords-terraform-state"
 
 ecs_desired_count = 1
 ecs_cpu           = 256

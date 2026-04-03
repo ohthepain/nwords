@@ -1,26 +1,30 @@
 {
-	"name": "nwords",
-	"private": true,
-	"packageManager": "pnpm@9.15.4",
-	"scripts": {
-		"dev": "turbo dev",
-		"build": "turbo build",
-		"lint": "biome check .",
-		"lint:fix": "biome check --write .",
-		"format": "biome format --write .",
-		"test": "turbo test",
-		"test:e2e": "turbo test:e2e",
-		"db:generate": "turbo db:generate",
-		"db:push": "turbo db:push",
-		"db:migrate": "turbo db:migrate",
-		"db:seed": "pnpm --filter @nwords/db run db:seed",
-		"db:studio": "pnpm --filter @nwords/db run db:studio",
-		"typecheck": "turbo typecheck"
-	},
-	"devDependencies": {
-		"@biomejs/biome": "^1.9.4",
-		"@ngrok/ngrok": "^1.7.0",
-		"turbo": "^2.9.0",
-		"typescript": "^5.7.3"
-	}
+  "name": "nwords",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "test": "turbo test",
+    "test:e2e": "turbo test:e2e",
+    "db:generate": "turbo db:generate",
+    "db:push": "turbo db:push",
+    "db:migrate": "turbo db:migrate",
+    "db:seed": "pnpm --filter @nwords/db run db:seed",
+    "db:studio": "pnpm --filter @nwords/db run db:studio",
+    "typecheck": "turbo typecheck",
+    "tf:plan:staging": "scripts/tf-plan.sh staging",
+    "tf:apply:staging": "scripts/tf-apply.sh staging",
+    "tf:plan:prod": "scripts/tf-plan.sh production",
+    "tf:apply:prod": "scripts/tf-apply.sh production"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@ngrok/ngrok": "^1.7.0",
+    "turbo": "^2.9.0",
+    "typescript": "^5.7.3"
+  }
 }
