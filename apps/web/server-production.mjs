@@ -19,7 +19,8 @@ const __dirname = path.dirname(__filename)
 // TanStack Start's production fetch handler renders HTML routes but does not
 // automatically serve Vite's static client assets. Serve them explicitly so
 // CSS/JS are available at their hashed `/assets/...` URLs.
-const viteAssetsDir = path.join(__dirname, "dist", "client", "assets")
+const viteClientDir = path.join(__dirname, "dist", "client")
+const viteAssetsDir = path.join(viteClientDir, "assets")
 
 const mimeByExt = {
 	".css": "text/css; charset=utf-8",
@@ -47,35 +48,38 @@ function getMimeType(filePath) {
 	return mimeByExt[ext] ?? "application/octet-stream"
 }
 
-async function tryServeViteAsset(req) {
+async function tryServeStaticFile(req) {
 	const url = new URL(req.url)
 	const pathname = url.pathname
-	if (!pathname.startsWith("/assets/")) return null
-
-	// Drop `/assets/` prefix, then safely map to `dist/client/assets`.
-	const relPathRaw = pathname.slice("/assets/".length)
-	if (!relPathRaw) return null
 
 	// Best-effort decoding; if it fails, treat it as not found.
 	let relPath
 	try {
-		relPath = decodeURIComponent(relPathRaw)
+		relPath = decodeURIComponent(pathname.slice(1)) // strip leading "/"
 	} catch {
 		return null
 	}
+	if (!relPath) return null
 
-	// Prevent path traversal (e.g. `/assets/../server.js`).
-	const filePath = path.resolve(viteAssetsDir, relPath)
-	if (!filePath.startsWith(viteAssetsDir + path.sep)) return null
+	// Only serve files with a known static-asset extension.
+	const ext = path.extname(relPath).toLowerCase()
+	if (!mimeByExt[ext]) return null
+
+	// Resolve against the client build output directory.
+	const filePath = path.resolve(viteClientDir, relPath)
+	// Prevent path traversal (e.g. `/../server.js`).
+	if (!filePath.startsWith(viteClientDir + path.sep)) return null
 
 	try {
 		const data = await fs.readFile(filePath)
+		const isHashed = pathname.startsWith("/assets/")
 		return new Response(data, {
 			status: 200,
 			headers: {
 				"content-type": getMimeType(filePath),
-				// Hashed filenames can be aggressively cached.
-				"cache-control": "public, max-age=31536000, immutable",
+				"cache-control": isHashed
+					? "public, max-age=31536000, immutable"
+					: "public, max-age=3600",
 			},
 		})
 	} catch (err) {
@@ -87,7 +91,7 @@ async function tryServeViteAsset(req) {
 serve(
 	{
 		fetch: async (req) => {
-			const assetResponse = await tryServeViteAsset(req)
+			const assetResponse = await tryServeStaticFile(req)
 			return assetResponse ?? server.fetch(req)
 		},
 		port,
