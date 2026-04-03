@@ -1,4 +1,5 @@
 /// <reference types="vitest/config" />
+import { execSync } from "node:child_process"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import tailwindcss from "@tailwindcss/vite"
@@ -23,7 +24,12 @@ export default defineConfig(({ mode }) => {
 	mergeEnvIntoProcessEnv(mode, monorepoRoot)
 	mergeEnvIntoProcessEnv(mode, dbPackageRoot)
 
+	const gitHash = execSync("git rev-parse --short HEAD").toString().trim()
+
 	return {
+		define: {
+			__GIT_HASH__: JSON.stringify(gitHash),
+		},
 		envDir: monorepoRoot,
 		envPrefix: ["VITE_", "GOOGLE_AUTH_"],
 		server: {

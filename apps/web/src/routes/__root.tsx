@@ -81,6 +81,11 @@ function RootComponent() {
 			<div className="min-h-screen flex flex-col">
 				<VocabGraphThemeSync />
 				<Outlet />
+				{import.meta.env.DEV && (
+					<div className="fixed bottom-1 right-2 text-[10px] font-mono text-muted-foreground/50 select-none pointer-events-none">
+						{__GIT_HASH__}
+					</div>
+				)}
 			</div>
 		</RootDocument>
 	)
