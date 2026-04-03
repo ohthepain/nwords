@@ -23,13 +23,26 @@ resource "aws_secretsmanager_secret" "app" {
   }
 }
 
+resource "random_password" "better_auth_secret" {
+  length  = 64
+  special = false
+}
+
 resource "aws_secretsmanager_secret_version" "app_initial" {
   secret_id = aws_secretsmanager_secret.app.id
   secret_string = jsonencode({
-    PLACEHOLDER = "replace-via-console-or-CI"
-  })
+    BETTER_AUTH_SECRET = random_password.better_auth_secret.result
+    # The app expects a JSON object with these keys because ECS injects them
+    # via `valueFrom = <secret_arn>:<json_key>::`.
 
-  lifecycle {
-    ignore_changes = [secret_string]
-  }
+    # Third-party API secrets (empty placeholders are OK; features become disabled).
+    OPENAI_API_KEY = ""
+    GOOGLE_CLIENT_ID = ""
+    GOOGLE_CLIENT_SECRET = ""
+
+    # Admin + email plumbing
+    AUTH_SUPERADMIN_EMAILS = join(",", var.auth_superadmin_emails)
+    SEED_ADMIN_PASSWORD    = var.seed_admin_password
+    SES_FROM_EMAIL         = var.ses_from_email
+  })
 }

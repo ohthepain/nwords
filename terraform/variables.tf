@@ -99,3 +99,18 @@ variable "uploads_cors_allowed_origins" {
   description = "CORS allowed origins for the uploads bucket (set to your app URL in production)."
   default     = ["*"]
 }
+
+variable "ses_from_email" {
+  type    = string
+  default = "no-reply@nwords.live"
+}
+
+variable "auth_superadmin_emails" {
+  type    = list(string)
+  default = ["cremoni@gmail.com"]
+}
+
+variable "seed_admin_password" {
+  type    = string
+  default = "cremoni@gmail.com"
+}

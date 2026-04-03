@@ -46,12 +46,44 @@ resource "aws_ecs_task_definition" "app" {
         { name = "PORT", value = tostring(var.app_port) },
         { name = "AWS_REGION", value = var.aws_region },
         { name = "S3_UPLOADS_BUCKET", value = aws_s3_bucket.uploads.bucket },
+        # API's Tatoeba audio hydration checks S3_BUCKET.
+        { name = "S3_BUCKET", value = aws_s3_bucket.uploads.bucket },
+        # Better Auth needs the public base URL for trusted origins/callback generation.
+        { name = "BETTER_AUTH_URL", value = "http://${aws_lb.main.dns_name}" },
       ]
 
       secrets = [
         {
           name      = "DATABASE_URL"
           valueFrom = "${aws_secretsmanager_secret.database.arn}:DATABASE_URL::"
+        },
+        {
+          name      = "BETTER_AUTH_SECRET"
+          valueFrom = "${aws_secretsmanager_secret.app.arn}:BETTER_AUTH_SECRET::"
+        },
+        {
+          name      = "OPENAI_API_KEY"
+          valueFrom = "${aws_secretsmanager_secret.app.arn}:OPENAI_API_KEY::"
+        },
+        {
+          name      = "GOOGLE_CLIENT_ID"
+          valueFrom = "${aws_secretsmanager_secret.app.arn}:GOOGLE_CLIENT_ID::"
+        },
+        {
+          name      = "GOOGLE_CLIENT_SECRET"
+          valueFrom = "${aws_secretsmanager_secret.app.arn}:GOOGLE_CLIENT_SECRET::"
+        },
+        {
+          name      = "AUTH_SUPERADMIN_EMAILS"
+          valueFrom = "${aws_secretsmanager_secret.app.arn}:AUTH_SUPERADMIN_EMAILS::"
+        },
+        {
+          name      = "SEED_ADMIN_PASSWORD"
+          valueFrom = "${aws_secretsmanager_secret.app.arn}:SEED_ADMIN_PASSWORD::"
+        },
+        {
+          name      = "SES_FROM_EMAIL"
+          valueFrom = "${aws_secretsmanager_secret.app.arn}:SES_FROM_EMAIL::"
         }
       ]
 
