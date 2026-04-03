@@ -22,9 +22,15 @@ RUN GOOGLE_AUTH_ENABLED="$GOOGLE_AUTH_ENABLED" pnpm run build
 FROM node:22-bookworm-slim AS runner
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
+# Node uses its own CA store for TLS (not Debian's). RDS certs chain to Amazon PKI roots
+# that are not in Node's default bundle; without this, pg/Prisma fail with
+# "self-signed certificate in certificate chain" against AWS RDS.
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates curl \
+	&& curl -fsSL https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
+		-o /etc/ssl/certs/rds-global-bundle.pem \
 	&& rm -rf /var/lib/apt/lists/*
 
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem
 ENV NODE_ENV=production
 ENV PORT=3000
 
