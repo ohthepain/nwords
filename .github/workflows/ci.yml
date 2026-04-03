@@ -121,8 +121,9 @@ jobs:
         run: |
           cd terraform
           ECR_URL=$(terraform output -raw ecr_repository_url)
+          GOOGLE_AUTH_ENABLED_UI=$(terraform output -raw google_auth_enabled_ui)
           cd ..
-          docker build --platform linux/arm64 -t "$ECR_URL:staging" .
+          docker build --platform linux/arm64 -t "$ECR_URL:staging" --build-arg GOOGLE_AUTH_ENABLED="$GOOGLE_AUTH_ENABLED_UI" .
           docker push "$ECR_URL:staging"
 
       - name: Deploy to ECS
@@ -194,8 +195,9 @@ jobs:
         run: |
           cd terraform
           ECR_URL=$(terraform output -raw ecr_repository_url)
+          GOOGLE_AUTH_ENABLED_UI=$(terraform output -raw google_auth_enabled_ui)
           cd ..
-          docker build --platform linux/arm64 -t "$ECR_URL:production" .
+          docker build --platform linux/arm64 -t "$ECR_URL:production" --build-arg GOOGLE_AUTH_ENABLED="$GOOGLE_AUTH_ENABLED_UI" .
           docker push "$ECR_URL:production"
 
       - name: Deploy to ECS

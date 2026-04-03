@@ -45,3 +45,8 @@ output "name_prefix" {
 output "rds_identifier" {
   value = aws_db_instance.main.identifier
 }
+
+output "google_auth_enabled_ui" {
+  description = "Whether the built web UI should show the Google OAuth button."
+  value = var.google_auth_enabled
+}

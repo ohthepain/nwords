@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 # Single image: TanStack Start server + in-process API (linux/arm64 for ECS Graviton).
 FROM node:22-bookworm-slim AS builder
+ARG GOOGLE_AUTH_ENABLED=false
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
@@ -16,7 +17,7 @@ ENV DATABASE_URL=postgresql://build:build@127.0.0.1:5432/build
 
 RUN pnpm install --frozen-lockfile
 RUN pnpm db:generate
-RUN pnpm run build
+RUN GOOGLE_AUTH_ENABLED="$GOOGLE_AUTH_ENABLED" pnpm run build
 
 FROM node:22-bookworm-slim AS runner
 WORKDIR /app

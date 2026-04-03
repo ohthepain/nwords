@@ -114,3 +114,27 @@ variable "seed_admin_password" {
   type    = string
   default = "cremoni@gmail.com"
 }
+
+variable "google_auth_enabled" {
+  type    = bool
+  default = true
+}
+
+variable "openai_api_key_secret_arn" {
+  type        = string
+  description = "arn:aws:secretsmanager:eu-central-1:320205321328:secret:nwords_openai_api_key-eoQgrp"
+  default     = ""
+}
+
+variable "google_client_id_secret_arn" {
+  type        = string
+  description = "arn:aws:secretsmanager:eu-central-1:320205321328:secret:nwords_google_client_id-RWj3Cm"
+  default     = ""
+}
+
+variable "google_client_secret_secret_arn" {
+  type        = string
+  description = "arn:aws:secretsmanager:eu-central-1:320205321328:secret:nwords_google_client_secret-ifjWcg"
+  default     = ""
+}
+

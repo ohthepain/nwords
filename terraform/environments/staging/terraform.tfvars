@@ -13,3 +13,8 @@ db_multi_az                  = false
 db_skip_final_snapshot       = true
 db_deletion_protection       = false
 uploads_bucket_force_destroy = true
+
+# Existing Secrets Manager secrets (provide ARNs for these to enable features).
+openai_api_key_secret_arn       = "arn:aws:secretsmanager:eu-central-1:320205321328:secret:nwords_openai_api_key-eoQgrp"
+google_client_id_secret_arn     = "arn:aws:secretsmanager:eu-central-1:320205321328:secret:nwords_google_client_id-RWj3Cm"
+google_client_secret_secret_arn = "arn:aws:secretsmanager:eu-central-1:320205321328:secret:nwords_google_client_secret-ifjWcg"
