@@ -20,6 +20,11 @@ output "app_url" {
   value       = "https://${aws_lb.main.dns_name}"
 }
 
+output "better_auth_url" {
+  description = "Public app origin passed to ECS as BETTER_AUTH_URL (OAuth redirects, trusted origins)."
+  value       = local.better_auth_url
+}
+
 output "database_url" {
   description = "PostgreSQL URL (same value as Secrets Manager DATABASE_URL)."
   value       = local.database_url
