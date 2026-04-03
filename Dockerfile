@@ -2,14 +2,14 @@
 # Single image: TanStack Start server + in-process API (linux/arm64 for ECS Graviton).
 FROM node:22-bookworm-slim AS builder
 ARG GOOGLE_AUTH_ENABLED=false
+ARG GIT_HASH=unknown
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates git \
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
 	&& rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
-COPY .git ./.git
 COPY pnpm-lock.yaml package.json pnpm-workspace.yaml turbo.json tsconfig.base.json ./
 COPY apps ./apps
 COPY packages ./packages
@@ -18,6 +18,7 @@ ENV DATABASE_URL=postgresql://build:build@127.0.0.1:5432/build
 
 RUN pnpm install --frozen-lockfile
 RUN pnpm db:generate
+ENV GIT_HASH=$GIT_HASH
 RUN GOOGLE_AUTH_ENABLED="$GOOGLE_AUTH_ENABLED" pnpm run build
 
 FROM node:22-bookworm-slim AS runner

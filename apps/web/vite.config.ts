@@ -24,11 +24,13 @@ export default defineConfig(({ mode }) => {
 	mergeEnvIntoProcessEnv(mode, monorepoRoot)
 	mergeEnvIntoProcessEnv(mode, dbPackageRoot)
 
-	let gitHash = "unknown"
-	try {
-		gitHash = execSync("git rev-parse --short HEAD").toString().trim()
-	} catch {
-		// git may not be available in Docker build
+	let gitHash = process.env.GIT_HASH || "unknown"
+	if (gitHash === "unknown") {
+		try {
+			gitHash = execSync("git rev-parse --short HEAD").toString().trim()
+		} catch {
+			// git not available (e.g. Docker build)
+		}
 	}
 
 	return {
