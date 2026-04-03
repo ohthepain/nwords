@@ -1,6 +1,10 @@
 locals {
   name_prefix = "${var.project_name}-${var.environment}"
   is_prod     = var.environment == "production"
+
+  # Single source of truth for ECS Secrets Manager and `terraform output database_url`.
+  # sslmode=require matches AWS RDS TLS expectations (some accounts enable rds.force_ssl).
+  database_url = "postgresql://${var.db_username}:${random_password.db.result}@${aws_db_instance.main.address}:5432/${var.db_name}?sslmode=require"
 }
 
 check "workspace_matches_environment" {

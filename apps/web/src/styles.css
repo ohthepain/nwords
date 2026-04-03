@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Match theme store: `html.dark`, not `prefers-color-scheme` (default in v4). */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
 	--color-background: #fafafa;
 	--color-foreground: #0a0a0a;

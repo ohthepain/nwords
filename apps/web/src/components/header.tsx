@@ -18,6 +18,18 @@ export function AppHeaderBrand({ className, compact }: AppHeaderBrandProps) {
 			)}
 			aria-label="nwords.live home"
 		>
+			<img
+				src="/logo.png"
+				alt=""
+				className={cn("w-auto shrink-0 dark:hidden", compact ? "h-7" : "h-9")}
+				decoding="async"
+			/>
+			<img
+				src="/logo-white.svg"
+				alt=""
+				className={cn("hidden w-auto shrink-0 dark:block", compact ? "h-7" : "h-9")}
+				decoding="async"
+			/>
 			<span
 				className={cn("font-bold tracking-tight", compact ? "text-base sm:text-lg" : "text-xl")}
 			>

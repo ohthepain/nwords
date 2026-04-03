@@ -59,6 +59,10 @@ The **`build-and-test`** job in CI uses a **dummy** `DATABASE_URL` in the workfl
 
 After RDS is available (and after **staging up** if RDS was stopped), run migrations using `terraform output -raw database_url` (sensitive) or the `DATABASE_URL` key in Secrets Manager. Stopping RDS does not change Terraform state.
 
+### Prisma P1010 (“denied access on the database `nwords`”)
+
+That usually means the DB user in `DATABASE_URL` cannot `CONNECT` to `nwords`, or lacks privileges on `public` objects (for example after a restore or a manually created role). Align Secrets Manager with Terraform (`terraform apply` updates the database secret), confirm the URL user matches the RDS master user from Terraform (`db_username`), then run `scripts/fix-rds-db-permissions.sql` as the master user (Part A against `postgres`, Part B against `nwords`). The app `DATABASE_URL` includes `sslmode=require` for RDS.
+
 ## Staging cost control (`scripts/staging-down.sh` / `staging-up.sh`)
 
 - **Down:** ECS desired count `0`, then `aws rds stop-db-instance` for `{project}-staging-db`.

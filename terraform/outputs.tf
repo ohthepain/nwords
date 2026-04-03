@@ -22,7 +22,7 @@ output "app_url" {
 
 output "database_url" {
   description = "PostgreSQL URL (same value as Secrets Manager DATABASE_URL)."
-  value       = "postgresql://${var.db_username}:${random_password.db.result}@${aws_db_instance.main.address}:5432/${var.db_name}"
+  value       = local.database_url
   sensitive   = true
 }
 

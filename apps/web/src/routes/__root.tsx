@@ -1,6 +1,6 @@
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router"
 import type { ReactNode } from "react"
-import { useEffect } from "react"
+import { useEffect, useLayoutEffect } from "react"
 import { VocabGraphThemeSync } from "~/components/vocab-graph-theme-sync"
 import { initPostHog } from "~/lib/posthog"
 import { useThemeStore } from "~/stores/theme"
@@ -19,6 +19,8 @@ export const Route = createRootRoute({
 			},
 		],
 		links: [
+			{ rel: "icon", href: "/logo.png", type: "image/png" },
+			{ rel: "apple-touch-icon", href: "/logo.png" },
 			{
 				rel: "preconnect",
 				href: "https://fonts.googleapis.com",
@@ -61,6 +63,13 @@ function RootComponent() {
 
 	useEffect(() => {
 		document.documentElement.classList.toggle("dark", dark)
+	}, [dark])
+
+	useLayoutEffect(() => {
+		const apple = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]')
+		if (apple) {
+			apple.href = dark ? "/logo-white.png" : "/logo.png"
+		}
 	}, [dark])
 
 	useEffect(() => {
