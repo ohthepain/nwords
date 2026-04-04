@@ -40,7 +40,7 @@ Is "${context.userGuess}" an acceptable synonym for "${context.wordLemma}" in th
 	throw new Error(`Unexpected LLM response: ${text}`)
 }
 
-function createModel(config: { provider: string; model: string; apiKey: string }) {
+export function createModel(config: { provider: string; model: string; apiKey: string }) {
 	switch (config.provider) {
 		case "anthropic": {
 			const anthropic = createAnthropic({ apiKey: config.apiKey })

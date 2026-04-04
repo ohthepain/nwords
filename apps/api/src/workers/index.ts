@@ -1,5 +1,7 @@
 import type PgBoss from "pg-boss"
 import { INGEST_QUEUE } from "../lib/ingestion-queues"
+import type { FixedExpressionsJobData } from "./fixed-expressions"
+import { processFixedExpressionsJob } from "./fixed-expressions"
 import type { FrequencyJobData } from "./frequency"
 import { processFrequencyJob } from "./frequency"
 import type { KaikkiJobData } from "./kaikki"
@@ -36,6 +38,9 @@ export async function registerIngestWorkers(boss: PgBoss) {
 	await boss.work(INGEST_QUEUE.WORD_FORMS, opts, async ([job]) =>
 		processWordFormsJob(job as PgBoss.Job<WordFormsJobData>),
 	)
+	await boss.work(INGEST_QUEUE.FIXED_EXPRESSIONS, opts, async ([job]) =>
+		processFixedExpressionsJob(job as PgBoss.Job<FixedExpressionsJobData>),
+	)
 
-	console.log("[workers] Registered: kaikki, frequency, tatoeba, word-forms")
+	console.log("[workers] Registered: kaikki, frequency, tatoeba, word-forms, fixed-expressions")
 }

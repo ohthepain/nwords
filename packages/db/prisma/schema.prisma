@@ -110,8 +110,9 @@ model Language {
   guestSessionsTarget TestSession[] @relation("GuestTestTargetLanguage")
   clozeReportsAsNative ClozeIssueReport[] @relation("ClozeReportNative")
   clozeReportsAsTarget ClozeIssueReport[] @relation("ClozeReportTarget")
-  posMismatchMessages  PosMismatchMessage[]
-  wordSynonymPairs     WordSynonymPair[]
+  posMismatchMessages    PosMismatchMessage[]
+  fixedExpressionRules   FixedExpressionRule[]
+  wordSynonymPairs       WordSynonymPair[]
 
   @@map("language")
 }
@@ -467,6 +468,7 @@ enum IngestionType {
   TATOEBA_SENTENCES
   WORD_FORMS
   AUDIO_FILES
+  FIXED_EXPRESSIONS
 }
 
 enum IngestionStatus {
@@ -475,6 +477,28 @@ enum IngestionStatus {
   COMPLETED
   FAILED
   CANCELLED
+}
+
+// ─── Fixed Expression Rules ───────────────────────────
+
+model FixedExpressionRule {
+  id         String   @id @default(uuid()) @db.Uuid
+  languageId String   @db.Uuid
+  language   Language @relation(fields: [languageId], references: [id])
+  /// Word that must appear in the cloze sentence for this rule to fire.
+  trigger    String
+  /// The correct particle/preposition the exercise expects.
+  required   String
+  /// Common wrong guesses this rule can explain.
+  invalid    String[]
+  /// The full fixed expression (e.g. "tycka om").
+  expression String
+  /// English meaning of the expression (e.g. "to like").
+  meaning    String
+
+  @@unique([languageId, trigger, required])
+  @@index([languageId])
+  @@map("fixed_expression_rule")
 }
 
 // ─── POS Mismatch Messages ─────────────────────────────

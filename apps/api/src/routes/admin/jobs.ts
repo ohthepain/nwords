@@ -18,6 +18,7 @@ const TYPE_TO_QUEUE: Record<string, string> = {
 	FREQUENCY_LIST: INGEST_QUEUE.FREQUENCY,
 	TATOEBA_SENTENCES: INGEST_QUEUE.TATOEBA,
 	WORD_FORMS: INGEST_QUEUE.WORD_FORMS,
+	FIXED_EXPRESSIONS: INGEST_QUEUE.FIXED_EXPRESSIONS,
 }
 
 type RetryPlan =
@@ -206,6 +207,13 @@ async function planRetryFromJob(job: {
 			if (typeof meta.kaikkiMode === "string") payload.kaikkiMode = meta.kaikkiMode
 			return { ok: true, queue: INGEST_QUEUE.WORD_FORMS, payload }
 		}
+		case "FIXED_EXPRESSIONS": {
+			return {
+				ok: true,
+				queue: INGEST_QUEUE.FIXED_EXPRESSIONS,
+				payload: { languageId: job.languageId },
+			}
+		}
 		default:
 			return { ok: false, error: "This job type cannot be retried from the admin UI" }
 	}
@@ -329,6 +337,7 @@ export const adminJobsRoute = new Hono()
 						"TATOEBA_SENTENCES",
 						"WORD_FORMS",
 						"AUDIO_FILES",
+						"FIXED_EXPRESSIONS",
 					])
 					.optional(),
 				limit: z.coerce.number().min(1).max(100).default(20),
@@ -502,3 +511,40 @@ export const adminJobsRoute = new Hono()
 		}
 		return c.json(out.job, out.httpStatus)
 	})
+
+	// Generate fixed-expression rules for a language via LLM (no file upload needed)
+	.post(
+		"/fixed-expressions",
+		zValidator(
+			"json",
+			z.object({
+				languageId: z.string().uuid(),
+			}),
+		),
+		async (c) => {
+			const { languageId } = c.req.valid("json")
+
+			const language = await prisma.language.findUnique({ where: { id: languageId } })
+			if (!language) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+
+			const job = await prisma.ingestionJob.create({
+				data: {
+					type: "FIXED_EXPRESSIONS",
+					languageId,
+					metadata: {
+						languageCode: language.code,
+						languageName: language.name,
+					},
+				},
+			})
+
+			await sendIngestJob(INGEST_QUEUE.FIXED_EXPRESSIONS, {
+				jobId: job.id,
+				languageId,
+			})
+
+			return c.json(serializeJob(job), 201)
+		},
+	)

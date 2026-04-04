@@ -4,6 +4,8 @@ import {
 	FRUSTRATION_WORD_MIN_TESTS,
 	KNOWN_CONFIDENCE_THRESHOLD,
 	KNOWN_MIN_TESTS,
+	checkFixedExpression,
+	getFixedExpressionRules,
 	updateConfidence,
 } from "@nwords/shared"
 import { type Context, Hono } from "hono"
@@ -1066,15 +1068,20 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 				}
 			}
 
-			// ── Synonym feedback, then POS mismatch (wrong answers only; synonym first) ──
+			// ── Synonym → POS mismatch → fixed-expression (wrong answers only; first match wins) ──
 			let synonymFeedback: { kind: "good" | "bad"; message: string } | undefined
 			let posMismatch: { guessPos: string; targetPos: string; message: string } | undefined
+			let fixedExpressionFeedback: { message: string } | undefined
 
 			if (!body.correct && body.userAnswer) {
 				const langs = await resolveClozeLanguageIds(session)
 				if (langs) {
 					const nativeLang = await prisma.language.findUnique({
 						where: { id: langs.nativeLanguageId },
+						select: { code: true },
+					})
+					const targetLang = await prisma.language.findUnique({
+						where: { id: langs.targetLanguageId },
 						select: { code: true },
 					})
 					synonymFeedback = await computeSynonymFeedback({
@@ -1085,9 +1092,10 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 					})
 
 					if (!synonymFeedback) {
+						// ── POS mismatch ──
 						const targetWord = await prisma.word.findUnique({
 							where: { id: body.wordId },
-							select: { pos: true },
+							select: { pos: true, lemma: true },
 						})
 
 						if (targetWord) {
@@ -1125,6 +1133,38 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 								}
 							}
 						}
+
+						// ── Fixed-expression check (fall through if no POS mismatch) ──
+						if (!posMismatch && body.sentenceId && targetWord) {
+							const dbRules = await prisma.fixedExpressionRule.findMany({
+								where: { languageId: langs.targetLanguageId },
+							})
+							if (dbRules.length > 0) {
+								const rules = dbRules.map((r) => ({
+									trigger: r.trigger,
+									required: r.required,
+									invalid: r.invalid,
+									messageId: "fixed_expression" as const,
+									params: { expression: r.expression, meaning: r.meaning },
+								}))
+								const sentence = await prisma.sentence.findUnique({
+									where: { id: body.sentenceId },
+									select: { text: true },
+								})
+								if (sentence) {
+									const msg = checkFixedExpression(
+										sentence.text,
+										targetWord.lemma,
+										body.userAnswer,
+										rules,
+										nativeLang?.code ?? "en",
+									)
+									if (msg) {
+										fixedExpressionFeedback = { message: msg }
+									}
+								}
+							}
+						}
 					}
 				}
 			}
@@ -1134,6 +1174,7 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 				correct: body.correct,
 				...confidenceUpdate,
 				...(synonymFeedback && { synonymFeedback }),
+				...(fixedExpressionFeedback && { fixedExpressionFeedback }),
 				...(posMismatch && { posMismatch }),
 			})
 		},

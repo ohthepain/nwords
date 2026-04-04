@@ -4,4 +4,5 @@ export const INGEST_QUEUE = {
 	FREQUENCY: "ingest:frequency",
 	TATOEBA: "ingest:tatoeba",
 	WORD_FORMS: "ingest:word-forms",
+	FIXED_EXPRESSIONS: "ingest:fixed-expressions",
 } as const

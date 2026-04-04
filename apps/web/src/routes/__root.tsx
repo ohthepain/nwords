@@ -61,6 +61,41 @@ function RootComponent() {
 		initPostHog()
 	}, [])
 
+	// #region agent log
+	useEffect(() => {
+		void (async () => {
+			const iconLink = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+			const send = (message: string, data: Record<string, unknown>, hypothesisId: string) => {
+				void fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
+					method: "POST",
+					headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "c96f36" },
+					body: JSON.stringify({
+						sessionId: "c96f36",
+						location: "__root.tsx:favicon-debug",
+						message,
+						data,
+						timestamp: Date.now(),
+						hypothesisId,
+					}),
+				}).catch(() => {})
+			}
+			send(
+				"icon link in DOM after load",
+				{ href: iconLink?.getAttribute("href") ?? null, typeAttr: iconLink?.getAttribute("type") ?? null },
+				"B",
+			)
+			for (const path of ["/logo.png", "/logo.svg", "/favicon.ico"] as const) {
+				try {
+					const r = await fetch(path, { method: "HEAD", cache: "no-store" })
+					send("HEAD asset", { path, status: r.status, ok: r.ok }, path === "/favicon.ico" ? "C" : "A")
+				} catch (err) {
+					send("HEAD asset error", { path, err: String(err) }, path === "/favicon.ico" ? "C" : "A")
+				}
+			}
+		})()
+	}, [])
+	// #endregion
+
 	useEffect(() => {
 		document.documentElement.classList.toggle("dark", dark)
 	}, [dark])
