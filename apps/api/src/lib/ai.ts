@@ -1,5 +1,6 @@
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { createOpenAI } from "@ai-sdk/openai"
+import type { LanguageModel } from "ai"
 import { generateText } from "ai"
 import { getAiConfig } from "./app-settings"
 
@@ -40,7 +41,7 @@ Is "${context.userGuess}" an acceptable synonym for "${context.wordLemma}" in th
 	throw new Error(`Unexpected LLM response: ${text}`)
 }
 
-export function createModel(config: { provider: string; model: string; apiKey: string }) {
+export function createModel(config: { provider: string; model: string; apiKey: string }): LanguageModel {
 	switch (config.provider) {
 		case "anthropic": {
 			const anthropic = createAnthropic({ apiKey: config.apiKey })

@@ -21,8 +21,8 @@ export async function lookupUserAnswerPos(
 			languageId: targetLanguageId,
 			OR: [{ lemma: normalized }, { forms: { some: { form: normalized } } }],
 		},
-		select: { pos: true, rank: true },
-		orderBy: { rank: "asc" },
+		select: { pos: true, effectiveRank: true },
+		orderBy: { effectiveRank: "asc" },
 	})
 
 	// Deduplicate by POS, keeping the lowest rank (most frequent) for each
@@ -32,7 +32,7 @@ export async function lookupUserAnswerPos(
 	for (const w of words) {
 		if (!seen.has(w.pos)) {
 			seen.add(w.pos)
-			result.push({ pos: w.pos, rank: w.rank })
+			result.push({ pos: w.pos, rank: w.effectiveRank })
 		}
 	}
 
@@ -52,8 +52,8 @@ export async function lookupUserAnswerWords(
 			languageId: targetLanguageId,
 			OR: [{ lemma: normalized }, { forms: { some: { form: normalized } } }],
 		},
-		select: { id: true, lemma: true, rank: true },
-		orderBy: { rank: "asc" },
+		select: { id: true, lemma: true, effectiveRank: true },
+		orderBy: { effectiveRank: "asc" },
 	})
 
 	const seen = new Set<string>()
@@ -61,7 +61,7 @@ export async function lookupUserAnswerWords(
 	for (const w of words) {
 		if (!seen.has(w.id)) {
 			seen.add(w.id)
-			result.push(w)
+			result.push({ id: w.id, lemma: w.lemma, rank: w.effectiveRank })
 		}
 	}
 	return result

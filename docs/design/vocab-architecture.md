@@ -1,59 +1,66 @@
 # Vocabulary and Testing Architecture and Design
 
+This document tracks **design intent** and **where it lives in code**. Authoritative formulas and thresholds are in `packages/shared/src/constants/confidence.ts` (`updateConfidence`, `isWordKnown`, and exported constants). Build / assessment / frustration **word selection** is implemented in `apps/api/src/routes/test.ts`. Progress and heatmap data come from `apps/api/src/routes/progress.ts`. The practice heatmap UI is `apps/web/src/components/vocab-graph.tsx`.
+
 ## Database
 
-The user can study as many languages as they want. They have only one native language.
+Users can study multiple languages. Vocabulary state is stored per user; assumed level is **per user and per target language**.
 
-### UserWordKnowledge record
+### `UserLanguageProfile`
 
-One entry per user per word (across all modes). Fields:
+- One row per `(userId, languageId)` (see `packages/db/prisma/schema.prisma`).
+- **`assumedRank`**: frequency rank boundary from **assessment mode** (binary search). Words with `rank <= assumedRank` are treated as **assumed known** in the heatmap and related UX (they do not require a `UserWordKnowledge` row to show as “known” in the graph).
+- Updated when an assessment session ends: `assumedRank` is upserted from the replayed binary-search midpoint (`computeAssessedRank` in `test.ts`), only if `assessedRank > 0`.
 
-| Field          | Type     | Notes                                                   |
-| -------------- | -------- | ------------------------------------------------------- |
-| `confidence`   | Float    | 0.0–1.0 internally, displayed as 0–100%                 |
-| `timesTested`  | Int      | Total attempts across all modes                         |
-| `timesCorrect` | Int      | Total correct across all modes                          |
-| `lastTestedAt` | DateTime | Timestamp of most recent attempt                        |
-| `lastCorrect`  | Boolean  | Whether the most recent attempt was correct             |
-| `streak`       | Int      | Consecutive correct (resets on wrong). Useful for mood. |
+### `UserWordKnowledge`
 
-### User's Assumed Rank
+One row per user per word (shared across modes). Fields match Prisma:
 
-- Per user, per target language.
-- The word frequency rank below which we assume the user knows all words
-  with ≥ 90% confidence.
-- **Vocabulary size** = assumedRank + count of words _above_ assumedRank
-  where confidence ≥ 0.95 and timesTested ≥ 3.
-- We can bulk-delete UserWordKnowledge rows at or below the assumed rank
-  to keep the table lean — those words are "known by default".
+| Field          | Type     | Notes                                                                 |
+| -------------- | -------- | --------------------------------------------------------------------- |
+| `confidence`   | Float    | 0.0–1.0 internally; UI often shows percent                            |
+| `timesTested`  | Int      | Total attempts across modes                                           |
+| `timesCorrect` | Int      | Total correct across modes                                            |
+| `lastTestedAt` | DateTime | Prior attempt timestamp (fed into staleness in Build/Frustration wrong) |
+| `lastCorrect`  | Boolean  | Whether the latest attempt was correct                                |
+| `streak`       | Int      | Consecutive correct; **reset on wrong** in `updateConfidence`         |
 
-<!-- Since users can study multiple languages, assumedRank must be per-language.
-     A UserLanguageProfile table is the right approach. -->
+Default confidence on **first** persisted row is `0.5` in the schema; the answer handler passes `existing?.confidence ?? 0.5` into the formula.
 
-## Confidence Update Rules
+### `Word` (vocabulary / practice constraints)
 
-Each mode has its own formula. No shared multiplier — the modes are
-different enough that separate logic is clearer.
+Relevant flags used by heatmap and cloze selection: `isOffensive`, `isAbbreviation` (excluded from rank band / tests), `testSentenceIds` (non-empty required to serve a cloze in practice). Ingestion sets `isTestable` for certain POS types (`apps/api/src/workers/kaikki.ts`).
 
-### Build Mode Formula
+### Vocabulary size and “known”
 
-On **correct** answer:
+- **Verified known** (for counting and graph status): `confidence >= KNOWN_CONFIDENCE_THRESHOLD` **and** `timesTested >= KNOWN_MIN_TESTS` (`0.95` and `3` in `confidence.ts`; also referenced as `isWordKnown`).
+- **Vocabulary size (per language, heatmap / build):** `assumedRank +` count of `UserWordKnowledge` rows for that language meeting the verified-known predicate, with `word.isAbbreviation === false` (see `GET /progress/heatmap`).
+
+**Implementation note:** `GET /progress/knowledge-summary` and the score snapshot on `POST /test/sessions/:id/end` currently count “known” `UserWordKnowledge` rows **without** filtering by target `languageId`, while `assumedRank` is taken from the user’s target-language profile. The heatmap and build-mode logic use **per-language** known counts. Aligning those endpoints with per-language counts would match the graph and build behavior.
+
+### Lean storage below assumed rank
+
+Bulk-deleting `UserWordKnowledge` at or below `assumedRank` is **design-only**; there is no automated cleanup in the repo today.
+
+## Confidence update rules
+
+Each mode has its own branch in `updateConfidence(mode, correct, input)` (`confidence.ts`). No shared multiplier between Build and Frustration beyond shared wrong handling.
+
+Shared inputs: `confidence`, `timesTested` (**before** this answer), `lastTestedAt`, `streak`, optional `now`.
+
+### Build mode
+
+**Correct:**
 
 ```
 gain = 1 / (timesTested + 1)
 timeBonus = min(daysSinceLastTest / 30, 1.0) * 0.5
 adjustedGain = gain + timeBonus
 rawConfidence = confidence + (1.0 - confidence) * adjustedGain
-newConfidence = max(rawConfidence, confidence + 0.2)   // minimum bump of 0.2
+newConfidence = max(rawConfidence, confidence + MIN_CONFIDENCE_BUMP)   // MIN_CONFIDENCE_BUMP = 0.2
 ```
 
-Every correct answer always increases confidence by at least 0.2, even if the
-formula would produce a smaller move (e.g., high timesTested, already high
-confidence). The time bonus rewards recalling a word you haven't seen in a while —
-nailing a word after 3 weeks is more impressive than after 5 minutes.
-Caps at +0.5 extra gain after 30+ days.
-
-On **wrong** answer:
+**Wrong:**
 
 ```
 penalty = 1 / (timesTested + 1)
@@ -62,159 +69,90 @@ adjustedPenalty = penalty * (1.0 + timeFactor)
 newConfidence = confidence * (1.0 - adjustedPenalty)
 ```
 
-Key properties:
+(clamped to `[0, 1]`.)
 
-- Early tests move confidence a lot (timesTested is low → large swings)
-- Established words are resilient (timesTested is high → small moves)
-- Staleness hurts: forgetting a word you haven't seen in a month is
-  punished up to 2x more than one you saw yesterday
+### Assessment mode
 
-### Assessment Mode Formula
+Binary measurement: correct → `1.0`, wrong → `0.0`. Streak still updates (+1 / reset) like other modes.
 
-Binary — this is measurement, not learning:
+### Frustration mode
 
-- Correct → confidence = 1.0
-- Wrong → confidence = 0.0
+**Correct:** same structure as Build but **no** time bonus; gain scaled by `0.5`, with the same **minimum bump** `MIN_CONFIDENCE_BUMP`.
 
-### Frustration Mode Formula
+**Wrong:** identical to Build wrong (`buildWrong`).
 
-These are words the user keeps getting wrong. The pattern is typically:
-they get it right in the session (after just getting it wrong), then
-forget it again the next day. So the formula should be **conservative
-on correct, harsh on wrong** — don't let a single correct answer in
-the heat of the moment inflate confidence.
+### Constants (single source of truth)
 
-On **correct** answer:
+| Constant                     | Value | Role                                      |
+| ---------------------------- | ----- | ----------------------------------------- |
+| `MIN_CONFIDENCE_BUMP`        | 0.2   | Min increase on correct (Build/Frustration) |
+| `FRUSTRATION_WORD_MIN_TESTS` | 5     | Min `timesTested` to qualify as frustration pool |
+| `KNOWN_CONFIDENCE_THRESHOLD` | 0.95  | “Known” for size + build bucket boundaries |
+| `KNOWN_MIN_TESTS`            | 3     | Min tests for “known”                     |
 
-```
-gain = 1 / (timesTested + 1)
-rawConfidence = confidence + (1.0 - confidence) * gain * 0.5
-newConfidence = max(rawConfidence, confidence + 0.2)   // minimum bump of 0.2
-```
+## Testing modes
 
-The 0.5 dampening means correct answers in frustration mode build
-confidence slowly. The user needs to prove they know this word
-across multiple sessions, not just immediately after seeing it.
+### Assessment mode
 
-On **wrong** answer (same as Build — no mercy):
+**Purpose:** Estimate `assumedRank` via binary search on ranks `1`–`10000`.
 
-```
-penalty = 1 / (timesTested + 1)
-timeFactor = min(daysSinceLastTest / 30, 1.0)
-adjustedPenalty = penalty * (1.0 + timeFactor)
-newConfidence = confidence * (1.0 - adjustedPenalty)
-```
+- After each answer, bounds update: correct → raise low to `rank + 1`; wrong → lower high to `rank - 1`.
+- **Stop when** `(high - low) < ASSESSMENT_CONVERGE_THRESHOLD` (**50**) **or** `wordsTestedCount >= ASSESSMENT_MAX_QUESTIONS` (**30**).
+- On converge, response includes `assumedRank = floor((low + high) / 2)`; on end-session, that value is persisted to `UserLanguageProfile` when `> 0`.
 
-## Testing Modes
+### Build mode (signed-in)
 
-### Assessment Mode
+**Purpose:** Expand vocabulary within the same **lemma band** as the vocab graph.
 
-**Purpose:** Measure the user's assumed rank via binary search.
+**Graph band:** Words with `rank` 1–10000, not offensive, not abbreviation, ordered by `rank`. The band is truncated to the first `n` lemmas where `n = min(totalInRange, ceil(baseline * 1.2))` and `baseline = max(assumedRank, vocabSize, 50)`. This matches `heatmapTargetCellCount` in `vocab-graph.tsx` (ordinal cap, not a raw rank cutoff).
 
-- Rules are intentionally harsh — this is measurement, not learning:
-  - Correct → set confidence to 1.0
-  - Wrong → set confidence to 0.0
-- Uses binary search on word rank to find the user's level efficiently.
+**Preflight selection (before weighted buckets):**
 
-#### Stopping condition
+1. **Territory opening:** For the first `BUILD_TERRITORY_OPENING` (**5**) questions, prefer the lowest-rank **unverified** words in the band (words lacking verified-known knowledge). Words with `timesTested - timesCorrect >= BUILD_HEAVY_MISS_THRESHOLD` (**8**) are de-emphasized in this opening only.
+2. **Territory revisit:** After the opening, every `BUILD_TERRITORY_REVISIT_EVERY` (**4**th) question revisits that territory pool (`BUILD_TERRITORY_HEAD_SPREAD` **5** for spread).
+3. **Frontier:** Every `BUILD_FRONTIER_EVERY` (**6**th) question targets the **lowest rank** in-band that is not yet verified known (global frontier in the visible slice, including gaps below `assumedRank`).
 
-Hybrid approach: stop when the binary search range narrows below a threshold
-(e.g., rank range < 50) OR after a max number of questions (e.g., 30),
-whichever comes first. Binary search over ranks 1–10,000 converges in ~14
-steps (log2(10000)), so 30 questions is generous and allows for some
-statistical padding (e.g., 2–3 questions per rank level near the boundary).
+**Buckets (weighted random when mood eligible):** `BUILD_WEIGHT_NEW` **48%** new, `BUILD_WEIGHT_SHAKY` **37%** shaky, remainder **~15%** mood. If not eligible for mood (see below), only new vs shaky are rolled, preserving the **48 : 37** ratio.
 
-### Build Mode
+- **New:** In-band, `rank > assumedRank`, no `UserWordKnowledge` row yet, has test sentences; capped to `BUILD_CANDIDATE_CAP` (**45**), rank-ordered. Sampling uses `BUILD_NEW_SPREAD` (**6**) and session exclusion spread `BUILD_SESSION_EXCLUSION_SPREAD` (**28**) inside the resolver.
+- **Shaky:** In-band knowledge rows that are **not** verified known (`KNOWN_*` thresholds); ordered by word rank, then `lastTestedAt`, then `confidence`; capped at **45**.
+- **Mood:** Verified-known words in-band; only if `eligibleMood`.
 
-**Purpose:** Strategically expand the user's vocabulary above their assumed rank.
+**Mood eligibility:** `tailConsecutiveWrongs(sessionAnswers) >= BUILD_MOOD_MIN_STREAK_WRONG` (**2**) — i.e. **last two answers in this session** are wrong, not the persisted `UserWordKnowledge.streak`.
 
-Word selection priority (weighted random from these buckets):
+**Guests:** `handleBuildGuestNext` uses a widening random rank window (no profile / knowledge).
 
-1. **New territory** (~35%) — next untested words above assumed rank, in rank order
-2. **Shaky words** (~50%) — words with confidence < 0.95, prioritized by
-   low confidence + high rank (focus on common words first)
-3. **Mood boost** (~15%) — a word the user knows well (confidence ≥ 0.95),
-   picked after ≥ 2 consecutive wrong answers
+### Frustration mode
 
-Confidence updates use the Build Mode formula.
+**Purpose:** Short drills on stubborn words. **Requires signed-in user.**
 
-#### Spaced repetition (lightweight)
+**Pool:** `timesTested >= FRUSTRATION_WORD_MIN_TESTS` (**5**), `confidence < 0.5`, target language, not abbreviation, has `testSentenceIds`. Ordered by `lastTestedAt` ascending, then `confidence` ascending; **take 20**. Prefer words not yet seen this session; pick uniformly among the first `min(poolLength, 10)` of that pool.
 
-Rather than a full SRS scheduler (Anki-style intervals), we use the confidence
+### Spaced repetition (lightweight)
 
-- staleness model: words with lower confidence and longer time-since-tested
-  naturally bubble up in the "shaky words" bucket. No need for `nextReviewAt`.
-  The time factor in the wrong-answer penalty naturally handles forgetting curves.
+No `nextReviewAt`. Lower confidence and staleness on wrong answers skew selection toward shaky items; Build territory / frontier cadence adds structure on top.
 
-#### Mood management
+## UI: vocab graph
 
-- After 2 consecutive wrong answers (tracked via `streak` on UserWordKnowledge
-  or session-local state), inject a known word as a confidence boost.
-- This is a word-selection concern, not a confidence-formula concern.
+Heatmap loads `GET /api/progress/heatmap` (via web proxy). Cell `status` is `known` if verified known **or** `rank <= assumedRank`; else `learning` if a knowledge row exists; else `untested`.
 
-### Frustration Words Mode
+**Territory slab (visual “conquered” column):** uses measured confidence `>= 0.9` (`TERRITORY_MIN_CONFIDENCE` in `vocab-graph.tsx`), which is **slightly below** the `0.95` verified-known threshold — purely a display choice.
 
-**Purpose:** Short, focused sessions targeting the user's problem words.
+## API use cases (formulas)
 
-Word selection: words where `timesTested` is high AND `confidence` is low.
-Sorted by something like `timesTested * (1 - confidence)` descending.
+| #   | Use case                    | Implementation                                                                 |
+| --- | --------------------------- | ------------------------------------------------------------------------------ |
+| 1   | Correct in Build            | `updateConfidence("BUILD", true, …)`                                           |
+| 2   | Wrong in Build              | `updateConfidence("BUILD", false, …)`                                          |
+| 3   | Count vocabulary (heatmap)  | `assumedRank +` per-language verified-known count (non-abbreviation)           |
+| 4   | Correct in Assessment       | confidence `1.0`                                                               |
+| 5   | Wrong in Assessment         | confidence `0.0`                                                               |
+| 6   | Correct in Frustration      | `updateConfidence("FRUSTRATION", true, …)`                                     |
+| 7   | Wrong in Frustration        | same as Build wrong                                                            |
 
-- Designed for short bursts (5–10 words) that can be repeated throughout the day.
-- The typical pattern: user gets it right in-session (just after seeing the
-  answer), then forgets again tomorrow. So correct answers are dampened (0.5x)
-  to prevent false confidence. The user has to prove it across sessions.
-- Session should feel fast and high-energy (shorter time limits? gamification?).
+Answer recording: `POST` … `/test/sessions/:id/answer` in `test.ts` (creates `TestAnswer`, updates session counters, upserts `UserWordKnowledge`).
 
-## Schema Changes Needed
+## Resolved design decisions
 
-```prisma
-// NEW: per-user, per-language profile (replaces single targetLanguageId approach)
-model UserLanguageProfile {
-  id           String   @id @default(uuid()) @db.Uuid
-  userId       String   @db.Uuid
-  languageId   String   @db.Uuid
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  language     Language @relation(fields: [languageId], references: [id])
-  assumedRank  Int      @default(0)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  @@unique([userId, languageId])
-  @@map("user_language_profile")
-}
-
-model UserWordKnowledge {
-  // ... existing id, userId, wordId, relations ...
-  confidence   Float    @default(0.5)   // was: probability
-  timesTested  Int      @default(0)
-  timesCorrect Int      @default(0)
-  lastTestedAt DateTime?
-  lastCorrect  Boolean  @default(false) // NEW
-  streak       Int      @default(0)     // NEW: consecutive correct
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  // REMOVED: known (now derived), nextReviewAt (computed on the fly)
-}
-```
-
-## API Use Cases
-
-| #   | Use Case                    | Formula                                                    |
-| --- | --------------------------- | ---------------------------------------------------------- |
-| 1   | Correct in Build mode       | Build correct formula (gain + time bonus)                  |
-| 2   | Wrong in Build mode         | Build wrong formula (penalty + staleness)                  |
-| 3   | Count user's vocabulary     | assumedRank + count(confidence ≥ 0.95 AND timesTested ≥ 3) |
-| 4   | Correct in Assessment       | confidence = 1.0                                           |
-| 5   | Wrong in Assessment         | confidence = 0.0                                           |
-| 6   | Correct in Frustration mode | Frustration correct formula (dampened 0.5x gain)           |
-| 7   | Wrong in Frustration mode   | Same wrong formula as Build (no mercy)                     |
-
-## Resolved Design Decisions
-
-- **Frustration word threshold:** a word must have `timesTested >= 5` to
-  qualify as a frustration word. Below that it's just new/learning.
-- **No confidence floor.** Confidence can drop to 0.0 (and does in Assessment).
-  Instead, every correct answer in Build/Frustration has a **minimum confidence bump** of 0.2 —
-  so even a word at 0.0 confidence moves to at least 0.2 on a correct answer.
-  This means no word is ever truly dead; one correct answer always makes progress.
+- **Frustration qualification:** `timesTested >= 5` and `confidence < 0.5` in the current selector (plus test sentences required).
+- **No confidence floor** in formulas beyond clamping to `[0,1]`; Assessment can set `0.0`. Build and Frustration correct answers always move by at least `MIN_CONFIDENCE_BUMP` (**0.2**).

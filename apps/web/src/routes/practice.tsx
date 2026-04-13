@@ -1,3 +1,4 @@
+import { updateConfidence } from "@nwords/shared"
 import { Link, createFileRoute } from "@tanstack/react-router"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { AuthedAppHeader } from "~/components/authed-app-header"
@@ -43,6 +44,25 @@ type NextQuestion = {
 	sessionMode: string
 }
 
+type UpcomingWord = {
+	wordId: string
+	lemma: string
+	rank: number
+	testedInSession: boolean
+	hasSentences: boolean
+	confidence: number
+	timesTested: number
+	streak: number
+	lastTestedAt: string | null
+}
+
+type UpcomingData = {
+	questionNumber: number
+	territory: UpcomingWord[]
+	new: UpcomingWord[]
+	shaky: UpcomingWord[]
+}
+
 type VocabMode = "ASSESSMENT" | "BUILD" | "FRUSTRATION"
 
 const VOCAB_MODE_LABELS: Record<VocabMode, string> = {
@@ -51,12 +71,26 @@ const VOCAB_MODE_LABELS: Record<VocabMode, string> = {
 	FRUSTRATION: "Frustration words",
 }
 
+type PracticeSearch = {
+	vocabMode: VocabMode
+	sentenceId?: string
+	wordId?: string
+}
+
 export const Route = createFileRoute("/practice")({
 	component: PracticePage,
-	validateSearch: (search: Record<string, unknown>) => ({
+	validateSearch: (search: Record<string, unknown>): PracticeSearch => ({
 		vocabMode: (["ASSESSMENT", "BUILD", "FRUSTRATION"].includes(search.vocabMode as string)
 			? search.vocabMode
 			: "BUILD") as VocabMode,
+		sentenceId:
+			typeof search.sentenceId === "string" && search.sentenceId.trim()
+				? search.sentenceId.trim()
+				: undefined,
+		wordId:
+			typeof search.wordId === "string" && search.wordId.trim()
+				? search.wordId.trim()
+				: undefined,
 	}),
 	head: () => ({
 		meta: [{ title: "Practice — nwords.live" }],
@@ -89,7 +123,7 @@ function revealedLemmaDisplay(lemma: string, beforeBlank: string): string {
 }
 
 function PracticePage() {
-	const { vocabMode } = Route.useSearch()
+	const { vocabMode, sentenceId: forceSentenceId, wordId: forceWordId } = Route.useSearch()
 	/** `undefined` = loading; `null` = not signed in; object = signed-in profile */
 	const [profile, setProfile] = useState<UserMe | null | undefined>(undefined)
 	const [languageOptions, setLanguageOptions] = useState<LanguageOption[]>([])
@@ -118,6 +152,29 @@ function PracticePage() {
 	} | null>(null)
 	const answerInputRef = useRef<HTMLInputElement>(null)
 	const devMode = useDevStore((s) => s.devMode)
+	const [devHighlightWordId, setDevHighlightWordId] = useState<string | null>(null)
+	const [devUpcoming, setDevUpcoming] = useState<UpcomingData | null>(null)
+	const [devUpcomingLoading, setDevUpcomingLoading] = useState(false)
+	const [devTab, setDevTab] = useState<"territory" | "new" | "shaky">("territory")
+	const [devHoverWordId, setDevHoverWordId] = useState<string | null>(null)
+
+	const fetchUpcoming = useCallback(async () => {
+		if (!sessionId) return
+		setDevUpcomingLoading(true)
+		try {
+			const res = await fetch(`/api/test/sessions/${sessionId}/upcoming`, { credentials: "include" })
+			if (res.ok) setDevUpcoming(await res.json())
+		} finally {
+			setDevUpcomingLoading(false)
+		}
+	}, [sessionId])
+
+	// Refresh upcoming when session starts or after answering a question in dev mode
+	useEffect(() => {
+		if (devMode && sessionId && question) {
+			void fetchUpcoming()
+		}
+	}, [devMode, sessionId, question, fetchUpcoming])
 	/** Deploy-controlled via `/api/settings` (`AppSettings.showHints`). */
 	const [showInlineHints, setShowInlineHints] = useState(false)
 	/** After a correct check, show the lemma in the sentence (still underlined). */
@@ -198,7 +255,12 @@ function PracticePage() {
 			}
 			const data = (await res.json()) as { sessionId: string }
 			setSessionId(data.sessionId)
-			const nextRes = await fetch(`/api/test/sessions/${data.sessionId}/next`, {
+			const nextParams = new URLSearchParams()
+			if (forceSentenceId) nextParams.set("sentenceId", forceSentenceId)
+			if (forceWordId) nextParams.set("wordId", forceWordId)
+			const nextQs = nextParams.toString()
+			const nextUrl = `/api/test/sessions/${data.sessionId}/next${nextQs ? `?${nextQs}` : ""}`
+			const nextRes = await fetch(nextUrl, {
 				credentials: "include",
 			})
 			if (!nextRes.ok) {
@@ -236,7 +298,23 @@ function PracticePage() {
 			setFeedback(e instanceof Error ? e.message : "Something went wrong")
 			setStatus("error")
 		}
-	}, [practiceNativeId, practiceTargetId, vocabMode])
+	}, [practiceNativeId, practiceTargetId, vocabMode, forceSentenceId, forceWordId])
+
+	// Auto-start when routed with a forced sentenceId (admin sentence testing)
+	const autoStarted = useRef(false)
+	useEffect(() => {
+		if (
+			forceSentenceId &&
+			!autoStarted.current &&
+			practiceNativeId &&
+			practiceTargetId &&
+			practiceNativeId !== practiceTargetId &&
+			!sessionId
+		) {
+			autoStarted.current = true
+			void startSession()
+		}
+	}, [forceSentenceId, practiceNativeId, practiceTargetId, sessionId, startSession])
 
 	useEffect(() => {
 		if (!question) return
@@ -492,7 +570,7 @@ function PracticePage() {
 					<div className="pb-4 overflow-visible w-full min-w-0">
 						<VocabGraph
 							languageId={practiceTargetId}
-							activeWordId={sessionId && question ? question.wordId : null}
+							activeWordId={devHoverWordId ?? devHighlightWordId ?? (sessionId && question ? question.wordId : null)}
 							answerFlash={answerConfidenceFlash}
 							showDevGrid={account?.role === "ADMIN" && devMode}
 						/>
@@ -654,6 +732,18 @@ function PracticePage() {
 						</CardContent>
 					</Card>
 				)}
+				{devMode && sessionId && question && (
+					<DevUpcomingPanel
+						data={devUpcoming}
+						loading={devUpcomingLoading}
+						activeTab={devTab}
+						onTabChange={setDevTab}
+						highlightWordId={devHighlightWordId}
+						onHighlightWord={setDevHighlightWordId}
+						onHoverWord={setDevHoverWordId}
+						onRefresh={fetchUpcoming}
+					/>
+				)}
 			</div>
 			<WordDetailDialog
 				open={practiceWordPanel.word !== null}
@@ -722,6 +812,120 @@ function ClozePrompt({
 			{blank}
 			{after}
 		</>
+	)
+}
+
+const DEV_TABS = ["territory", "new", "shaky"] as const
+
+function DevUpcomingPanel({
+	data,
+	loading,
+	activeTab,
+	onTabChange,
+	highlightWordId,
+	onHighlightWord,
+	onHoverWord,
+	onRefresh,
+}: {
+	data: UpcomingData | null
+	loading: boolean
+	activeTab: "territory" | "new" | "shaky"
+	onTabChange: (tab: "territory" | "new" | "shaky") => void
+	highlightWordId: string | null
+	onHighlightWord: (id: string | null) => void
+	onHoverWord: (id: string | null) => void
+	onRefresh: () => void
+}) {
+	const words: UpcomingWord[] = data ? data[activeTab] : []
+
+	return (
+		<div className="border border-dashed border-brand/40 rounded-lg bg-brand/5 p-3 space-y-2">
+			<div className="flex items-center justify-between">
+				<span className="text-[10px] font-mono uppercase tracking-wider text-brand/70">
+					Dev: Upcoming words {data ? `(Q${data.questionNumber})` : ""}
+				</span>
+				<button
+					type="button"
+					onClick={onRefresh}
+					disabled={loading}
+					className="text-[10px] font-mono text-brand/60 hover:text-brand transition-colors disabled:opacity-50"
+				>
+					{loading ? "..." : "Refresh"}
+				</button>
+			</div>
+			<div className="flex gap-1">
+				{DEV_TABS.map((tab) => (
+					<button
+						key={tab}
+						type="button"
+						onClick={() => onTabChange(tab)}
+						className={`text-[10px] font-mono px-2 py-1 rounded transition-colors ${
+							activeTab === tab
+								? "bg-brand/20 text-brand"
+								: "text-muted-foreground hover:text-foreground hover:bg-muted"
+						}`}
+					>
+						{tab} ({data ? data[tab].length : 0})
+					</button>
+				))}
+			</div>
+			{words.length === 0 ? (
+				<p className="text-[10px] text-muted-foreground/60 font-mono py-2">
+					{loading ? "Loading..." : "Empty"}
+				</p>
+			) : (
+				<div className="space-y-0.5 max-h-48 overflow-auto">
+					{words.map((w) => {
+						const isHighlighted = highlightWordId === w.wordId
+						const input = {
+							confidence: w.confidence,
+							timesTested: w.timesTested,
+							lastTestedAt: w.lastTestedAt ? new Date(w.lastTestedAt) : null,
+							streak: w.streak,
+						}
+						const afterCorrect = updateConfidence("BUILD", true, input).confidence
+						const afterWrong = updateConfidence("BUILD", false, input).confidence
+						const pct = (v: number) => `${(v * 100).toFixed(0)}%`
+						return (
+							<div
+								key={w.wordId}
+								className={`flex items-center gap-2 px-2 py-1 rounded text-[11px] font-mono transition-colors cursor-default ${
+									isHighlighted ? "bg-brand/20 ring-1 ring-brand/40" : "hover:bg-muted/50"
+								} ${w.testedInSession ? "opacity-50" : ""}`}
+								onMouseEnter={() => onHoverWord(w.wordId)}
+								onMouseLeave={() => onHoverWord(null)}
+							>
+								<span className="text-muted-foreground/60 tabular-nums w-12 shrink-0 text-right">
+									#{w.rank}
+								</span>
+								<span className="flex-1 min-w-0 truncate">{w.lemma}</span>
+								<span className="tabular-nums shrink-0 flex items-center gap-1">
+									<span className="text-red-400">{pct(afterWrong)}</span>
+									<span className="text-muted-foreground/40">&larr;</span>
+									<span className="text-foreground font-medium">{pct(w.confidence)}</span>
+									<span className="text-muted-foreground/40">&rarr;</span>
+									<span className="text-green-400">{pct(afterCorrect)}</span>
+								</span>
+								{w.testedInSession && (
+									<span className="text-[9px] text-muted-foreground/40">done</span>
+								)}
+								<button
+									type="button"
+									onClick={() => onHighlightWord(isHighlighted ? null : w.wordId)}
+									className={`shrink-0 text-[9px] px-1.5 py-0.5 rounded transition-colors ${
+										isHighlighted
+											? "bg-brand text-white"
+											: "bg-muted text-muted-foreground hover:bg-brand/20 hover:text-brand"
+									}`}
+								>
+									{isHighlighted ? "Hide" : "Show"}
+								</button>
+							</div>
+						)
+					})}
+				</div>
+			)}
+		</div>
 	)
 }
 

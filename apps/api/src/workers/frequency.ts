@@ -8,6 +8,7 @@ import { appendJobLog, snapshotJobMetadata } from "../lib/job-logs"
 import { updateIngestionProgress } from "../lib/job-progress"
 import { nodeReadableFromWeb, readLinesFromReadable } from "../lib/node-streams"
 import { chainTatoebaFromFrequency } from "../lib/pipeline-chain"
+import { resolveWordOrder } from "../lib/resolve-word-order"
 
 /**
  * Frequency list importer: TSV/CSV (rank ↔ lemma) or bnpd/freqListsLemmatized (lemma first, rank = line #).
@@ -158,6 +159,7 @@ export async function processFrequencyJob(job: PgBoss.Job<FrequencyJobData>) {
 				update: { importedAt: new Date() },
 			})
 
+			await resolveWordOrder(languageId)
 			await appendJobLog(
 				jobId,
 				"out",
@@ -247,6 +249,7 @@ export async function processFrequencyJob(job: PgBoss.Job<FrequencyJobData>) {
 				update: { importedAt: new Date() },
 			})
 
+			await resolveWordOrder(languageId)
 			await appendJobLog(
 				jobId,
 				"out",
@@ -367,6 +370,7 @@ export async function processFrequencyJob(job: PgBoss.Job<FrequencyJobData>) {
 			update: { importedAt: new Date() },
 		})
 
+		await resolveWordOrder(languageId)
 		await appendJobLog(
 			jobId,
 			"out",

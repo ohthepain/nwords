@@ -6,6 +6,7 @@ import { adminClozeReportsRoute } from "./routes/admin/cloze-reports"
 import { adminJobsRoute } from "./routes/admin/jobs"
 import { adminLanguagesRoute } from "./routes/admin/languages"
 import { adminSettingsRoute } from "./routes/admin/settings"
+import { adminWordsRoute } from "./routes/admin/words"
 import { healthRoute } from "./routes/health"
 import { languagesRoute } from "./routes/languages"
 import { progressRoute } from "./routes/progress"
@@ -42,6 +43,7 @@ app.route("/admin/languages", adminLanguagesRoute)
 app.route("/admin/jobs", adminJobsRoute)
 app.route("/admin/cloze-reports", adminClozeReportsRoute)
 app.route("/admin/settings", adminSettingsRoute)
+app.route("/admin/words", adminWordsRoute)
 
 export type AppType = typeof app
 export { app }

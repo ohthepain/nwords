@@ -63,6 +63,7 @@ const searchWords = createServerFn({ method: "POST" })
 			pos: PartOfSpeech
 			alternatePos: PartOfSpeech[]
 			rank: number
+			effectiveRank: number
 			definitions: unknown
 			cefrLevel: CefrLevel | null
 			isOffensive: boolean
@@ -74,9 +75,9 @@ const searchWords = createServerFn({ method: "POST" })
 				lemma: w.lemma,
 				pos: w.pos,
 				alternatePos: [...w.alternatePos],
-				rank: w.rank,
+				rank: w.effectiveRank,
 				definitions: w.definitions as string[],
-				cefrLevel: w.cefrLevel ?? cefrLevelForFrequencyRank(w.rank),
+				cefrLevel: w.cefrLevel ?? cefrLevelForFrequencyRank(w.effectiveRank),
 				isOffensive: w.isOffensive,
 				langCode: w.language.code,
 				sentenceCount: w._count.sentenceWords,
@@ -88,14 +89,14 @@ const searchWords = createServerFn({ method: "POST" })
 			const baseWhere = { languageId, ...posWhere }
 			const [totalWords, rankedWords] = await Promise.all([
 				prisma.word.count({ where: baseWhere }),
-				prisma.word.count({ where: { ...baseWhere, rank: { gt: 0 } } }),
+				prisma.word.count({ where: { ...baseWhere, effectiveRank: { gt: 0 } } }),
 			])
 
 			if (rankedWords > 0) {
 				const [words, total] = await Promise.all([
 					prisma.word.findMany({
-						where: { ...baseWhere, rank: { gt: 0 } },
-						orderBy: [{ rank: "asc" }, { lemma: "asc" }],
+						where: { ...baseWhere, effectiveRank: { gt: 0 } },
+						orderBy: [{ effectiveRank: "asc" }, { lemma: "asc" }],
 						take: limit,
 						include: wordInclude,
 					}),
@@ -146,8 +147,8 @@ const searchWords = createServerFn({ method: "POST" })
 		const [total, rankedMatches] = await Promise.all([
 			prisma.word.count({ where }),
 			prisma.word.findMany({
-				where: { ...where, rank: { gt: 0 } },
-				orderBy: [{ rank: "asc" }, { lemma: "asc" }],
+				where: { ...where, effectiveRank: { gt: 0 } },
+				orderBy: [{ effectiveRank: "asc" }, { lemma: "asc" }],
 				take: limit,
 				include: wordInclude,
 			}),
@@ -159,7 +160,7 @@ const searchWords = createServerFn({ method: "POST" })
 				? [
 						...rankedMatches,
 						...(await prisma.word.findMany({
-							where: { ...where, rank: { lte: 0 } },
+							where: { ...where, effectiveRank: { lte: 0 } },
 							orderBy: [{ lemma: "asc" }],
 							take: need,
 							include: wordInclude,

@@ -1,6 +1,8 @@
+import { auth } from "@nwords/auth/server"
 import { prisma } from "@nwords/db"
-import { createFileRoute } from "@tanstack/react-router"
+import { Link, createFileRoute } from "@tanstack/react-router"
 import { createServerFn } from "@tanstack/react-start"
+import { getRequest } from "@tanstack/react-start/server"
 import { useEffect, useState } from "react"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
@@ -8,11 +10,26 @@ import { Label } from "~/components/ui/label"
 
 // ─── Server Functions ────────────────────────────────────
 
-const getAdminLanguages = createServerFn({ method: "GET" }).handler(async () => {
-	return prisma.language.findMany({
+const loadAdminSentencesPage = createServerFn({ method: "GET" }).handler(async () => {
+	const request = getRequest()
+	let defaultTargetLanguageId: string | null = null
+	if (request) {
+		const session = await auth.api.getSession({ headers: request.headers })
+		if (session?.user?.id) {
+			const user = await prisma.user.findUnique({
+				where: { id: session.user.id },
+				select: { targetLanguageId: true },
+			})
+			defaultTargetLanguageId = user?.targetLanguageId ?? null
+		}
+	}
+
+	const languages = await prisma.language.findMany({
 		orderBy: { name: "asc" },
 		select: { id: true, name: true, code: true },
 	})
+
+	return { languages, defaultTargetLanguageId }
 })
 
 const searchSentences = createServerFn({ method: "POST" })
@@ -71,6 +88,7 @@ const searchSentences = createServerFn({ method: "POST" })
 				langCode: s.language.code,
 				linkedWords: s.sentenceWords.map((sw) => ({
 					id: sw.id,
+					wordId: sw.wordId,
 					lemma: sw.word.lemma,
 				})),
 			})),
@@ -88,7 +106,7 @@ function parseLanguageIdSearch(raw: Record<string, unknown>): { languageId?: str
 
 export const Route = createFileRoute("/_authed/_admin/admin/sentences")({
 	validateSearch: parseLanguageIdSearch,
-	loader: () => getAdminLanguages(),
+	loader: () => loadAdminSentencesPage(),
 	component: AdminSentencesPage,
 })
 
@@ -102,10 +120,13 @@ const MATCH_MODES = [
 
 function AdminSentencesPage() {
 	const { languageId: languageIdFromSearch } = Route.useSearch()
-	const languages = Route.useLoaderData()
+	const { languages, defaultTargetLanguageId } = Route.useLoaderData()
 
 	function resolveLanguageId(searchId: string | undefined): string {
 		if (searchId && languages.some((l) => l.id === searchId)) return searchId
+		if (defaultTargetLanguageId && languages.some((l) => l.id === defaultTargetLanguageId)) {
+			return defaultTargetLanguageId
+		}
 		return languages[0]?.id ?? ""
 	}
 
@@ -210,17 +231,18 @@ function AdminSentencesPage() {
 						</div>
 					) : (
 						<div className="border border-border rounded-lg overflow-hidden">
-							<div className="grid grid-cols-[1fr_80px_80px_1fr] gap-3 text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] px-4 py-2.5 bg-muted/50 border-b border-border">
+							<div className="grid grid-cols-[1fr_80px_80px_1fr_60px] gap-3 text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] px-4 py-2.5 bg-muted/50 border-b border-border">
 								<span>Text</span>
 								<span>Tatoeba</span>
 								<span>Quality</span>
 								<span>Linked Words</span>
+									<span />
 							</div>
 							<div className="divide-y divide-border max-h-[60vh] overflow-auto">
 								{results.sentences.map((sentence) => (
 									<div
 										key={sentence.id}
-										className="grid grid-cols-[1fr_80px_80px_1fr] gap-3 items-start px-4 py-2.5 hover:bg-muted/30 transition-colors"
+										className="grid grid-cols-[1fr_80px_80px_1fr_60px] gap-3 items-start px-4 py-2.5 hover:bg-muted/30 transition-colors"
 									>
 										<div className="space-y-1">
 											<HighlightedText text={sentence.text} query={query} />
@@ -259,17 +281,21 @@ function AdminSentencesPage() {
 										<div className="flex flex-wrap gap-1">
 											{sentence.linkedWords.length > 0 ? (
 												sentence.linkedWords.map((w) => (
-													<span
+													<Link
 														key={w.id}
-														className="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground"
+														to="/practice"
+														search={{ vocabMode: "BUILD", sentenceId: sentence.id, wordId: w.wordId }}
+														target="_blank"
+														className="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground hover:bg-brand/15 hover:text-brand transition-colors cursor-pointer"
 													>
 														{w.lemma}
-													</span>
+													</Link>
 												))
 											) : (
 												<span className="text-xs text-muted-foreground/50">none</span>
 											)}
 										</div>
+										<div />
 									</div>
 								))}
 							</div>

@@ -151,12 +151,12 @@ export const progressRoute = new Hono()
 			const words = await prisma.word.findMany({
 				where: {
 					languageId,
-					rank: { gte: from, lte: to },
+					effectiveRank: { gte: from, lte: to },
 					isOffensive: false,
 					isAbbreviation: false,
 				},
-				orderBy: { rank: "asc" },
-				select: { id: true, rank: true, lemma: true },
+				orderBy: { effectiveRank: "asc" },
+				select: { id: true, effectiveRank: true, lemma: true },
 			})
 
 			// Get user knowledge for these words
@@ -200,7 +200,7 @@ export const progressRoute = new Hono()
 			const cells = words.map((w) => {
 				const k = knowledgeMap.get(w.id)
 				const isKnown = k && k.confidence >= 0.95 && k.timesTested >= 3
-				const isAssumedKnown = w.rank <= assumedRank
+				const isAssumedKnown = w.effectiveRank <= assumedRank
 
 				let status: string
 				if (isKnown || isAssumedKnown) {
@@ -213,7 +213,7 @@ export const progressRoute = new Hono()
 
 				return {
 					wordId: w.id,
-					rank: w.rank,
+					rank: w.effectiveRank,
 					lemma: w.lemma,
 					status,
 					confidence: k?.confidence ?? (isAssumedKnown ? 1.0 : null),

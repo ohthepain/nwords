@@ -16,6 +16,7 @@ import {
 import { WordDetailDialog } from "~/components/word-detail-dialog"
 import { type WordPanelWord, getWordPanelData } from "~/lib/get-word-panel-data-server-fn"
 import { type WordSentence, getWordSentences } from "~/lib/get-word-sentences-server-fn"
+import { Input } from "~/components/ui/input"
 import { cn } from "~/lib/utils"
 
 const loadClozeReportsPage = createServerFn({ method: "GET" }).handler(async () => {
@@ -339,6 +340,8 @@ function ReportCard({
 }) {
 	const [correctClue, setCorrectClue] = useState(r.adminCorrectClue ?? "")
 	const [note, setNote] = useState(r.adminNote ?? "")
+	const [posAdjust, setPosAdjust] = useState("50")
+	const [posAdjustSaved, setPosAdjustSaved] = useState<string | null>(null)
 	const [busy, setBusy] = useState(false)
 	const [err, setErr] = useState<string | null>(null)
 	const [synonymSaved, setSynonymSaved] = useState<string | null>(null)
@@ -589,6 +592,69 @@ function ReportCard({
 						"dark:bg-input/30",
 					)}
 				/>
+			</div>
+
+			<div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
+				<p className="text-xs font-mono uppercase tracking-wider text-muted-foreground">
+					Adjust word position
+				</p>
+				<p className="text-xs text-muted-foreground">
+					Push this word later in the frequency order. A value of 50 moves it ~50 positions down.
+				</p>
+				<div className="flex items-center gap-2">
+					<Input
+						type="number"
+						value={posAdjust}
+						onChange={(e) => {
+							setPosAdjust(e.target.value)
+							setPosAdjustSaved(null)
+						}}
+						className="h-8 w-24 text-sm"
+						min={-10000}
+						max={10000}
+					/>
+					<Button
+						type="button"
+						size="sm"
+						variant="secondary"
+						disabled={busy}
+						onClick={async () => {
+							const val = Number.parseInt(posAdjust, 10)
+							if (Number.isNaN(val)) {
+								setErr("Invalid number")
+								return
+							}
+							setBusy(true)
+							setErr(null)
+							setPosAdjustSaved(null)
+							try {
+								const res = await fetch(`/api/admin/words/${r.wordId}/position-adjust`, {
+									method: "PATCH",
+									credentials: "include",
+									headers: { "Content-Type": "application/json" },
+									body: JSON.stringify({ positionAdjust: val }),
+								})
+								const payload = (await res.json().catch(() => null)) as {
+									effectiveRank?: number
+									error?: string
+								} | null
+								if (!res.ok) throw new Error(payload?.error ?? res.statusText)
+								setPosAdjustSaved(
+									`Saved: effective rank is now ${payload?.effectiveRank ?? "updated"}`,
+								)
+							} catch (e) {
+								setErr(e instanceof Error ? e.message : "Failed to save position adjust")
+							} finally {
+								setBusy(false)
+							}
+						}}
+					>
+						Apply
+					</Button>
+				</div>
+				{posAdjustSaved && (
+					<p className="text-xs text-muted-foreground">{posAdjustSaved}</p>
+				)}
 			</div>
 
 			{err && <p className="text-sm text-destructive">{err}</p>}

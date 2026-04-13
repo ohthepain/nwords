@@ -40,6 +40,7 @@ export const JOB_TYPE_LABELS: Record<string, string> = {
 	TATOEBA_SENTENCES: "Tatoeba Sentences",
 	WORD_FORMS: "Word Forms",
 	AUDIO_FILES: "Audio Files",
+	FIXED_EXPRESSIONS: "Fixed Expressions",
 }
 
 export const STATUS_STYLES: Record<string, string> = {

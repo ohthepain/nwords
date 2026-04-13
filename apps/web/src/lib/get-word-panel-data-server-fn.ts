@@ -39,7 +39,7 @@ export const getWordPanelData = createServerFn({ method: "POST" })
 		})
 		if (!word) return null
 
-		const rank = word.rank
+		const rank = word.effectiveRank
 		const cefrLevel = word.cefrLevel ?? (rank > 0 ? cefrLevelForFrequencyRank(rank) : null)
 
 		const panelWord: WordPanelWord = {

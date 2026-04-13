@@ -13,7 +13,7 @@ export const wordsRoute = new Hono()
 
 		const words = await prisma.word.findMany({
 			where: { languageId, isOffensive: false, isAbbreviation: false },
-			orderBy: { rank: "asc" },
+			orderBy: { effectiveRank: "asc" },
 			take: Math.min(limit, 100),
 			skip: offset,
 		})

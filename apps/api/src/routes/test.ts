@@ -5,7 +5,6 @@ import {
 	KNOWN_CONFIDENCE_THRESHOLD,
 	KNOWN_MIN_TESTS,
 	checkFixedExpression,
-	getFixedExpressionRules,
 	updateConfidence,
 } from "@nwords/shared"
 import { type Context, Hono } from "hono"
@@ -72,16 +71,27 @@ const ASSESSMENT_CONVERGE_THRESHOLD = 50
 const ASSESSMENT_INITIAL_LOW = 1
 const ASSESSMENT_INITIAL_HIGH = 10000
 
-/** BUILD mode bucket weights (see docs/design/vocab-architecture.md). New 45%, shaky 40%, mood 15%. */
-const BUILD_WEIGHT_NEW = 45
-const BUILD_WEIGHT_SHAKY = 40
+/** BUILD mode bucket weights (see docs/design/vocab-architecture.md). Slight tilt toward new / frontier. */
+const BUILD_WEIGHT_NEW = 48
+const BUILD_WEIGHT_SHAKY = 37
 const BUILD_MOOD_MIN_STREAK_WRONG = 2
 const BUILD_CANDIDATE_CAP = 45
 const BUILD_SESSION_EXCLUSION_SPREAD = 28
-/** New-territory picks stay near the first gap (same band as graph, rank-ordered). */
-const BUILD_NEW_SPREAD = 8
+/** New-territory bucket picks stay near the lowest gaps (same band as graph, rank-ordered). */
+const BUILD_NEW_SPREAD = 6
 /** Every Nth build-mode question targets the lowest rank not yet verified known (frontier). */
-const BUILD_FRONTIER_EVERY = 10
+const BUILD_FRONTIER_EVERY = 6
+/** First N questions prioritize lowest-rank unknowns in the graph band (conquer territory). */
+const BUILD_TERRITORY_OPENING = 5
+/** After the opening, every Nth question revisits that same lowest-rank unknown pool. */
+const BUILD_TERRITORY_REVISIT_EVERY = 4
+/** Narrow spread when sampling territory so the session keeps drilling the bottom of the band. */
+const BUILD_TERRITORY_HEAD_SPREAD = 5
+/**
+ * Words with this many misses (timesTested − timesCorrect) are de-emphasized in the opening
+ * only — still rank-ordered later so hard words keep getting reps across sessions.
+ */
+const BUILD_HEAVY_MISS_THRESHOLD = 8
 
 /**
  * Lemma ids in the practice vocab graph band: same filters and rank order as GET /progress/heatmap,
@@ -100,7 +110,7 @@ async function buildModeGraphVisibleWordIds(
 	const targetCellCount = Math.ceil(baseline * 1.2)
 	const heatmapWhere = {
 		languageId,
-		rank: { gte: 1, lte: 10_000 },
+		effectiveRank: { gte: 1, lte: 10_000 },
 		isOffensive: false,
 		isAbbreviation: false,
 	}
@@ -109,7 +119,7 @@ async function buildModeGraphVisibleWordIds(
 	if (n <= 0) return []
 	const rows = await prisma.word.findMany({
 		where: heatmapWhere,
-		orderBy: { rank: "asc" },
+		orderBy: { effectiveRank: "asc" },
 		take: n,
 		select: { id: true },
 	})
@@ -155,6 +165,52 @@ function pickPreferFreshFromOrderedIds(
 	return pool[idx]
 }
 
+function territoryMisses(row: {
+	userKnowledge: { timesTested: number; timesCorrect: number }[]
+}): number {
+	const k = row.userKnowledge[0]
+	if (!k) return 0
+	return Math.max(0, k.timesTested - k.timesCorrect)
+}
+
+function sortBuildTerritoryRows<
+	T extends {
+		id: string
+		effectiveRank: number
+		userKnowledge: { timesTested: number; timesCorrect: number }[]
+	},
+>(rows: T[]): T[] {
+	return [...rows].sort((a, b) => {
+		if (a.effectiveRank !== b.effectiveRank) return a.effectiveRank - b.effectiveRank
+		return territoryMisses(a) - territoryMisses(b)
+	})
+}
+
+/** Several attempts: territory list is rank-ordered but some lemmas may fail cloze resolution. */
+async function tryResolveBuildTerritoryPick(
+	orderedIds: string[],
+	testedInSession: Set<string>,
+	spreadCap: number,
+	langs: { nativeLanguageId: string; targetLanguageId: string },
+) {
+	const localTried = new Set<string>()
+	for (let a = 0; a < 16; a++) {
+		const wordId = pickPreferFreshFromOrderedIds(orderedIds, testedInSession, localTried, {
+			spreadCap,
+			biasTowardHead: true,
+		})
+		if (!wordId) return null
+		localTried.add(wordId)
+		const resolved = await resolveClozeWithHint({
+			wordId,
+			nativeLanguageId: langs.nativeLanguageId,
+			targetLanguageId: langs.targetLanguageId,
+		})
+		if (resolved.ok) return resolved
+	}
+	return null
+}
+
 async function handleAssessmentNext(
 	// biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
 	c: Context<any>,
@@ -183,9 +239,9 @@ async function handleAssessmentNext(
 	const answeredWordIds = answers.map((a) => a.wordId)
 	const answeredWords = await prisma.word.findMany({
 		where: { id: { in: answeredWordIds } },
-		select: { id: true, rank: true },
+		select: { id: true, effectiveRank: true },
 	})
-	const rankMap = new Map(answeredWords.map((w) => [w.id, w.rank]))
+	const rankMap = new Map(answeredWords.map((w) => [w.id, w.effectiveRank]))
 
 	// Binary search: correct answers push low bound up, wrong answers push high bound down
 	let low = ASSESSMENT_INITIAL_LOW
@@ -355,10 +411,10 @@ async function handleFrustrationNext(
 
 /**
  * BUILD mode: fill gaps in the vocab graph band (first min(corpus, ≈1.2× baseline) lemmas by rank).
- * New territory = first untested words above assumed rank in that band. Shaky = low-rank
- * (common) words first, then lowest confidence — includes holes below the assumed line.
- * Every 10th question, prefer the lowest rank not yet verified known (frontier) to grow territory.
- * Guests keep the legacy rank-window random walk (no profile / knowledge).
+ * Lowest-rank items the user has not verified known are the “territory” target: the session opens
+ * on that pool, revisits it on a fixed cadence, and periodically forces the global frontier
+ * (lowest rank in-band, including holes below assumed rank). Shaky picks are rank-ordered within
+ * the band. Guests keep the legacy rank-window random walk (no profile / knowledge).
  */
 async function handleBuildGuestNext(
 	// biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
@@ -474,12 +530,12 @@ async function handleBuildNext(
 	const testedInSession = new Set(sessionAnswers.map((a) => a.wordId))
 	const eligibleMood = tailConsecutiveWrongs(sessionAnswers) >= BUILD_MOOD_MIN_STREAK_WRONG
 
-	const [newWords, shakyKnowledge, moodKnowledge] = await Promise.all([
+	const [newWords, shakyKnowledge, moodKnowledge, territoryRowsRaw] = await Promise.all([
 		prisma.word.findMany({
 			where: {
 				languageId: langs.targetLanguageId,
 				id: { in: graphVisibleWordIds },
-				rank: { gt: rankAboveFloor },
+				effectiveRank: { gt: rankAboveFloor },
 				isOffensive: false,
 				isAbbreviation: false,
 				testSentenceIds: { isEmpty: false },
@@ -489,7 +545,7 @@ async function handleBuildNext(
 					},
 				},
 			},
-			orderBy: { rank: "asc" },
+			orderBy: { effectiveRank: "asc" },
 			take: BUILD_CANDIDATE_CAP,
 			select: { id: true },
 		}),
@@ -506,14 +562,14 @@ async function handleBuildNext(
 					is: {
 						languageId: langs.targetLanguageId,
 						id: { in: graphVisibleWordIds },
-						rank: { gte: 1 },
+						effectiveRank: { gte: 1 },
 						isOffensive: false,
 						isAbbreviation: false,
 						testSentenceIds: { isEmpty: false },
 					},
 				},
 			},
-			orderBy: [{ lastTestedAt: "asc" }, { confidence: "asc" }],
+			orderBy: [{ word: { effectiveRank: "asc" } }, { lastTestedAt: "asc" }, { confidence: "asc" }],
 			take: BUILD_CANDIDATE_CAP,
 			select: { wordId: true },
 		}),
@@ -527,7 +583,7 @@ async function handleBuildNext(
 							is: {
 								languageId: langs.targetLanguageId,
 								id: { in: graphVisibleWordIds },
-								rank: { gte: 1 },
+								effectiveRank: { gte: 1 },
 								isOffensive: false,
 								isAbbreviation: false,
 								testSentenceIds: { isEmpty: false },
@@ -538,19 +594,10 @@ async function handleBuildNext(
 					select: { wordId: true },
 				})
 			: Promise.resolve([] as { wordId: string }[]),
-	])
-
-	const newIds = newWords.map((w) => w.id)
-	const shakyIds = shakyKnowledge.map((k) => k.wordId)
-	const moodIds = moodKnowledge.map((k) => k.wordId)
-
-	const nextBuildQuestionNumber = sessionAnswers.length + 1
-	if (nextBuildQuestionNumber % BUILD_FRONTIER_EVERY === 0) {
-		const frontierWord = await prisma.word.findFirst({
+		prisma.word.findMany({
 			where: {
 				languageId: langs.targetLanguageId,
 				id: { in: graphVisibleWordIds },
-				rank: { gt: rankAboveFloor },
 				isOffensive: false,
 				isAbbreviation: false,
 				testSentenceIds: { isEmpty: false },
@@ -564,7 +611,102 @@ async function handleBuildNext(
 					},
 				},
 			},
-			orderBy: { rank: "asc" },
+			orderBy: { effectiveRank: "asc" },
+			take: Math.min(graphVisibleWordIds.length, 120),
+			select: {
+				id: true,
+				effectiveRank: true,
+				userKnowledge: {
+					where: { userId: session.userId },
+					select: { timesTested: true, timesCorrect: true },
+				},
+			},
+		}),
+	])
+
+	const newIds = newWords.map((w) => w.id)
+	const shakyIds = shakyKnowledge.map((k) => k.wordId)
+	const moodIds = moodKnowledge.map((k) => k.wordId)
+
+	const territoryRows = sortBuildTerritoryRows(territoryRowsRaw)
+	const territoryIds = territoryRows.map((r) => r.id)
+	const territoryWinnableIds = territoryRows
+		.filter((r) => territoryMisses(r) < BUILD_HEAVY_MISS_THRESHOLD)
+		.map((r) => r.id)
+
+	const nextBuildQuestionNumber = sessionAnswers.length + 1
+
+	if (nextBuildQuestionNumber <= BUILD_TERRITORY_OPENING && territoryIds.length > 0) {
+		const openingPool = territoryWinnableIds.length > 0 ? territoryWinnableIds : territoryIds
+		const resolved = await tryResolveBuildTerritoryPick(openingPool, testedInSession, 3, langs)
+		if (resolved) {
+			return c.json({
+				wordId: resolved.wordId,
+				lemma: resolved.lemma,
+				rank: resolved.rank,
+				targetSentenceId: resolved.targetSentenceId,
+				promptText: resolved.promptText,
+				targetSentenceText: resolved.targetSentenceText,
+				hintText: resolved.hintText,
+				hintSentenceId: resolved.hintSentenceId,
+				hintSource: resolved.hintSource,
+				inlineHint: resolved.inlineHint,
+				answerType: "TRANSLATION_TYPED" as const,
+				sessionMode: session.mode,
+				vocabMode,
+			})
+		}
+	}
+
+	if (
+		nextBuildQuestionNumber > BUILD_TERRITORY_OPENING &&
+		territoryIds.length > 0 &&
+		nextBuildQuestionNumber % BUILD_TERRITORY_REVISIT_EVERY === 0
+	) {
+		const resolved = await tryResolveBuildTerritoryPick(
+			territoryIds,
+			testedInSession,
+			BUILD_TERRITORY_HEAD_SPREAD,
+			langs,
+		)
+		if (resolved) {
+			return c.json({
+				wordId: resolved.wordId,
+				lemma: resolved.lemma,
+				rank: resolved.rank,
+				targetSentenceId: resolved.targetSentenceId,
+				promptText: resolved.promptText,
+				targetSentenceText: resolved.targetSentenceText,
+				hintText: resolved.hintText,
+				hintSentenceId: resolved.hintSentenceId,
+				hintSource: resolved.hintSource,
+				inlineHint: resolved.inlineHint,
+				answerType: "TRANSLATION_TYPED" as const,
+				sessionMode: session.mode,
+				vocabMode,
+			})
+		}
+	}
+
+	if (nextBuildQuestionNumber % BUILD_FRONTIER_EVERY === 0) {
+		const frontierWord = await prisma.word.findFirst({
+			where: {
+				languageId: langs.targetLanguageId,
+				id: { in: graphVisibleWordIds },
+				isOffensive: false,
+				isAbbreviation: false,
+				testSentenceIds: { isEmpty: false },
+				NOT: {
+					userKnowledge: {
+						some: {
+							userId: session.userId,
+							confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD },
+							timesTested: { gte: KNOWN_MIN_TESTS },
+						},
+					},
+				},
+			},
+			orderBy: { effectiveRank: "asc" },
 			select: { id: true },
 		})
 		if (frontierWord) {
@@ -613,7 +755,10 @@ async function handleBuildNext(
 					biasTowardHead: true,
 				})
 			} else if (bucket === "shaky") {
-				wordId = pickPreferFreshFromOrderedIds(shakyIds, testedInSession, tried)
+				wordId = pickPreferFreshFromOrderedIds(shakyIds, testedInSession, tried, {
+					spreadCap: BUILD_NEW_SPREAD + 2,
+					biasTowardHead: true,
+				})
 			} else if (bucket === "mood" && eligibleMood) {
 				wordId = pickPreferFreshFromOrderedIds(moodIds, testedInSession, tried)
 			}
@@ -724,9 +869,9 @@ async function computeAssessedRank(sessionId: string): Promise<number> {
 	const answeredWordIds = answers.map((a) => a.wordId)
 	const answeredWords = await prisma.word.findMany({
 		where: { id: { in: answeredWordIds } },
-		select: { id: true, rank: true },
+		select: { id: true, effectiveRank: true },
 	})
-	const rankMap = new Map(answeredWords.map((w) => [w.id, w.rank]))
+	const rankMap = new Map(answeredWords.map((w) => [w.id, w.effectiveRank]))
 
 	let low = ASSESSMENT_INITIAL_LOW
 	let high = ASSESSMENT_INITIAL_HIGH
@@ -878,6 +1023,8 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 	.get("/sessions/:id/next", async (c) => {
 		const user = c.get("user")
 		const { id: sessionId } = c.req.param()
+		const forceSentenceId = c.req.query("sentenceId")?.trim() || undefined
+		const forceWordId = c.req.query("wordId")?.trim() || undefined
 
 		const session = await getSessionIfAllowed(sessionId, user, { requireActive: true })
 
@@ -906,6 +1053,50 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 				},
 				400,
 			)
+		}
+
+		// ── Force a specific sentence / word (admin testing) ──────────
+		if (forceSentenceId) {
+			const targetWordId = forceWordId ?? (await prisma.sentenceWord.findFirst({
+				where: {
+					sentenceId: forceSentenceId,
+					word: { languageId: langs.targetLanguageId, isAbbreviation: false },
+				},
+				orderBy: { position: "asc" },
+				select: { wordId: true },
+			}))?.wordId
+			if (!targetWordId) {
+				return c.json(
+					{ error: "no_question_available", message: "No testable word found for this sentence." },
+					404,
+				)
+			}
+			const resolved = await resolveClozeWithHint({
+				wordId: targetWordId,
+				nativeLanguageId: langs.nativeLanguageId,
+				targetLanguageId: langs.targetLanguageId,
+				forceSentenceId,
+			})
+			if (!resolved.ok) {
+				return c.json(
+					{ error: "no_question_available", message: "Could not build a cloze for this sentence." },
+					404,
+				)
+			}
+			return c.json({
+				wordId: resolved.wordId,
+				lemma: resolved.lemma,
+				rank: resolved.rank,
+				targetSentenceId: resolved.targetSentenceId,
+				promptText: resolved.promptText,
+				targetSentenceText: resolved.targetSentenceText,
+				hintText: resolved.hintText,
+				hintSentenceId: resolved.hintSentenceId,
+				hintSource: resolved.hintSource,
+				inlineHint: resolved.inlineHint,
+				answerType: "TRANSLATION_TYPED" as const,
+				sessionMode: session.mode,
+			})
 		}
 
 		const vocabMode = session.vocabMode ?? "BUILD"
@@ -1306,6 +1497,204 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 				wordsTestedCount: s.wordsTestedCount,
 				wordsCorrectCount: s.wordsCorrectCount,
 			})),
+		})
+	})
+
+	/** Dev-mode: peek at candidate word pools for the current BUILD session. */
+	.get("/sessions/:id/upcoming", async (c) => {
+		const user = c.get("user")
+		if (!user) return c.json({ error: "Unauthorized" }, 401)
+
+		const sessionId = c.req.param("id")
+		const session = await getSessionIfAllowed(sessionId, user, { requireActive: true })
+		if (!session || !session.userId) {
+			return c.json({ error: "Session not found or already ended" }, 404)
+		}
+
+		const langs = await resolveClozeLanguageIds(session)
+		if (!langs) {
+			return c.json({ error: "Missing language pair" }, 400)
+		}
+
+		const [profile, sessionAnswers, knownVerifiedCount] = await Promise.all([
+			prisma.userLanguageProfile.findUnique({
+				where: {
+					userId_languageId: {
+						userId: session.userId,
+						languageId: langs.targetLanguageId,
+					},
+				},
+			}),
+			prisma.testAnswer.findMany({
+				where: { testSessionId: session.id },
+				orderBy: { answeredAt: "asc" },
+				select: { wordId: true, correct: true },
+			}),
+			prisma.userWordKnowledge.count({
+				where: {
+					userId: session.userId,
+					confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD },
+					timesTested: { gte: KNOWN_MIN_TESTS },
+					word: {
+						is: { languageId: langs.targetLanguageId, isAbbreviation: false },
+					},
+				},
+			}),
+		])
+
+		const assumedRank = profile?.assumedRank ?? 0
+		const vocabSize = assumedRank + knownVerifiedCount
+		const graphVisibleWordIds = await buildModeGraphVisibleWordIds(
+			langs.targetLanguageId,
+			assumedRank,
+			vocabSize,
+		)
+		const rankAboveFloor = Math.max(0, assumedRank)
+		const testedInSession = new Set(sessionAnswers.map((a) => a.wordId))
+
+		const wordSelect = {
+			id: true,
+			lemma: true,
+			effectiveRank: true,
+			testSentenceIds: true,
+		} as const
+
+		const [newWords, shakyKnowledge, territoryRowsRaw] = await Promise.all([
+			prisma.word.findMany({
+				where: {
+					languageId: langs.targetLanguageId,
+					id: { in: graphVisibleWordIds },
+					effectiveRank: { gt: rankAboveFloor },
+					isOffensive: false,
+					isAbbreviation: false,
+					testSentenceIds: { isEmpty: false },
+					NOT: {
+						userKnowledge: {
+							some: { userId: session.userId },
+						},
+					},
+				},
+				orderBy: { effectiveRank: "asc" },
+				take: 30,
+				select: wordSelect,
+			}),
+			prisma.userWordKnowledge.findMany({
+				where: {
+					userId: session.userId,
+					NOT: {
+						AND: [
+							{ confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD } },
+							{ timesTested: { gte: KNOWN_MIN_TESTS } },
+						],
+					},
+					word: {
+						is: {
+							languageId: langs.targetLanguageId,
+							id: { in: graphVisibleWordIds },
+							effectiveRank: { gte: 1 },
+							isOffensive: false,
+							isAbbreviation: false,
+							testSentenceIds: { isEmpty: false },
+						},
+					},
+				},
+				orderBy: [{ word: { effectiveRank: "asc" } }, { lastTestedAt: "asc" }, { confidence: "asc" }],
+				take: 30,
+				select: {
+					wordId: true,
+					confidence: true,
+					timesTested: true,
+					word: { select: wordSelect },
+				},
+			}),
+			prisma.word.findMany({
+				where: {
+					languageId: langs.targetLanguageId,
+					id: { in: graphVisibleWordIds },
+					isOffensive: false,
+					isAbbreviation: false,
+					testSentenceIds: { isEmpty: false },
+					NOT: {
+						userKnowledge: {
+							some: {
+								userId: session.userId,
+								confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD },
+								timesTested: { gte: KNOWN_MIN_TESTS },
+							},
+						},
+					},
+				},
+				orderBy: { effectiveRank: "asc" },
+				take: 30,
+				select: {
+					...wordSelect,
+					userKnowledge: {
+						where: { userId: session.userId },
+						select: { timesTested: true, timesCorrect: true },
+					},
+				},
+			}),
+		])
+
+		const territoryRows = sortBuildTerritoryRows(territoryRowsRaw)
+		const nextQ = sessionAnswers.length + 1
+
+		// Collect all candidate word IDs to batch-fetch knowledge
+		const allWordIds = [
+			...new Set([
+				...territoryRows.map((r) => r.id),
+				...newWords.map((w) => w.id),
+				...shakyKnowledge.map((k) => k.wordId),
+			]),
+		]
+
+		const knowledgeRows = allWordIds.length > 0
+			? await prisma.userWordKnowledge.findMany({
+					where: { userId: session.userId!, wordId: { in: allWordIds } },
+					select: {
+						wordId: true,
+						confidence: true,
+						timesTested: true,
+						streak: true,
+						lastTestedAt: true,
+					},
+				})
+			: []
+
+		const knowledgeByWordId = new Map(knowledgeRows.map((k) => [k.wordId, k]))
+
+		type UpcomingWord = {
+			wordId: string
+			lemma: string
+			rank: number
+			testedInSession: boolean
+			hasSentences: boolean
+			confidence: number
+			timesTested: number
+			streak: number
+			lastTestedAt: string | null
+		}
+
+		const mapWord = (w: { id: string; lemma: string; effectiveRank: number; testSentenceIds: string[] }): UpcomingWord => {
+			const k = knowledgeByWordId.get(w.id)
+			return {
+				wordId: w.id,
+				lemma: w.lemma,
+				rank: w.effectiveRank,
+				testedInSession: testedInSession.has(w.id),
+				hasSentences: w.testSentenceIds.length > 0,
+				confidence: k?.confidence ?? 0,
+				timesTested: k?.timesTested ?? 0,
+				streak: k?.streak ?? 0,
+				lastTestedAt: k?.lastTestedAt?.toISOString() ?? null,
+			}
+		}
+
+		return c.json({
+			questionNumber: nextQ,
+			territory: territoryRows.slice(0, 20).map(mapWord),
+			new: newWords.slice(0, 20).map(mapWord),
+			shaky: shakyKnowledge.slice(0, 20).map((k) => mapWord(k.word)),
 		})
 	})
 

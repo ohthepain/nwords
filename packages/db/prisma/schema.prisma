@@ -134,6 +134,10 @@ model Word {
   /// Whether this word is presented in vocabulary tests. False for function-word POS types.
   isTestable      Boolean      @default(true)
   cefrLevel       CefrLevel?
+  /// Admin-set offset added to `rank` when computing `effectiveRank`. Default 0 = no shift.
+  positionAdjust  Int          @default(0)
+  /// Materialised rank used for all ordering: `rank + positionAdjust`. Recomputed on frequency import and admin adjust.
+  effectiveRank   Int          @default(0)
   /// Curated sentence UUIDs suitable for vocabulary tests (ranked by quality).
   testSentenceIds String[]     @default([])
   createdAt       DateTime     @default(now())
@@ -148,6 +152,7 @@ model Word {
 
   @@unique([languageId, lemma, pos])
   @@index([languageId, rank])
+  @@index([languageId, effectiveRank])
   @@index([languageId, cefrLevel])
   @@map("word")
 }

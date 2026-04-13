@@ -160,6 +160,29 @@ const runLanguagePipeline = createServerFn({ method: "POST" })
 		return { success: true, pipelineJobId: body.pipelineJobId }
 	})
 
+const generateFixedExpressions = createServerFn({ method: "POST" })
+	.inputValidator((data: { id: string }) => data)
+	.handler(async ({ data }) => {
+		const request = getRequest()
+		if (!request) {
+			throw new Error("Missing request context")
+		}
+		const origin = new URL(request.url).origin
+		const json = JSON.stringify({ languageId: data.id })
+		const res = await app.fetch(
+			new Request(`${origin}/api/admin/jobs/fixed-expressions`, {
+				method: "POST",
+				headers: forwardedAdminApiHeaders(request, { jsonBody: json }),
+				body: json,
+			}),
+		)
+		const body = (await res.json().catch(() => ({}))) as { error?: string; id?: string }
+		if (!res.ok) {
+			throw new Error(body.error ?? `Fixed expressions job failed (${res.status})`)
+		}
+		return { success: true, jobId: body.id ?? null }
+	})
+
 const clearLanguageSentenceLinks = createServerFn({ method: "POST" })
 	.inputValidator((data: { id: string }) => data)
 	.handler(async ({ data }) => {
@@ -200,6 +223,7 @@ function AdminLanguagesPage() {
 	const { languages, jobsByLanguageId } = Route.useLoaderData()
 	const [toggling, setToggling] = useState<string | null>(null)
 	const [runningPipeline, setRunningPipeline] = useState<string | null>(null)
+	const [generatingFixedExpr, setGeneratingFixedExpr] = useState<string | null>(null)
 	const [clearingLinksId, setClearingLinksId] = useState<string | null>(null)
 	const [notice, setNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null)
 	const [jobActionError, setJobActionError] = useState<string | null>(null)
@@ -266,6 +290,28 @@ function AdminLanguagesPage() {
 			setNotice({ kind: "err", text: e instanceof Error ? e.message : "Pipeline failed" })
 		} finally {
 			setRunningPipeline(null)
+		}
+		await router.invalidate()
+	}
+
+	async function handleGenerateFixedExpressions(id: string) {
+		setNotice(null)
+		setGeneratingFixedExpr(id)
+		try {
+			const out = await generateFixedExpressions({ data: { id } })
+			setNotice({
+				kind: "ok",
+				text: out.jobId
+					? `Fixed expressions job queued — ${out.jobId.slice(0, 8)}… Progress appears below and on Jobs.`
+					: "Fixed expressions job queued.",
+			})
+		} catch (e) {
+			setNotice({
+				kind: "err",
+				text: e instanceof Error ? e.message : "Fixed expressions job failed",
+			})
+		} finally {
+			setGeneratingFixedExpr(null)
 		}
 		await router.invalidate()
 	}
@@ -552,9 +598,22 @@ function AdminLanguagesPage() {
 
 								{lang.enabled ? (
 									<div className="px-4 py-3 bg-muted/20 border-t border-border/70">
-										<p className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] mb-2">
-											Ingestion jobs (latest {JOBS_PER_LANGUAGE})
-										</p>
+										<div className="flex items-center justify-between mb-2">
+											<p className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em]">
+												Ingestion jobs (latest {JOBS_PER_LANGUAGE})
+											</p>
+											<Button
+												variant="outline"
+												size="sm"
+												className="h-6 text-[11px] px-2 font-mono"
+												disabled={generatingFixedExpr === lang.id}
+												onClick={() => handleGenerateFixedExpressions(lang.id)}
+											>
+												{generatingFixedExpr === lang.id
+													? "Generating…"
+													: "Generate fixed expressions"}
+											</Button>
+										</div>
 										{langJobs.length === 0 ? (
 											<p className="text-xs text-muted-foreground">
 												No jobs yet for this language.

@@ -426,17 +426,10 @@ export function VocabGraph({
 
 							const inAnswer = answerAnim?.wordId === c.wordId && answerAnim.step < 8
 							const inQuestionFlash = questionFlashId === c.wordId
-							const inSolidTerritory = col < completedColsFromLeft
 
 							let background = cellBackground(c.confidence)
 							if (inAnswer && answerAnim) {
 								background = answerAnim.useTo ? answerAnim.toBg : answerAnim.fromBg
-							} else if (
-								inSolidTerritory &&
-								!inQuestionFlash &&
-								cellQualifiesForTerritory(c.confidence)
-							) {
-								background = "transparent"
 							}
 
 							const isActive = activeWordId === c.wordId

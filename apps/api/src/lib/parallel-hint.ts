@@ -391,7 +391,7 @@ async function resolveGlossStringForPivot(
 				isAbbreviation: false,
 			},
 			select: { definitions: true },
-			orderBy: { rank: "asc" },
+			orderBy: { effectiveRank: "asc" },
 		})
 		if (rootWord && Array.isArray(rootWord.definitions)) {
 			const realDef = (rootWord.definitions as string[]).find(
@@ -565,11 +565,11 @@ async function translateViaGlossPivot(
 		const hit = await prisma.word.findFirst({
 			where: {
 				languageId: nativeLanguageId,
-				rank: { gt: 0 },
+				effectiveRank: { gt: 0 },
 				lemma: tok,
 				isAbbreviation: false,
 			},
-			orderBy: { rank: "asc" },
+			orderBy: { effectiveRank: "asc" },
 			select: { lemma: true },
 		})
 		if (hit) return hit.lemma
@@ -647,6 +647,8 @@ export async function resolveClozeWithHint(params: {
 	wordId: string
 	nativeLanguageId: string
 	targetLanguageId: string
+	/** When set, skip the shuffle and use only this sentence (admin testing). */
+	forceSentenceId?: string
 }): Promise<ClozeResolution> {
 	const word = await prisma.word.findFirst({
 		where: {
@@ -656,31 +658,50 @@ export async function resolveClozeWithHint(params: {
 		select: {
 			id: true,
 			lemma: true,
-			rank: true,
+			effectiveRank: true,
 			definitions: true,
 			testSentenceIds: true,
 			isAbbreviation: true,
 		},
 	})
 
-	if (!word || word.isAbbreviation || word.testSentenceIds.length === 0) {
+	if (!word || word.isAbbreviation) {
+		return { ok: false, reason: "no_test_sentences" }
+	}
+
+	// When forcing a sentence, ensure it's in the candidate pool even if not in testSentenceIds
+	const sentenceIds = params.forceSentenceId
+		? Array.from(new Set([...word.testSentenceIds, params.forceSentenceId]))
+		: word.testSentenceIds
+
+	if (sentenceIds.length === 0) {
 		return { ok: false, reason: "no_test_sentences" }
 	}
 
 	const candidates = await loadClozeCandidates(
 		word.id,
 		params.targetLanguageId,
-		word.testSentenceIds,
+		sentenceIds,
 	)
 
 	if (candidates.length === 0) {
 		return { ok: false, reason: "no_blank_position" }
 	}
 
-	// Shuffle candidates so we don't always use the same sentence for a word
-	for (let i = candidates.length - 1; i > 0; i--) {
-		const j = Math.floor(Math.random() * (i + 1))
-		;[candidates[i], candidates[j]] = [candidates[j], candidates[i]]
+	// When forcing a specific sentence (admin test), filter to just that candidate
+	if (params.forceSentenceId) {
+		const forced = candidates.filter((c) => c.targetSentenceId === params.forceSentenceId)
+		if (forced.length === 0) {
+			return { ok: false, reason: "no_blank_position" }
+		}
+		candidates.length = 0
+		candidates.push(...forced)
+	} else {
+		// Shuffle candidates so we don't always use the same sentence for a word
+		for (let i = candidates.length - 1; i > 0; i--) {
+			const j = Math.floor(Math.random() * (i + 1))
+			;[candidates[i], candidates[j]] = [candidates[j], candidates[i]]
+		}
 	}
 
 	const glossPivotHint = (): Promise<string | null> =>
@@ -712,7 +733,7 @@ export async function resolveClozeWithHint(params: {
 				ok: true,
 				wordId: word.id,
 				lemma: word.lemma,
-				rank: word.rank,
+				rank: word.effectiveRank,
 				targetSentenceId: c.targetSentenceId,
 				targetSentenceText: c.targetSentenceText,
 				promptText: buildClozePrompt(c.targetSentenceText, c.position),
@@ -740,7 +761,7 @@ export async function resolveClozeWithHint(params: {
 			ok: true,
 			wordId: word.id,
 			lemma: word.lemma,
-			rank: word.rank,
+			rank: word.effectiveRank,
 			targetSentenceId: c.targetSentenceId,
 			targetSentenceText: c.targetSentenceText,
 			promptText: buildClozePrompt(c.targetSentenceText, c.position),
@@ -773,7 +794,7 @@ export async function pickRandomWordIdForCloze(
 		isOffensive: false,
 		isAbbreviation: false,
 		testSentenceIds: { isEmpty: false },
-		...(rankRange ? { rank: { gte: rankRange.min, lte: rankRange.max } } : { rank: { gt: 0 } }),
+		...(rankRange ? { effectiveRank: { gte: rankRange.min, lte: rankRange.max } } : { effectiveRank: { gt: 0 } }),
 		...(restrict && restrict.length > 0 ? { id: { in: restrict } } : {}),
 	}
 
@@ -798,7 +819,7 @@ export async function pickRandomWordIdForCloze(
 			isOffensive: false,
 			isAbbreviation: false,
 			testSentenceIds: { isEmpty: false },
-			rank: { gt: 0 },
+			effectiveRank: { gt: 0 },
 		}
 		count = await prisma.word.count({ where: fallbackWhere })
 		if (count > 0) where = fallbackWhere
@@ -852,17 +873,17 @@ export async function pickWordNearRank(
 		isOffensive: false,
 		isAbbreviation: false,
 		testSentenceIds: { isEmpty: false },
-		rank: { gte: Math.max(1, targetRank - 25), lte: targetRank + 25 },
+		effectiveRank: { gte: Math.max(1, targetRank - 25), lte: targetRank + 25 },
 		...(excludeWordIds.length > 0 ? { id: { notIn: excludeWordIds } } : {}),
 	}
 
 	const word = await prisma.word.findFirst({
 		where: baseWhere,
-		select: { id: true, rank: true },
-		orderBy: { rank: "asc" },
+		select: { id: true, effectiveRank: true },
+		orderBy: { effectiveRank: "asc" },
 	})
 
-	if (word) return { wordId: word.id, rank: word.rank }
+	if (word) return { wordId: word.id, rank: word.effectiveRank }
 
 	// Widen search if nothing in the ±25 range
 	const wider = await prisma.word.findFirst({
@@ -871,12 +892,12 @@ export async function pickWordNearRank(
 			isOffensive: false,
 			isAbbreviation: false,
 			testSentenceIds: { isEmpty: false },
-			rank: { gte: Math.max(1, targetRank - 100), lte: targetRank + 100 },
+			effectiveRank: { gte: Math.max(1, targetRank - 100), lte: targetRank + 100 },
 			...(excludeWordIds.length > 0 ? { id: { notIn: excludeWordIds } } : {}),
 		},
-		select: { id: true, rank: true },
-		orderBy: { rank: "asc" },
+		select: { id: true, effectiveRank: true },
+		orderBy: { effectiveRank: "asc" },
 	})
 
-	return wider ? { wordId: wider.id, rank: wider.rank } : null
+	return wider ? { wordId: wider.id, rank: wider.effectiveRank } : null
 }
