@@ -85,6 +85,32 @@ GitHub Actions: **Staging down** (scheduled + manual) and **Staging up** (manual
 - Stopping is allowed for **Single-AZ** non-SQL Server; **Multi-AZ** production here is started/stopped as a whole (same CLI).
 - First start after stop can take several minutes; the ECS `health_check_grace_period_seconds` is set to **300** to allow slow DB wake and app startup.
 
+## Amazon SES (password reset and email verification)
+
+The app sends mail via **SES API v2** when `SES_FROM_EMAIL` is set (injected from Secrets Manager as `ses_from_email` in Terraform). The ECS task role includes `ses:SendEmail` and `ses:SendRawEmail` on `*` (same shape as OctaCard).
+
+### Variables
+
+| Variable | Purpose |
+|----------|---------|
+| `ses_from_email` | Stored in the app secret; must be an address or domain you verified in SES for **eu-central-1**. Use environment-specific senders when useful (e.g. `no-reply@staging.nwords.live` vs `no-reply@nwords.live`). |
+| `ses_configuration_set` | If non-empty, Terraform creates `aws_sesv2_configuration_set` (reputation metrics on, TLS **REQUIRE**) and sets ECS env `SES_CONFIGURATION_SET`. Leave empty to skip the resource and send without a configuration set. |
+| `ses_domain_name` | If non-empty, Terraform creates `aws_sesv2_email_identity` with Easy DKIM (`RSA_2048_BIT`). Add the **DKIM CNAME** records SES shows (console or `terraform show`) to Route 53 for that zone before expecting good deliverability. |
+
+### Runbook (verify → sandbox → production)
+
+1. **Verify the sending domain or address** in SES (same region as the app, `eu-central-1`). `ses_from_email` must sit on that verified identity.
+2. **DKIM**: After `aws_sesv2_email_identity` (if used), publish the three CNAME records; wait for SES to show the identity as healthy.
+3. **Sandbox**: New accounts can only mail verified recipients until you request **production access** in SES.
+4. **Cutover**: Set `ses_from_email` in tfvars / Secrets Manager, apply Terraform so ECS receives `SES_FROM_EMAIL` and optional `SES_CONFIGURATION_SET`, then redeploy. Without `SES_FROM_EMAIL`, the app logs the intended message instead of calling SES (local dev).
+
+### Troubleshooting
+
+- **Message rejected / not authorized**: Task role missing SES permissions or `SES_FROM_EMAIL` not on a verified identity.
+- **Bounces in sandbox**: Recipient must be verified, or move the account out of sandbox.
+- **Config set errors**: If `SES_CONFIGURATION_SET` is set, that name must exist in SES; a bad name makes **SESv2** `SendEmail` fail while the older CLI `aws ses send-email` can still succeed (it does not use that set). Leave `SES_CONFIGURATION_SET` empty until the set exists.
+- **Password reset “succeeds” but no mail**: Better Auth still returns 200 if sending throws; check app logs for `[auth-email] SES SendEmail failed` or Better Auth’s `Failed to run background task`. Common causes: wrong config set, missing IAM on the task role, or `redirectTo` rejected (fixed locally by trusting both `localhost` and `127.0.0.1`).
+
 ## Terraform destroy
 
 Secrets use `lifecycle { prevent_destroy = true }`. To destroy an environment, remove those blocks (or `terraform state rm` the secrets) if you accept losing secret metadata, then `terraform workspace select <env> && terraform destroy -var-file=environments/<env>/terraform.tfvars`.

@@ -11,8 +11,9 @@
 		"build": "tsc"
 	},
 	"dependencies": {
-		"better-auth": "^1.2.3",
-		"@nwords/db": "workspace:*"
+		"@aws-sdk/client-sesv2": "^3.1030.0",
+		"@nwords/db": "workspace:*",
+		"better-auth": "^1.2.3"
 	},
 	"devDependencies": {
 		"typescript": "^5.7.3"

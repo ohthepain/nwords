@@ -101,8 +101,21 @@ variable "uploads_cors_allowed_origins" {
 }
 
 variable "ses_from_email" {
-  type    = string
-  default = "no-reply@nwords.live"
+  type        = string
+  default     = "no-reply@nwords.live"
+  description = "From address stored in Secrets Manager (must be on a verified SES identity for this account/region)."
+}
+
+variable "ses_configuration_set" {
+  type        = string
+  default     = ""
+  description = "Non-empty creates aws_sesv2_configuration_set and sets ECS env SES_CONFIGURATION_SET. Leave empty to skip."
+}
+
+variable "ses_domain_name" {
+  type        = string
+  default     = ""
+  description = "e.g. nwords.live or staging.nwords.live — non-empty creates aws_sesv2_email_identity with Easy DKIM. Add Route 53 CNAMEs from AWS console/Terraform outputs after apply."
 }
 
 variable "auth_superadmin_emails" {

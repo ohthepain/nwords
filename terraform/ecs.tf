@@ -50,6 +50,7 @@ resource "aws_ecs_task_definition" "app" {
         { name = "S3_BUCKET", value = aws_s3_bucket.uploads.bucket },
         # Better Auth needs the public base URL for trusted origins/callback generation.
         { name = "BETTER_AUTH_URL", value = local.better_auth_url },
+        { name = "SES_CONFIGURATION_SET", value = var.ses_configuration_set },
       ]
 
       secrets = [

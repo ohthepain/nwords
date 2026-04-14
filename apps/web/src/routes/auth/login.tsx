@@ -1,9 +1,12 @@
 import { Link, createFileRoute } from "@tanstack/react-router"
 import { ArrowRight, Eye, EyeOff, Lock, Mail } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { GoogleAuthSection } from "~/components/google-auth-button"
 import { ThemeToggleButton } from "~/components/theme-toggle-button"
 import { authClient } from "~/lib/auth-client"
+
+/** Seconds before "Resend reset link" is enabled after a send (reduces accidental duplicate emails). */
+const RESET_RESEND_COOLDOWN_SEC = 60
 
 const NWORDS_TAGLINE = "Measure, track, and expand your vocabulary in any language."
 
@@ -17,6 +20,20 @@ function LoginPage() {
 	const [error, setError] = useState<string | null>(null)
 	const [loading, setLoading] = useState(false)
 	const [showPassword, setShowPassword] = useState(false)
+	const [forgotOpen, setForgotOpen] = useState(false)
+	const [resetEmail, setResetEmail] = useState("")
+	const [resetLoading, setResetLoading] = useState(false)
+	const [resetSentMessage, setResetSentMessage] = useState<string | null>(null)
+	const [resetError, setResetError] = useState<string | null>(null)
+	const [resetResendCooldownSec, setResetResendCooldownSec] = useState(0)
+
+	useEffect(() => {
+		if (resetResendCooldownSec <= 0) return
+		const id = window.setTimeout(() => {
+			setResetResendCooldownSec((s) => Math.max(0, s - 1))
+		}, 1000)
+		return () => window.clearTimeout(id)
+	}, [resetResendCooldownSec])
 
 	async function handleSubmit(e: React.FormEvent) {
 		e.preventDefault()
@@ -41,6 +58,45 @@ function LoginPage() {
 		} finally {
 			setLoading(false)
 		}
+	}
+
+	async function sendPasswordReset() {
+		setResetError(null)
+		setResetLoading(true)
+		try {
+			const result = await authClient.requestPasswordReset({
+				email: resetEmail,
+				redirectTo: `${window.location.origin}/auth/reset-password`,
+			})
+			if (result.error) {
+				setResetError(result.error.message ?? "Something went wrong")
+				return
+			}
+			setResetSentMessage("If an account exists for that email, we sent a reset link. Check your inbox.")
+			setResetResendCooldownSec(RESET_RESEND_COOLDOWN_SEC)
+		} catch {
+			setResetError("An unexpected error occurred")
+		} finally {
+			setResetLoading(false)
+		}
+	}
+
+	async function handleRequestReset(e: React.FormEvent) {
+		e.preventDefault()
+		await sendPasswordReset()
+	}
+
+	async function handleResendReset(e: React.FormEvent) {
+		e.preventDefault()
+		if (resetResendCooldownSec > 0 || resetLoading) return
+		await sendPasswordReset()
+	}
+
+	function closeForgotFlow() {
+		setForgotOpen(false)
+		setResetSentMessage(null)
+		setResetError(null)
+		setResetResendCooldownSec(0)
 	}
 
 	return (
@@ -90,129 +146,228 @@ function LoginPage() {
 							<ThemeToggleButton />
 						</div>
 
-						<div className="mb-8">
-							<h2
-								className="text-foreground mb-2"
-								style={{ fontSize: "1.875rem", fontWeight: 700 }}
-							>
-								Sign in
-							</h2>
-							<p className="text-muted-foreground">
-								Don&apos;t have an account?{" "}
-								<Link
-									to="/auth/register"
-									className="font-medium text-foreground underline underline-offset-4"
-								>
-									Register
-								</Link>
-							</p>
-						</div>
-
-						<GoogleAuthSection />
-
-						<form onSubmit={handleSubmit} className="space-y-5 mt-6">
-							{error && (
-								<div className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-xl px-3 py-2.5">
-									{error}
+						{!forgotOpen ? (
+							<>
+								<div className="mb-8">
+									<h2
+										className="text-foreground mb-2"
+										style={{ fontSize: "1.875rem", fontWeight: 700 }}
+									>
+										Sign in
+									</h2>
+									<p className="text-muted-foreground">
+										Don&apos;t have an account?{" "}
+										<Link
+											to="/auth/register"
+											className="font-medium text-foreground underline underline-offset-4"
+										>
+											Register
+										</Link>
+									</p>
 								</div>
-							)}
 
-							<div>
-								<label
-									htmlFor="login-email"
-									className="block text-sm font-medium text-foreground mb-1.5"
-								>
-									Email
-								</label>
-								<div className="relative">
-									<Mail
-										className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground"
-										size={17}
-									/>
-									<input
-										id="login-email"
-										type="email"
-										value={email}
-										onChange={(e) => setEmail(e.target.value)}
-										placeholder="you@example.com"
-										required
-										autoComplete="email"
-										className="w-full pl-10 pr-4 py-3 rounded-xl border border-input bg-background text-foreground placeholder:text-muted-foreground text-sm outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 transition-all"
-									/>
-								</div>
-							</div>
+								<GoogleAuthSection />
 
-							<div>
-								<label
-									htmlFor="login-password"
-									className="block text-sm font-medium text-foreground mb-1.5"
-								>
-									Password
-								</label>
-								<div className="relative">
-									<Lock
-										className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground"
-										size={17}
-									/>
-									<input
-										id="login-password"
-										type={showPassword ? "text" : "password"}
-										value={password}
-										onChange={(e) => setPassword(e.target.value)}
-										placeholder="••••••••"
-										required
-										autoComplete="current-password"
-										className="w-full pl-10 pr-11 py-3 rounded-xl border border-input bg-background text-foreground placeholder:text-muted-foreground text-sm outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 transition-all"
-									/>
+								<form onSubmit={handleSubmit} className="space-y-5 mt-6">
+									{error && (
+										<div className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-xl px-3 py-2.5">
+											{error}
+										</div>
+									)}
+
+									<div>
+										<label
+											htmlFor="login-email"
+											className="block text-sm font-medium text-foreground mb-1.5"
+										>
+											Email
+										</label>
+										<div className="relative">
+											<Mail
+												className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+												size={17}
+											/>
+											<input
+												id="login-email"
+												type="email"
+												value={email}
+												onChange={(e) => setEmail(e.target.value)}
+												placeholder="you@example.com"
+												required
+												autoComplete="email"
+												className="w-full pl-10 pr-4 py-3 rounded-xl border border-input bg-background text-foreground placeholder:text-muted-foreground text-sm outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 transition-all"
+											/>
+										</div>
+									</div>
+
+									<div>
+										<label
+											htmlFor="login-password"
+											className="block text-sm font-medium text-foreground mb-1.5"
+										>
+											Password
+										</label>
+										<div className="relative">
+											<Lock
+												className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+												size={17}
+											/>
+											<input
+												id="login-password"
+												type={showPassword ? "text" : "password"}
+												value={password}
+												onChange={(e) => setPassword(e.target.value)}
+												placeholder="••••••••"
+												required
+												autoComplete="current-password"
+												className="w-full pl-10 pr-11 py-3 rounded-xl border border-input bg-background text-foreground placeholder:text-muted-foreground text-sm outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 transition-all"
+											/>
+											<button
+												type="button"
+												onClick={() => setShowPassword(!showPassword)}
+												className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+												aria-label={showPassword ? "Hide password" : "Show password"}
+											>
+												{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+											</button>
+										</div>
+										<div className="flex justify-end">
+											<button
+												type="button"
+												onClick={() => {
+													setForgotOpen(true)
+													setResetEmail(email)
+													setResetError(null)
+													setResetSentMessage(null)
+													setResetResendCooldownSec(0)
+												}}
+												className="text-sm text-muted-foreground hover:text-foreground underline underline-offset-4"
+											>
+												Forgot password?
+											</button>
+										</div>
+									</div>
+
 									<button
-										type="button"
-										onClick={() => setShowPassword(!showPassword)}
-										className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-										aria-label={showPassword ? "Hide password" : "Show password"}
+										type="submit"
+										disabled={loading}
+										className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl text-primary-foreground font-semibold text-sm transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-70 bg-primary"
 									>
-										{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+										{loading ? (
+											<svg
+												className="animate-spin"
+												width="18"
+												height="18"
+												viewBox="0 0 24 24"
+												fill="none"
+												aria-hidden
+											>
+												<title>Loading</title>
+												<circle
+													cx="12"
+													cy="12"
+													r="10"
+													stroke="currentColor"
+													strokeWidth="3"
+													strokeOpacity="0.3"
+												/>
+												<path
+													d="M12 2a10 10 0 0 1 10 10"
+													stroke="currentColor"
+													strokeWidth="3"
+													strokeLinecap="round"
+												/>
+											</svg>
+										) : (
+											<>
+												<span>Sign in</span>
+												<ArrowRight size={16} />
+											</>
+										)}
 									</button>
-								</div>
-							</div>
-
-							<button
-								type="submit"
-								disabled={loading}
-								className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl text-primary-foreground font-semibold text-sm transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-70 bg-primary"
-							>
-								{loading ? (
-									<svg
-										className="animate-spin"
-										width="18"
-										height="18"
-										viewBox="0 0 24 24"
-										fill="none"
-										aria-hidden
+								</form>
+							</>
+						) : (
+							<div className="mt-0">
+								<div className="mb-8">
+									<h2
+										className="text-foreground mb-2"
+										style={{ fontSize: "1.875rem", fontWeight: 700 }}
 									>
-										<title>Loading</title>
-										<circle
-											cx="12"
-											cy="12"
-											r="10"
-											stroke="currentColor"
-											strokeWidth="3"
-											strokeOpacity="0.3"
-										/>
-										<path
-											d="M12 2a10 10 0 0 1 10 10"
-											stroke="currentColor"
-											strokeWidth="3"
-											strokeLinecap="round"
-										/>
-									</svg>
-								) : (
-									<>
-										<span>Sign in</span>
-										<ArrowRight size={16} />
-									</>
-								)}
-							</button>
-						</form>
+										Reset password
+									</h2>
+									<p className="text-muted-foreground">
+										<button
+											type="button"
+											onClick={closeForgotFlow}
+											className="font-medium text-foreground underline underline-offset-4"
+										>
+											Back to sign in
+										</button>
+									</p>
+								</div>
+
+								<p className="text-sm text-muted-foreground mb-6">
+									We&apos;ll email you a link to choose a new password if an account exists for that
+									address.
+								</p>
+
+								<form
+									onSubmit={resetSentMessage ? handleResendReset : handleRequestReset}
+									className="space-y-5"
+								>
+									{resetError && (
+										<div className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-xl px-3 py-2.5">
+											{resetError}
+										</div>
+									)}
+									{resetSentMessage && (
+										<div className="text-sm text-foreground bg-muted border border-border rounded-xl px-3 py-2.5">
+											{resetSentMessage}
+										</div>
+									)}
+									<div>
+										<label
+											htmlFor="reset-email"
+											className="block text-sm font-medium text-foreground mb-1.5"
+										>
+											Email
+										</label>
+										<div className="relative">
+											<Mail
+												className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+												size={17}
+											/>
+											<input
+												id="reset-email"
+												type="email"
+												value={resetEmail}
+												onChange={(e) => setResetEmail(e.target.value)}
+												placeholder="you@example.com"
+												required
+												autoComplete="email"
+												className="w-full pl-10 pr-4 py-3 rounded-xl border border-input bg-background text-foreground placeholder:text-muted-foreground text-sm outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 transition-all"
+											/>
+										</div>
+									</div>
+									<button
+										type="submit"
+										disabled={
+											resetLoading || (Boolean(resetSentMessage) && resetResendCooldownSec > 0)
+										}
+										className="w-full py-3.5 rounded-xl text-primary-foreground font-semibold text-sm bg-primary disabled:opacity-70"
+									>
+										{resetLoading
+											? "Sending…"
+											: resetSentMessage
+												? resetResendCooldownSec > 0
+													? `Resend reset link (${resetResendCooldownSec}s)`
+													: "Resend reset link"
+												: "Send reset link"}
+									</button>
+								</form>
+							</div>
+						)}
 
 						<p className="text-center mt-8">
 							<Link to="/" className="text-sm text-muted-foreground hover:text-foreground">

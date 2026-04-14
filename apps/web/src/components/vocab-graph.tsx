@@ -185,6 +185,68 @@ export function VocabGraph({
 
 	const territoryWidthPx = completedColsFromLeft > 0 ? completedColsFromLeft * step - GAP_PX : 0
 
+	const conqueredWords = completedColsFromLeft * numRows
+
+	/**
+	 * Scan forward from the current conquered edge, column by column. For each
+	 * prospective stopping column, record the cumulative unlearned words needed
+	 * and the new conquered territory gained — so we can pick a high-ratio goal
+	 * and map a user-chosen word count to a concrete territory target.
+	 */
+	const forwardScan = useMemo(() => {
+		const stats: {
+			colsAdded: number
+			cumToLearn: number
+			newConquered: number
+			ratio: number
+		}[] = []
+		let cum = 0
+		for (let col = completedColsFromLeft; col < numCols; col++) {
+			let unlearnedInCol = 0
+			for (let row = 0; row < numRows; row++) {
+				const idx = col * numRows + row
+				if (idx >= visibleCells.length) break
+				if (!cellQualifiesForTerritory(visibleCells[idx].confidence)) unlearnedInCol++
+			}
+			cum += unlearnedInCol
+			const colsAdded = col - completedColsFromLeft + 1
+			const newConquered = colsAdded * numRows
+			stats.push({
+				colsAdded,
+				cumToLearn: cum,
+				newConquered,
+				ratio: cum > 0 ? newConquered / cum : 0,
+			})
+		}
+		return stats
+	}, [visibleCells, numCols, numRows, completedColsFromLeft])
+
+	/** Suggested session goal: stopping column with the best new-territory-per-word-learned ratio. */
+	const suggestedGoal = useMemo(() => {
+		let best: (typeof forwardScan)[number] | null = null
+		for (const s of forwardScan) {
+			if (s.cumToLearn <= 0) continue
+			if (!best || s.ratio > best.ratio) best = s
+		}
+		return best
+	}, [forwardScan])
+
+	const [goalWordsOverride, setGoalWordsOverride] = useState<number | null>(null)
+	const goalWords = goalWordsOverride ?? suggestedGoal?.cumToLearn ?? 0
+
+	/** Deepest reachable column whose cumulative unlearned count fits in the user's goal budget. */
+	const goalTarget = useMemo(() => {
+		let best: (typeof forwardScan)[number] | null = null
+		for (const s of forwardScan) {
+			if (s.cumToLearn <= goalWords && s.cumToLearn > 0) best = s
+		}
+		return best
+	}, [forwardScan, goalWords])
+
+	const goalConquered = goalTarget
+		? (completedColsFromLeft + goalTarget.colsAdded) * numRows
+		: conqueredWords
+
 	const gridIndexForPixel = useCallback(
 		(px: number, py: number): number | null => {
 			if (px < 0 || py < 0) return null
@@ -375,6 +437,37 @@ export function VocabGraph({
 						</>
 					)}
 				</p>
+			</div>
+			<div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs tabular-nums">
+				<span className="text-foreground/80">
+					Conquered:{" "}
+					<span className="font-medium">{conqueredWords.toLocaleString()}</span> words
+				</span>
+				{forwardScan.length > 0 && suggestedGoal && (
+					<>
+						<span className="text-muted-foreground/70">·</span>
+						<label className="flex items-center gap-1 text-muted-foreground">
+							<span>Session goal: learn</span>
+							<input
+								type="number"
+								min={0}
+								value={goalWords}
+								onChange={(e) => {
+									const v = Number.parseInt(e.target.value, 10)
+									setGoalWordsOverride(Number.isFinite(v) && v >= 0 ? v : 0)
+								}}
+								className="w-14 rounded border border-border/60 bg-background px-1 py-0.5 text-center text-foreground"
+							/>
+							<span>
+								words →{" "}
+								<span className="font-medium text-foreground/80">
+									{goalConquered.toLocaleString()}
+								</span>{" "}
+								conquered
+							</span>
+						</label>
+					</>
+				)}
 			</div>
 			<div
 				className="relative mx-auto rounded-lg border border-border/60 bg-muted/20 p-2 touch-none select-none w-fit"

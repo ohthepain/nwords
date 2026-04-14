@@ -89,3 +89,22 @@ resource "aws_iam_role_policy" "ecs_task_uploads" {
     ]
   })
 }
+
+resource "aws_iam_role_policy" "ecs_task_ses" {
+  name = "${local.name_prefix}-ecs-task-ses"
+  role = aws_iam_role.ecs_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ses:SendEmail",
+          "ses:SendRawEmail",
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}

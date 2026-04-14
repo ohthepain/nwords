@@ -18,12 +18,14 @@ function RegisterPage() {
 	const [password, setPassword] = useState("")
 	const [confirmPassword, setConfirmPassword] = useState("")
 	const [error, setError] = useState<string | null>(null)
+	const [info, setInfo] = useState<string | null>(null)
 	const [loading, setLoading] = useState(false)
 	const [showPassword, setShowPassword] = useState(false)
 
 	async function handleSubmit(e: React.FormEvent) {
 		e.preventDefault()
 		setError(null)
+		setInfo(null)
 
 		if (password !== confirmPassword) {
 			setError("Passwords do not match")
@@ -42,10 +44,16 @@ function RegisterPage() {
 				name,
 				email,
 				password,
+				callbackURL: `${window.location.origin}/dashboard`,
 			})
 
 			if (result.error) {
 				setError(result.error.message ?? "Registration failed")
+				return
+			}
+
+			if (!result.data?.token) {
+				setInfo("Check your email to verify your account, then sign in.")
 				return
 			}
 
@@ -128,6 +136,11 @@ function RegisterPage() {
 							{error && (
 								<div className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-xl px-3 py-2.5">
 									{error}
+								</div>
+							)}
+							{info && (
+								<div className="text-sm text-foreground bg-muted border border-border rounded-xl px-3 py-2.5">
+									{info}
 								</div>
 							)}
 
