@@ -10,6 +10,8 @@ export type VocabGraphCell = {
 	lemma: string
 	status: string
 	confidence: number | null
+	timesTested: number
+	timesCorrect: number
 }
 
 type HeatmapResponse = {
@@ -196,31 +198,28 @@ export function VocabGraph({
 		[numCols, numRows, step, visibleCells.length],
 	)
 
-	const [probeWords, setProbeWords] = useState<string[]>([])
-	const probeSetRef = useRef<Set<string>>(new Set())
-	const rafClearRef = useRef<number | null>(null)
+	const [tooltipCell, setTooltipCell] = useState<VocabGraphCell | null>(null)
+	const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
 
-	const pushProbeIndex = useCallback(
-		(idx: number | null) => {
-			if (idx === null) return
-			const lemma = visibleCells[idx]?.lemma
-			if (!lemma) return
-			const s = probeSetRef.current
-			if (!s.has(lemma)) {
-				s.add(lemma)
-				setProbeWords((prev) => [...prev, lemma])
+	const updateTooltip = useCallback(
+		(idx: number | null, clientX: number, clientY: number) => {
+			if (idx === null) {
+				setTooltipCell(null)
+				return
 			}
+			const cell = visibleCells[idx]
+			if (!cell) {
+				setTooltipCell(null)
+				return
+			}
+			setTooltipCell(cell)
+			setTooltipPos({ x: clientX, y: clientY })
 		},
 		[visibleCells],
 	)
 
-	const scheduleClearProbes = useCallback(() => {
-		if (rafClearRef.current != null) cancelAnimationFrame(rafClearRef.current)
-		rafClearRef.current = requestAnimationFrame(() => {
-			rafClearRef.current = null
-			probeSetRef.current = new Set()
-			setProbeWords([])
-		})
+	const clearTooltip = useCallback(() => {
+		setTooltipCell(null)
 	}, [])
 
 	const onPointerMove = useCallback(
@@ -229,15 +228,13 @@ export function VocabGraph({
 			const r = el.getBoundingClientRect()
 			const x = e.clientX - r.left
 			const y = e.clientY - r.top
-			pushProbeIndex(gridIndexForPixel(x, y))
+			updateTooltip(gridIndexForPixel(x, y), e.clientX, e.clientY)
 		},
-		[gridIndexForPixel, pushProbeIndex],
+		[gridIndexForPixel, updateTooltip],
 	)
 
 	const onPointerDown = useCallback(
 		(e: React.PointerEvent<HTMLDivElement>) => {
-			probeSetRef.current = new Set()
-			setProbeWords([])
 			try {
 				e.currentTarget.setPointerCapture(e.pointerId)
 			} catch {
@@ -245,9 +242,9 @@ export function VocabGraph({
 			}
 			const el = e.currentTarget
 			const r = el.getBoundingClientRect()
-			pushProbeIndex(gridIndexForPixel(e.clientX - r.left, e.clientY - r.top))
+			updateTooltip(gridIndexForPixel(e.clientX - r.left, e.clientY - r.top), e.clientX, e.clientY)
 		},
-		[gridIndexForPixel, pushProbeIndex],
+		[gridIndexForPixel, updateTooltip],
 	)
 
 	const onPointerUp = useCallback(
@@ -257,10 +254,14 @@ export function VocabGraph({
 			} catch {
 				/* ignore */
 			}
-			scheduleClearProbes()
+			clearTooltip()
 		},
-		[scheduleClearProbes],
+		[clearTooltip],
 	)
+
+	const onPointerLeave = useCallback(() => {
+		clearTooltip()
+	}, [clearTooltip])
 
 	const lastQuestionFlashRef = useRef<string | null>(null)
 	useEffect(() => {
@@ -376,8 +377,7 @@ export function VocabGraph({
 				</p>
 			</div>
 			<div
-				className="relative mx-auto rounded-lg border border-border/60 bg-muted/20 p-2 touch-none select-none"
-				style={{ width: graphW }}
+				className="relative mx-auto rounded-lg border border-border/60 bg-muted/20 p-2 touch-none select-none w-fit"
 			>
 				<div
 					role="img"
@@ -392,6 +392,7 @@ export function VocabGraph({
 					onPointerMove={pointerProbe ? onPointerMove : undefined}
 					onPointerUp={pointerProbe ? onPointerUp : undefined}
 					onPointerCancel={pointerProbe ? onPointerUp : undefined}
+					onPointerLeave={pointerProbe ? onPointerLeave : undefined}
 				>
 					{territoryWidthPx > 0 ? (
 						<div
@@ -458,19 +459,23 @@ export function VocabGraph({
 					</div>
 				</div>
 			</div>
-			{pointerProbe && probeWords.length > 0 && (
+			{pointerProbe && tooltipCell && (
 				<div
-					className="fixed bottom-4 left-4 right-4 z-50 max-h-40 overflow-y-auto rounded-lg border border-border/80 bg-card/95 backdrop-blur-md px-3 py-2 text-xs shadow-lg pointer-events-none sm:left-auto sm:right-6 sm:w-72"
+					className="fixed z-50 rounded-lg border border-border/80 bg-card/95 backdrop-blur-md px-3 py-2 text-xs shadow-lg pointer-events-none"
+					style={{
+						left: tooltipPos.x + 12,
+						top: tooltipPos.y - 8,
+						transform: "translateY(-100%)",
+					}}
 					aria-live="polite"
 				>
-					<p className="font-mono text-[10px] text-muted-foreground mb-1 uppercase tracking-wider">
-						Words
+					<p className="font-medium text-foreground">{tooltipCell.lemma} <span className="text-muted-foreground font-normal">#{tooltipCell.rank}</span></p>
+					<p className="text-muted-foreground mt-0.5">
+						Confidence: {tooltipCell.confidence !== null ? `${Math.round(tooltipCell.confidence * 100)}%` : "untested"}
 					</p>
-					<ul className="space-y-0.5 text-foreground/90">
-						{probeWords.map((w) => (
-							<li key={w}>{w}</li>
-						))}
-					</ul>
+					<p className="text-muted-foreground">
+						{tooltipCell.timesCorrect}/{tooltipCell.timesTested} correct
+					</p>
 				</div>
 			)}
 		</div>

@@ -170,6 +170,7 @@ export const progressRoute = new Hono()
 					wordId: true,
 					confidence: true,
 					timesTested: true,
+					timesCorrect: true,
 				},
 			})
 
@@ -217,6 +218,8 @@ export const progressRoute = new Hono()
 					lemma: w.lemma,
 					status,
 					confidence: k?.confidence ?? (isAssumedKnown ? 1.0 : null),
+					timesTested: k?.timesTested ?? 0,
+					timesCorrect: k?.timesCorrect ?? 0,
 				}
 			})
 

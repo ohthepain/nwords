@@ -44,6 +44,7 @@ export const adminClozeReportsRoute = new Hono()
 				include: {
 					nativeLanguage: { select: { id: true, name: true, code: true } },
 					targetLanguage: { select: { id: true, name: true, code: true } },
+					word: { select: { positionAdjust: true } },
 				},
 			})
 
@@ -57,6 +58,7 @@ export const adminClozeReportsRoute = new Hono()
 					targetLanguage: r.targetLanguage,
 					wordId: r.wordId,
 					wordLemma: r.wordLemma,
+					positionAdjust: r.word.positionAdjust,
 					targetSentenceId: r.targetSentenceId,
 					hintSentenceId: r.hintSentenceId,
 					targetSentenceText: r.targetSentenceText,
@@ -158,6 +160,7 @@ export const adminClozeReportsRoute = new Hono()
 				status: statusSchema,
 				adminCorrectClue: z.string().optional(),
 				adminNote: z.string().optional(),
+				userGuess: z.string().optional(),
 			}),
 		),
 		async (c) => {
@@ -177,6 +180,7 @@ export const adminClozeReportsRoute = new Hono()
 						? { adminCorrectClue: body.adminCorrectClue }
 						: {}),
 					...(body.adminNote !== undefined ? { adminNote: body.adminNote } : {}),
+					...(body.userGuess !== undefined ? { userGuess: body.userGuess } : {}),
 				},
 				include: {
 					nativeLanguage: { select: { id: true, name: true, code: true } },

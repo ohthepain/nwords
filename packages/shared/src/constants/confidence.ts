@@ -40,7 +40,7 @@ export interface ConfidenceResult {
 }
 
 /** Minimum confidence increase on any correct answer (Build & Frustration; Assessment binary). */
-export const MIN_CONFIDENCE_BUMP = 0.2
+export const MIN_CONFIDENCE_BUMP = 0.3
 
 /** Minimum timesTested to qualify as a "frustration word". */
 export const FRUSTRATION_WORD_MIN_TESTS = 5

@@ -57,7 +57,7 @@ gain = 1 / (timesTested + 1)
 timeBonus = min(daysSinceLastTest / 30, 1.0) * 0.5
 adjustedGain = gain + timeBonus
 rawConfidence = confidence + (1.0 - confidence) * adjustedGain
-newConfidence = max(rawConfidence, confidence + MIN_CONFIDENCE_BUMP)   // MIN_CONFIDENCE_BUMP = 0.2
+newConfidence = max(rawConfidence, confidence + MIN_CONFIDENCE_BUMP)   // MIN_CONFIDENCE_BUMP = 0.3
 ```
 
 **Wrong:**
@@ -85,7 +85,7 @@ Binary measurement: correct → `1.0`, wrong → `0.0`. Streak still updates (+1
 
 | Constant                     | Value | Role                                      |
 | ---------------------------- | ----- | ----------------------------------------- |
-| `MIN_CONFIDENCE_BUMP`        | 0.2   | Min increase on correct (Build/Frustration) |
+| `MIN_CONFIDENCE_BUMP`        | 0.3   | Min increase on correct (Build/Frustration) |
 | `FRUSTRATION_WORD_MIN_TESTS` | 5     | Min `timesTested` to qualify as frustration pool |
 | `KNOWN_CONFIDENCE_THRESHOLD` | 0.95  | “Known” for size + build bucket boundaries |
 | `KNOWN_MIN_TESTS`            | 3     | Min tests for “known”                     |
@@ -155,4 +155,4 @@ Answer recording: `POST` … `/test/sessions/:id/answer` in `test.ts` (creates `
 ## Resolved design decisions
 
 - **Frustration qualification:** `timesTested >= 5` and `confidence < 0.5` in the current selector (plus test sentences required).
-- **No confidence floor** in formulas beyond clamping to `[0,1]`; Assessment can set `0.0`. Build and Frustration correct answers always move by at least `MIN_CONFIDENCE_BUMP` (**0.2**).
+- **No confidence floor** in formulas beyond clamping to `[0,1]`; Assessment can set `0.0`. Build and Frustration correct answers always move by at least `MIN_CONFIDENCE_BUMP` (**0.3**).

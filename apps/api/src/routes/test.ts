@@ -636,7 +636,11 @@ async function handleBuildNext(
 
 	const nextBuildQuestionNumber = sessionAnswers.length + 1
 
-	if (nextBuildQuestionNumber <= BUILD_TERRITORY_OPENING && territoryIds.length > 0) {
+	if (
+		nextBuildQuestionNumber > 1 &&
+		nextBuildQuestionNumber <= BUILD_TERRITORY_OPENING &&
+		territoryIds.length > 0
+	) {
 		const openingPool = territoryWinnableIds.length > 0 ? territoryWinnableIds : territoryIds
 		const resolved = await tryResolveBuildTerritoryPick(openingPool, testedInSession, 3, langs)
 		if (resolved) {
@@ -688,7 +692,7 @@ async function handleBuildNext(
 		}
 	}
 
-	if (nextBuildQuestionNumber % BUILD_FRONTIER_EVERY === 0) {
+	if (nextBuildQuestionNumber === 1 || nextBuildQuestionNumber % BUILD_FRONTIER_EVERY === 0) {
 		const frontierWord = await prisma.word.findFirst({
 			where: {
 				languageId: langs.targetLanguageId,
