@@ -167,8 +167,17 @@ export function WordDetailDialog(props: WordDetailDialogProps) {
 						/>
 					</div>
 				) : (
-					<div className="grid grid-cols-2 sm:grid-cols-5 gap-3 py-2">
+					<div className="flex flex-wrap gap-3 py-2">
 						<StatCard label="Rank" value={word.rank > 0 ? word.rank.toLocaleString() : "—"} />
+						{word.positionAdjust !== undefined ? (
+							<StatCard label="Pos. adj." value={word.positionAdjust.toLocaleString()} />
+						) : null}
+						{word.effectiveRank !== undefined ? (
+							<StatCard
+								label="Eff. rank"
+								value={word.effectiveRank > 0 ? word.effectiveRank.toLocaleString() : "—"}
+							/>
+						) : null}
 						<StatCard label="CEFR" value={word.cefrLevel ?? "—"} />
 						<StatCard label="Sentences" value={word.sentenceCount.toLocaleString()} />
 						<StatCard label="Language" value={word.langCode} />

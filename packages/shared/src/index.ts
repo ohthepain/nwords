@@ -1,3 +1,4 @@
+export * from "./dedupe-effective-rank"
 export * from "./constants/abbrev-lemmas"
 export * from "./constants/cefr"
 export * from "./constants/confidence"

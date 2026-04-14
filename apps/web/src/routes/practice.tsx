@@ -28,6 +28,19 @@ type UserMe = {
 
 type LanguageOption = { id: string; name: string; code: string }
 
+type VocabMode = "ASSESSMENT" | "BUILD" | "FRUSTRATION"
+
+type DevSelectionPanelTab = "territory" | "new" | "shaky" | "mood"
+
+type DevSelection = {
+	vocabMode: VocabMode
+	kind: string
+	panelTab: DevSelectionPanelTab | null
+	summary: string
+	primaryBucket?: "new" | "shaky" | "mood"
+	bucketOrder?: ("new" | "shaky" | "mood")[]
+}
+
 type NextQuestion = {
 	wordId: string
 	lemma: string
@@ -42,6 +55,8 @@ type NextQuestion = {
 	inlineHint: string | null
 	answerType: "TRANSLATION_TYPED"
 	sessionMode: string
+	vocabMode?: VocabMode
+	devSelection?: DevSelection
 }
 
 type UpcomingWord = {
@@ -56,14 +71,33 @@ type UpcomingWord = {
 	lastTestedAt: string | null
 }
 
+type DevNextPickPreview = {
+	kind: string
+	panelTab: DevSelectionPanelTab | null
+	summary: string
+	bucketWeights: { new: number; shaky: number; mood: number } | null
+}
+
 type UpcomingData = {
+	vocabMode?: VocabMode
 	questionNumber: number
 	territory: UpcomingWord[]
 	new: UpcomingWord[]
 	shaky: UpcomingWord[]
+	mood: UpcomingWord[]
+	/** The word currently on screen, surfaced so the dev panel can always show it even if it doesn't match any list's filter. */
+	current: UpcomingWord | null
+	/** ISO timestamp when the server built this response — lets the refresh button show visible proof that data was refetched. */
+	generatedAt: string
+	consecutiveWrongStreak: number
+	eligibleMoodNow: boolean
+	devNextPickAfterSubmit: {
+		questionNumber: number
+		ifLastAnswerCorrect: DevNextPickPreview
+		ifLastAnswerWrong: DevNextPickPreview
+		previewsDiffer: boolean
+	} | null
 }
-
-type VocabMode = "ASSESSMENT" | "BUILD" | "FRUSTRATION"
 
 const VOCAB_MODE_LABELS: Record<VocabMode, string> = {
 	ASSESSMENT: "Assessment",
@@ -88,9 +122,7 @@ export const Route = createFileRoute("/practice")({
 				? search.sentenceId.trim()
 				: undefined,
 		wordId:
-			typeof search.wordId === "string" && search.wordId.trim()
-				? search.wordId.trim()
-				: undefined,
+			typeof search.wordId === "string" && search.wordId.trim() ? search.wordId.trim() : undefined,
 	}),
 	head: () => ({
 		meta: [{ title: "Practice — nwords.live" }],
@@ -149,25 +181,32 @@ function PracticePage() {
 		wordId: string
 		confidence: number
 		tick: number
+		timesCorrect?: number
+		timesTested?: number
 	} | null>(null)
 	const answerInputRef = useRef<HTMLInputElement>(null)
 	const devMode = useDevStore((s) => s.devMode)
 	const [devHighlightWordId, setDevHighlightWordId] = useState<string | null>(null)
 	const [devUpcoming, setDevUpcoming] = useState<UpcomingData | null>(null)
 	const [devUpcomingLoading, setDevUpcomingLoading] = useState(false)
-	const [devTab, setDevTab] = useState<"territory" | "new" | "shaky">("territory")
+	const [devTab, setDevTab] = useState<DevSelectionPanelTab>("territory")
 	const [devHoverWordId, setDevHoverWordId] = useState<string | null>(null)
 
 	const fetchUpcoming = useCallback(async () => {
 		if (!sessionId) return
 		setDevUpcomingLoading(true)
 		try {
-			const res = await fetch(`/api/test/sessions/${sessionId}/upcoming`, { credentials: "include" })
+			const params = new URLSearchParams()
+			if (question?.wordId) params.set("peekWordId", question.wordId)
+			const qs = params.toString()
+			const res = await fetch(`/api/test/sessions/${sessionId}/upcoming${qs ? `?${qs}` : ""}`, {
+				credentials: "include",
+			})
 			if (res.ok) setDevUpcoming(await res.json())
 		} finally {
 			setDevUpcomingLoading(false)
 		}
-	}, [sessionId])
+	}, [sessionId, question?.wordId])
 
 	// Refresh upcoming when session starts or after answering a question in dev mode
 	useEffect(() => {
@@ -175,6 +214,12 @@ function PracticePage() {
 			void fetchUpcoming()
 		}
 	}, [devMode, sessionId, question, fetchUpcoming])
+
+	useEffect(() => {
+		if (!devMode) return
+		const tab = question?.devSelection?.panelTab
+		if (tab) setDevTab(tab)
+	}, [devMode, question?.devSelection?.panelTab])
 	/** Deploy-controlled via `/api/settings` (`AppSettings.showHints`). */
 	const [showInlineHints, setShowInlineHints] = useState(false)
 	/** After a correct check, show the lemma in the sentence (still underlined). */
@@ -412,6 +457,8 @@ function PracticePage() {
 		}
 		const data = (await res.json()) as {
 			confidence?: number
+			timesCorrect?: number
+			timesTested?: number
 			synonymFeedback?: { kind: "good" | "bad"; message: string }
 			posMismatch?: { guessPos: string; targetPos: string; message: string }
 		}
@@ -434,6 +481,8 @@ function PracticePage() {
 				wordId: question.wordId,
 				confidence: data.confidence,
 				tick: Date.now(),
+				...(typeof data.timesTested === "number" && { timesTested: data.timesTested }),
+				...(typeof data.timesCorrect === "number" && { timesCorrect: data.timesCorrect }),
 			})
 		}
 	}, [sessionId, question, answer, vocabMode])
@@ -562,20 +611,34 @@ function PracticePage() {
 			/>
 		)
 
+	const showVocabGraph = vocabMode === "BUILD" && !isGuest && !!practiceTargetId
+
 	return (
 		<div className="flex-1 flex flex-col min-h-0">
 			{header}
-			<div className="w-full max-w-xl mx-auto px-6 py-8 space-y-6 flex-1 shrink-0">
-				{vocabMode === "BUILD" && !isGuest && practiceTargetId ? (
-					<div className="pb-4 overflow-visible w-full min-w-0">
+			{showVocabGraph ? (
+				<div className="w-full min-w-0 overflow-x-auto">
+					<div className="mx-auto w-max max-w-none px-6 pt-8 pb-2">
 						<VocabGraph
 							languageId={practiceTargetId}
-							activeWordId={devHoverWordId ?? devHighlightWordId ?? (sessionId && question ? question.wordId : null)}
+							activeWordId={
+								devHoverWordId ??
+								devHighlightWordId ??
+								(sessionId && question ? question.wordId : null)
+							}
 							answerFlash={answerConfidenceFlash}
 							showDevGrid={account?.role === "ADMIN" && devMode}
 						/>
 					</div>
-				) : null}
+				</div>
+			) : null}
+			<div
+				className={
+					showVocabGraph
+						? "w-full max-w-xl mx-auto px-6 pt-4 pb-8 space-y-6 flex-1 shrink-0"
+						: "w-full max-w-xl mx-auto px-6 py-8 space-y-6 flex-1 shrink-0"
+				}
+			>
 				{canStartPractice && (
 					<Card>
 						<CardHeader>
@@ -738,6 +801,7 @@ function PracticePage() {
 						loading={devUpcomingLoading}
 						activeTab={devTab}
 						onTabChange={setDevTab}
+						currentSelection={question.devSelection ?? null}
 						highlightWordId={devHighlightWordId}
 						onHighlightWord={setDevHighlightWordId}
 						onHoverWord={setDevHoverWordId}
@@ -815,13 +879,14 @@ function ClozePrompt({
 	)
 }
 
-const DEV_TABS = ["territory", "new", "shaky"] as const
+const DEV_TABS: DevSelectionPanelTab[] = ["territory", "new", "shaky", "mood"]
 
 function DevUpcomingPanel({
 	data,
 	loading,
 	activeTab,
 	onTabChange,
+	currentSelection,
 	highlightWordId,
 	onHighlightWord,
 	onHoverWord,
@@ -829,45 +894,132 @@ function DevUpcomingPanel({
 }: {
 	data: UpcomingData | null
 	loading: boolean
-	activeTab: "territory" | "new" | "shaky"
-	onTabChange: (tab: "territory" | "new" | "shaky") => void
+	activeTab: DevSelectionPanelTab
+	onTabChange: (tab: DevSelectionPanelTab) => void
+	currentSelection: DevSelection | null
 	highlightWordId: string | null
 	onHighlightWord: (id: string | null) => void
 	onHoverWord: (id: string | null) => void
 	onRefresh: () => void
 }) {
-	const words: UpcomingWord[] = data ? data[activeTab] : []
+	const baseWords: UpcomingWord[] = !data
+		? []
+		: activeTab === "mood"
+			? (data.mood ?? [])
+			: data[activeTab]
+	// Surface the current card at the top of its own bucket even when the
+	// filter queries don't include it — otherwise the user can't see where
+	// "krig" (or any frontier pick) sits in the list.
+	const shouldInjectCurrent =
+		data?.current != null &&
+		currentSelection?.panelTab === activeTab &&
+		!baseWords.some((w) => w.wordId === data.current?.wordId)
+	const words: UpcomingWord[] = shouldInjectCurrent && data?.current
+		? [data.current, ...baseWords]
+		: baseWords
+	const refreshedAt = data?.generatedAt
+		? new Date(data.generatedAt).toLocaleTimeString([], {
+				hour: "2-digit",
+				minute: "2-digit",
+				second: "2-digit",
+			})
+		: null
 
 	return (
 		<div className="border border-dashed border-brand/40 rounded-lg bg-brand/5 p-3 space-y-2">
+			{currentSelection ? (
+				<p className="text-[10px] font-mono text-brand/80 leading-snug border-b border-brand/15 pb-2">
+					<span className="text-muted-foreground/80">This card: </span>
+					<span className="text-foreground/90">{currentSelection.kind.replace(/_/g, " ")}</span>
+					{" — "}
+					{currentSelection.summary}
+					{currentSelection.primaryBucket != null && currentSelection.bucketOrder != null ? (
+						<>
+							{" "}
+							<span className="text-muted-foreground/70">
+								(rolled {currentSelection.primaryBucket}; order{" "}
+								{currentSelection.bucketOrder.join(" → ")})
+							</span>
+						</>
+					) : null}
+				</p>
+			) : null}
+			{data?.devNextPickAfterSubmit ? (
+				<div className="text-[10px] font-mono text-muted-foreground leading-snug border-b border-brand/15 pb-2 space-y-1">
+					<p>
+						<span className="text-brand/70">
+							After submit (Q{data.devNextPickAfterSubmit.questionNumber}):
+						</span>{" "}
+						{data.devNextPickAfterSubmit.previewsDiffer ? (
+							<>
+								if correct →{" "}
+								<span className="text-foreground/85">
+									{data.devNextPickAfterSubmit.ifLastAnswerCorrect.kind.replace(/_/g, " ")}
+								</span>
+								{"; if wrong → "}
+								<span className="text-foreground/85">
+									{data.devNextPickAfterSubmit.ifLastAnswerWrong.kind.replace(/_/g, " ")}
+								</span>
+							</>
+						) : (
+							<span className="text-foreground/85">
+								{data.devNextPickAfterSubmit.ifLastAnswerCorrect.kind.replace(/_/g, " ")}
+							</span>
+						)}
+					</p>
+					<p className="text-muted-foreground/80">
+						{data.devNextPickAfterSubmit.previewsDiffer
+							? `Correct: ${data.devNextPickAfterSubmit.ifLastAnswerCorrect.summary} — Wrong: ${data.devNextPickAfterSubmit.ifLastAnswerWrong.summary}`
+							: data.devNextPickAfterSubmit.ifLastAnswerCorrect.summary}
+					</p>
+				</div>
+			) : data?.vocabMode && data.vocabMode !== "BUILD" ? (
+				<p className="text-[10px] font-mono text-muted-foreground border-b border-brand/15 pb-2">
+					Next-pick preview applies to BUILD mode only (session: {data.vocabMode}).
+				</p>
+			) : null}
 			<div className="flex items-center justify-between">
 				<span className="text-[10px] font-mono uppercase tracking-wider text-brand/70">
 					Dev: Upcoming words {data ? `(Q${data.questionNumber})` : ""}
+					{data?.eligibleMoodNow ? (
+						<span className="normal-case text-muted-foreground font-mono">
+							{" "}
+							· mood on · {data.consecutiveWrongStreak} wrong streak
+						</span>
+					) : null}
 				</span>
-				<button
-					type="button"
-					onClick={onRefresh}
-					disabled={loading}
-					className="text-[10px] font-mono text-brand/60 hover:text-brand transition-colors disabled:opacity-50"
-				>
-					{loading ? "..." : "Refresh"}
-				</button>
-			</div>
-			<div className="flex gap-1">
-				{DEV_TABS.map((tab) => (
+				<div className="flex items-center gap-2">
+					{refreshedAt ? (
+						<span className="text-[9px] font-mono text-muted-foreground/60">{refreshedAt}</span>
+					) : null}
 					<button
-						key={tab}
 						type="button"
-						onClick={() => onTabChange(tab)}
-						className={`text-[10px] font-mono px-2 py-1 rounded transition-colors ${
-							activeTab === tab
-								? "bg-brand/20 text-brand"
-								: "text-muted-foreground hover:text-foreground hover:bg-muted"
-						}`}
+						onClick={onRefresh}
+						disabled={loading}
+						className="text-[10px] font-mono text-brand/60 hover:text-brand transition-colors disabled:opacity-50"
 					>
-						{tab} ({data ? data[tab].length : 0})
+						{loading ? "..." : "Refresh"}
 					</button>
-				))}
+				</div>
+			</div>
+			<div className="flex gap-1 flex-wrap">
+				{DEV_TABS.map((tab) => {
+					const n = !data ? 0 : tab === "mood" ? (data.mood?.length ?? 0) : data[tab].length
+					return (
+						<button
+							key={tab}
+							type="button"
+							onClick={() => onTabChange(tab)}
+							className={`text-[10px] font-mono px-2 py-1 rounded transition-colors ${
+								activeTab === tab
+									? "bg-brand/20 text-brand"
+									: "text-muted-foreground hover:text-foreground hover:bg-muted"
+							}`}
+						>
+							{tab} ({n})
+						</button>
+					)
+				})}
 			</div>
 			{words.length === 0 ? (
 				<p className="text-[10px] text-muted-foreground/60 font-mono py-2">

@@ -10,6 +10,9 @@ export type WordPanelWord = {
 	pos: string
 	alternatePos: string[]
 	rank: number
+	/** Present when opened from admin word list: raw frequency rank vs materialised ordering. */
+	positionAdjust?: number
+	effectiveRank?: number
 	definitions: string[]
 	cefrLevel: string | null
 	isOffensive: boolean

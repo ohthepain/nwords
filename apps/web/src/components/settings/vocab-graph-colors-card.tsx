@@ -126,7 +126,7 @@ export function VocabGraphColorsSettingsCard({
 						Live preview
 					</p>
 					{previewLanguageId ? (
-						<div className="rounded-xl border border-border/70 bg-muted/15 p-3">
+						<div className="rounded-xl border border-border/70 bg-muted/15 p-3 overflow-x-auto">
 							<VocabGraph
 								languageId={previewLanguageId}
 								activeWordId={null}

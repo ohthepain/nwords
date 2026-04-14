@@ -1,6 +1,6 @@
 import { zValidator } from "@hono/zod-validator"
 import { prisma } from "@nwords/db"
-import { getCefrLevel } from "@nwords/shared"
+import { dedupeByEffectiveRank, getCefrLevel } from "@nwords/shared"
 import { Hono } from "hono"
 import { z } from "zod"
 import { authMiddleware } from "../middleware/auth"
@@ -131,11 +131,14 @@ export const progressRoute = new Hono()
 				from: z.coerce.number().min(1).default(1),
 				to: z.coerce.number().min(1).max(10000).default(1000),
 				languageId: z.string().uuid().optional(),
+				/** When `"1"`, cells include `knowledgeDebug` (extra `UserWordKnowledge` fields) for admin tooling. */
+				dev: z.enum(["1"]).optional(),
 			}),
 		),
 		async (c) => {
 			const user = c.get("user")
-			const { from, to, languageId: languageIdParam } = c.req.valid("query")
+			const { from, to, languageId: languageIdParam, dev } = c.req.valid("query")
+			const includeDev = dev === "1"
 
 			const dbUser = await prisma.user.findUnique({
 				where: { id: user.id },
@@ -147,17 +150,18 @@ export const progressRoute = new Hono()
 				return c.json({ error: "No target language set" }, 400)
 			}
 
-			// Get words in the rank range
-			const words = await prisma.word.findMany({
+			// Get words in the rank range (one row per frequency slot — same lemma may exist on multiple POS rows)
+			const wordsRaw = await prisma.word.findMany({
 				where: {
 					languageId,
 					effectiveRank: { gte: from, lte: to },
 					isOffensive: false,
 					isAbbreviation: false,
 				},
-				orderBy: { effectiveRank: "asc" },
+				orderBy: [{ effectiveRank: "asc" }, { id: "asc" }],
 				select: { id: true, effectiveRank: true, lemma: true },
 			})
+			const words = dedupeByEffectiveRank(wordsRaw)
 
 			// Get user knowledge for these words
 			const wordIds = words.map((w) => w.id)
@@ -166,12 +170,25 @@ export const progressRoute = new Hono()
 					userId: user.id,
 					wordId: { in: wordIds },
 				},
-				select: {
-					wordId: true,
-					confidence: true,
-					timesTested: true,
-					timesCorrect: true,
-				},
+				select: includeDev
+					? {
+							id: true,
+							wordId: true,
+							confidence: true,
+							timesTested: true,
+							timesCorrect: true,
+							lastTestedAt: true,
+							lastCorrect: true,
+							streak: true,
+							createdAt: true,
+							updatedAt: true,
+						}
+					: {
+							wordId: true,
+							confidence: true,
+							timesTested: true,
+							timesCorrect: true,
+						},
 			})
 
 			const knowledgeMap = new Map(knowledge.map((k) => [k.wordId, k]))
@@ -212,7 +229,7 @@ export const progressRoute = new Hono()
 					status = "untested"
 				}
 
-				return {
+				const base = {
 					wordId: w.id,
 					rank: w.effectiveRank,
 					lemma: w.lemma,
@@ -220,6 +237,29 @@ export const progressRoute = new Hono()
 					confidence: k?.confidence ?? (isAssumedKnown ? 1.0 : null),
 					timesTested: k?.timesTested ?? 0,
 					timesCorrect: k?.timesCorrect ?? 0,
+				}
+				if (!includeDev) return base
+				if (!k) {
+					return { ...base, knowledgeDebug: null }
+				}
+				const dk = k as typeof k & {
+					id: string
+					lastTestedAt: Date | null
+					lastCorrect: boolean
+					streak: number
+					createdAt: Date
+					updatedAt: Date
+				}
+				return {
+					...base,
+					knowledgeDebug: {
+						rowId: dk.id,
+						lastTestedAt: dk.lastTestedAt?.toISOString() ?? null,
+						lastCorrect: dk.lastCorrect,
+						streak: dk.streak,
+						createdAt: dk.createdAt.toISOString(),
+						updatedAt: dk.updatedAt.toISOString(),
+					},
 				}
 			})
 

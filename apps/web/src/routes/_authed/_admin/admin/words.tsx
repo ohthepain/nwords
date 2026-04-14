@@ -1,7 +1,7 @@
 import { auth } from "@nwords/auth/server"
 import { prisma } from "@nwords/db"
 import type { CefrLevel, PartOfSpeech } from "@nwords/db"
-import { cefrLevelForFrequencyRank } from "@nwords/shared"
+import { cefrLevelForFrequencyRank, collectFirstNUniqueEffectiveRanks } from "@nwords/shared"
 import { createFileRoute } from "@tanstack/react-router"
 import { createServerFn } from "@tanstack/react-start"
 import { getRequest } from "@tanstack/react-start/server"
@@ -63,6 +63,7 @@ const searchWords = createServerFn({ method: "POST" })
 			pos: PartOfSpeech
 			alternatePos: PartOfSpeech[]
 			rank: number
+			positionAdjust: number
 			effectiveRank: number
 			definitions: unknown
 			cefrLevel: CefrLevel | null
@@ -75,7 +76,9 @@ const searchWords = createServerFn({ method: "POST" })
 				lemma: w.lemma,
 				pos: w.pos,
 				alternatePos: [...w.alternatePos],
-				rank: w.effectiveRank,
+				rank: w.rank,
+				positionAdjust: w.positionAdjust,
+				effectiveRank: w.effectiveRank,
 				definitions: w.definitions as string[],
 				cefrLevel: w.cefrLevel ?? cefrLevelForFrequencyRank(w.effectiveRank),
 				isOffensive: w.isOffensive,
@@ -93,20 +96,27 @@ const searchWords = createServerFn({ method: "POST" })
 			])
 
 			if (rankedWords > 0) {
-				const [words, total] = await Promise.all([
-					prisma.word.findMany({
+				const [words, rankGroups] = await Promise.all([
+					collectFirstNUniqueEffectiveRanks(limit, (skip, take) =>
+						prisma.word.findMany({
+							where: { ...baseWhere, effectiveRank: { gt: 0 } },
+							orderBy: [{ effectiveRank: "asc" }, { id: "asc" }],
+							skip,
+							take,
+							include: wordInclude,
+						}),
+					),
+					prisma.word.groupBy({
+						by: ["effectiveRank"],
 						where: { ...baseWhere, effectiveRank: { gt: 0 } },
-						orderBy: [{ effectiveRank: "asc" }, { lemma: "asc" }],
-						take: limit,
-						include: wordInclude,
 					}),
-					Promise.resolve(rankedWords),
 				])
+				const uniqueRankSlots = rankGroups.length
 				return {
 					words: words.map(mapWordRow),
-					total,
+					total: uniqueRankSlots,
 					mode: "browse_ranked" as const,
-					stats: { totalWords, rankedWords },
+					stats: { totalWords, rankedWords, uniqueRankSlots },
 				}
 			}
 
@@ -123,7 +133,7 @@ const searchWords = createServerFn({ method: "POST" })
 				words: words.map(mapWordRow),
 				total,
 				mode: "browse_unranked" as const,
-				stats: { totalWords, rankedWords: 0 },
+				stats: { totalWords, rankedWords: 0, uniqueRankSlots: 0 },
 			}
 		}
 
@@ -146,12 +156,15 @@ const searchWords = createServerFn({ method: "POST" })
 
 		const [total, rankedMatches] = await Promise.all([
 			prisma.word.count({ where }),
-			prisma.word.findMany({
-				where: { ...where, effectiveRank: { gt: 0 } },
-				orderBy: [{ effectiveRank: "asc" }, { lemma: "asc" }],
-				take: limit,
-				include: wordInclude,
-			}),
+			collectFirstNUniqueEffectiveRanks(limit, (skip, take) =>
+				prisma.word.findMany({
+					where: { ...where, effectiveRank: { gt: 0 } },
+					orderBy: [{ effectiveRank: "asc" }, { id: "asc" }],
+					skip,
+					take,
+					include: wordInclude,
+				}),
+			),
 		])
 
 		const need = limit - rankedMatches.length
@@ -220,6 +233,8 @@ type AdminWordRow = {
 	pos: string
 	alternatePos: string[]
 	rank: number
+	positionAdjust: number
+	effectiveRank: number
 	definitions: string[]
 	cefrLevel: string | null
 	isOffensive: boolean
@@ -414,10 +429,11 @@ function AdminWordsPage() {
 						<p className="text-xs text-muted-foreground font-mono">
 							{results.mode === "browse_ranked" && results.stats ? (
 								<>
-									{results.stats.rankedWords.toLocaleString()} lemmas with positive rank (of{" "}
-									{results.stats.totalWords.toLocaleString()} total)
+									{results.stats.uniqueRankSlots.toLocaleString()} unique frequency ranks (
+									{results.stats.rankedWords.toLocaleString()} word rows,{" "}
+									{results.stats.totalWords.toLocaleString()} total in language)
 									{results.words.length < results.total ? " — showing lowest ranks first" : ""}
-									{results.words.length >= 100 ? " (first 100 rows)" : ""}
+									{results.words.length >= 100 ? " (first 100 ranks)" : ""}
 								</>
 							) : results.mode === "browse_unranked" && results.stats ? (
 								<>
@@ -444,10 +460,18 @@ function AdminWordsPage() {
 						</div>
 					) : (
 						<div className="border border-border rounded-lg overflow-hidden">
-							<div className="grid grid-cols-[1fr_80px_70px_70px_52px_1fr] gap-3 text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] px-4 py-2.5 bg-muted/50 border-b border-border">
+							<div className="grid grid-cols-[1fr_80px_56px_56px_56px_52px_52px_1fr] gap-2 sm:gap-3 text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] px-4 py-2.5 bg-muted/50 border-b border-border">
 								<span>Lemma</span>
 								<span>POS</span>
-								<span className="text-right">Rank</span>
+								<span className="text-right" title="Frequency-list rank (raw)">
+									Rank
+								</span>
+								<span className="text-right" title="positionAdjust (admin offset added to rank)">
+									Adj
+								</span>
+								<span className="text-right" title="effectiveRank = rank + positionAdjust (used for ordering)">
+									Eff
+								</span>
 								<span>CEFR</span>
 								<span className="text-right" title="Sentences linked via sentence_word">
 									Sents
@@ -459,7 +483,7 @@ function AdminWordsPage() {
 									<button
 										type="button"
 										key={word.id}
-										className="group grid grid-cols-[1fr_80px_70px_70px_52px_1fr] gap-3 items-center px-4 py-2 hover:bg-muted/30 transition-colors w-full text-left cursor-pointer"
+										className="group grid grid-cols-[1fr_80px_56px_56px_56px_52px_52px_1fr] gap-2 sm:gap-3 items-center px-4 py-2 hover:bg-muted/30 transition-colors w-full text-left cursor-pointer"
 										onClick={() => void openWordDetail(word)}
 									>
 										<span className="text-sm font-medium font-mono group-hover:underline underline-offset-2 decoration-foreground/60 truncate text-left">
@@ -474,10 +498,22 @@ function AdminWordsPage() {
 											{word.rank > 0 ? word.rank.toLocaleString() : "—"}
 										</span>
 										<span
+											className="text-sm font-mono tabular-nums text-right text-muted-foreground"
+											title="positionAdjust"
+										>
+											{word.positionAdjust.toLocaleString()}
+										</span>
+										<span
+											className="text-sm font-mono tabular-nums text-right text-muted-foreground"
+											title="effectiveRank"
+										>
+											{word.effectiveRank > 0 ? word.effectiveRank.toLocaleString() : "—"}
+										</span>
+										<span
 											className="text-xs font-mono text-muted-foreground"
 											title={
-												word.rank > 0
-													? "Stored on word or inferred from frequency rank"
+												word.effectiveRank > 0
+													? "Stored on word or inferred from effective rank"
 													: "Run frequency import so words get rank > 0"
 											}
 										>
