@@ -1,5 +1,6 @@
 import { zValidator } from "@hono/zod-validator"
 import { type TestSession, type VocabMode, prisma } from "@nwords/db"
+import type { VocabBuildSettings } from "@nwords/shared"
 import {
 	FRUSTRATION_WORD_MIN_TESTS,
 	KNOWN_CONFIDENCE_THRESHOLD,
@@ -19,6 +20,7 @@ import {
 import { lookupUserAnswerPos } from "../lib/pos-lookup"
 import type { AuthUser } from "../middleware/auth"
 import { type OptionalAuthEnv, optionalAuth } from "../middleware/auth"
+import { resolveVocabBuildSettings } from "../lib/vocab-build-settings"
 
 async function getSessionIfAllowed(
 	sessionId: string,
@@ -72,28 +74,6 @@ const ASSESSMENT_CONVERGE_THRESHOLD = 50
 const ASSESSMENT_INITIAL_LOW = 1
 const ASSESSMENT_INITIAL_HIGH = 10000
 
-/** BUILD mode bucket weights (see docs/design/vocab-architecture.md). Slight tilt toward new / frontier. */
-const BUILD_WEIGHT_NEW = 48
-const BUILD_WEIGHT_SHAKY = 37
-const BUILD_MOOD_MIN_STREAK_WRONG = 2
-const BUILD_CANDIDATE_CAP = 45
-const BUILD_SESSION_EXCLUSION_SPREAD = 28
-/** New-territory bucket picks stay near the lowest gaps (same band as graph, rank-ordered). */
-const BUILD_NEW_SPREAD = 6
-/** Every Nth build-mode question targets the lowest rank not yet verified known (frontier). */
-const BUILD_FRONTIER_EVERY = 6
-/** First N questions prioritize lowest-rank unknowns in the graph band (conquer territory). */
-const BUILD_TERRITORY_OPENING = 5
-/** After the opening, every Nth question revisits that same lowest-rank unknown pool. */
-const BUILD_TERRITORY_REVISIT_EVERY = 4
-/** Narrow spread when sampling territory so the session keeps drilling the bottom of the band. */
-const BUILD_TERRITORY_HEAD_SPREAD = 5
-/**
- * Words with this many misses (timesTested − timesCorrect) are de-emphasized in the opening
- * only — still rank-ordered later so hard words keep getting reps across sessions.
- */
-const BUILD_HEAVY_MISS_THRESHOLD = 8
-
 export type DevSelectionPanelTab = "territory" | "new" | "shaky" | "mood"
 
 export type DevSelection = {
@@ -101,7 +81,6 @@ export type DevSelection = {
 	kind:
 		| "territory_opening"
 		| "territory_revisit"
-		| "frontier"
 		| "weighted_buckets"
 		| "new"
 		| "shaky"
@@ -125,7 +104,7 @@ function devSelection(
 	summary: string,
 ): DevSelection {
 	const panelTab: DevSelectionPanelTab | null =
-		kind === "territory_opening" || kind === "territory_revisit" || kind === "frontier"
+		kind === "territory_opening" || kind === "territory_revisit"
 			? "territory"
 			: kind === "new"
 				? "new"
@@ -142,53 +121,56 @@ function buildNextPickPreview(args: {
 	nextBuildQuestionNumber: number
 	territoryCount: number
 	eligibleMood: boolean
+	build: VocabBuildSettings
 }): Pick<DevSelection, "kind" | "panelTab" | "summary"> & {
 	bucketWeights: { new: number; shaky: number; mood: number } | null
 } {
-	const { nextBuildQuestionNumber: q, territoryCount, eligibleMood } = args
+	const { nextBuildQuestionNumber: q, territoryCount, eligibleMood, build: b } = args
 	const hasTerritory = territoryCount > 0
 
-	if (q > 1 && q <= BUILD_TERRITORY_OPENING && hasTerritory) {
+	if (b.territoryOpening > 0 && q > 1 && q <= b.territoryOpening && hasTerritory) {
 		const sel = devSelection(
 			"BUILD",
 			"territory_opening",
-			`Q${q}: territory opening (questions 2–${BUILD_TERRITORY_OPENING})`,
+			`Q${q}: territory opening (questions 2–${b.territoryOpening}; active before new)`,
 		)
 		return { kind: sel.kind, panelTab: sel.panelTab, summary: sel.summary, bucketWeights: null }
 	}
 
-	if (q > BUILD_TERRITORY_OPENING && hasTerritory && q % BUILD_TERRITORY_REVISIT_EVERY === 0) {
+	if (
+		b.territoryOpening > 0 &&
+		q > b.territoryOpening &&
+		hasTerritory &&
+		b.territoryRevisitEvery > 0 &&
+		q % b.territoryRevisitEvery === 0
+	) {
 		const sel = devSelection(
 			"BUILD",
 			"territory_revisit",
-			`Q${q}: territory revisit (every ${BUILD_TERRITORY_REVISIT_EVERY} after Q${BUILD_TERRITORY_OPENING})`,
+			`Q${q}: territory revisit (every ${b.territoryRevisitEvery} after Q${b.territoryOpening})`,
 		)
 		return { kind: sel.kind, panelTab: sel.panelTab, summary: sel.summary, bucketWeights: null }
 	}
 
-	if (q === 1 || q % BUILD_FRONTIER_EVERY === 0) {
-		const sel = devSelection(
-			"BUILD",
-			"frontier",
-			`Q${q}: frontier (lowest in-band rank not yet verified known; skipped if no cloze)`,
-		)
-		return { kind: sel.kind, panelTab: sel.panelTab, summary: sel.summary, bucketWeights: null }
-	}
-
-	const wMood = eligibleMood ? 100 - BUILD_WEIGHT_NEW - BUILD_WEIGHT_SHAKY : 0
+	const wMood = eligibleMood ? Math.max(0, 100 - b.weightNew - b.weightShaky) : 0
 	const summary = eligibleMood
-		? `Q${q}: weighted buckets — primary order rolls new ${BUILD_WEIGHT_NEW}%, shaky ${BUILD_WEIGHT_SHAKY}%, mood ${wMood}%, then tries fallbacks in that order`
-		: `Q${q}: weighted buckets — rolls new vs shaky (${BUILD_WEIGHT_NEW}% / ${BUILD_WEIGHT_SHAKY}%), then alternates`
+		? `Q${q}: weighted buckets — primary order rolls new ${b.weightNew}%, shaky ${b.weightShaky}%, mood ${wMood}%, then tries fallbacks in that order`
+		: `Q${q}: weighted buckets — rolls new vs shaky (${b.weightNew}% / ${b.weightShaky}%), then alternates`
+
+	const den = b.weightNew + b.weightShaky
+	const newPct =
+		den > 0 ? Math.round((b.weightNew / den) * 100) : 50
+	const shakyPct = den > 0 ? Math.round((b.weightShaky / den) * 100) : 50
 
 	return {
 		kind: "weighted_buckets",
 		panelTab: null,
 		summary,
 		bucketWeights: eligibleMood
-			? { new: BUILD_WEIGHT_NEW, shaky: BUILD_WEIGHT_SHAKY, mood: wMood }
+			? { new: b.weightNew, shaky: b.weightShaky, mood: wMood }
 			: {
-					new: Math.round((BUILD_WEIGHT_NEW / (BUILD_WEIGHT_NEW + BUILD_WEIGHT_SHAKY)) * 100),
-					shaky: Math.round((BUILD_WEIGHT_SHAKY / (BUILD_WEIGHT_NEW + BUILD_WEIGHT_SHAKY)) * 100),
+					new: newPct,
+					shaky: shakyPct,
 					mood: 0,
 				},
 	}
@@ -232,15 +214,16 @@ async function buildModeGraphVisibleWordIds(
 	return rows.map((r) => r.id)
 }
 
-function rollBuildBucket(eligibleMood: boolean): "new" | "shaky" | "mood" {
+function rollBuildBucket(eligibleMood: boolean, b: VocabBuildSettings): "new" | "shaky" | "mood" {
 	const r = Math.random() * 100
 	if (eligibleMood) {
-		if (r < BUILD_WEIGHT_NEW) return "new"
-		if (r < BUILD_WEIGHT_NEW + BUILD_WEIGHT_SHAKY) return "shaky"
+		if (r < b.weightNew) return "new"
+		if (r < b.weightNew + b.weightShaky) return "shaky"
 		return "mood"
 	}
-	const den = BUILD_WEIGHT_NEW + BUILD_WEIGHT_SHAKY
-	const newCut = (BUILD_WEIGHT_NEW / den) * 100
+	const den = b.weightNew + b.weightShaky
+	if (den <= 0) return "new"
+	const newCut = (b.weightNew / den) * 100
 	return r < newCut ? "new" : "shaky"
 }
 
@@ -257,13 +240,15 @@ function pickPreferFreshFromOrderedIds(
 	orderedIds: string[],
 	testedInSession: Set<string>,
 	tried: Set<string>,
-	options?: { spreadCap?: number; biasTowardHead?: boolean },
+	b: VocabBuildSettings,
+	options?: { spreadCap?: number; biasTowardHead?: boolean; sliceCap?: number },
 ): string | null {
-	const slice = orderedIds.slice(0, BUILD_CANDIDATE_CAP)
+	const sliceCap = options?.sliceCap ?? b.candidateCap
+	const slice = orderedIds.slice(0, sliceCap)
 	let pool = slice.filter((id) => !tried.has(id) && !testedInSession.has(id))
 	if (pool.length === 0) pool = slice.filter((id) => !tried.has(id))
 	if (pool.length === 0) return null
-	const cap = options?.spreadCap ?? BUILD_SESSION_EXCLUSION_SPREAD
+	const cap = options?.spreadCap ?? b.sessionExclusionSpread
 	const spread = Math.min(cap, pool.length)
 	const idx = options?.biasTowardHead
 		? Math.min(spread - 1, Math.floor(Math.random() * Math.random() * spread))
@@ -292,16 +277,41 @@ function sortBuildTerritoryRows<
 	})
 }
 
+/**
+ * Territory candidates: rank-ordered within “active” (has a knowledge row, not verified known) then
+ * within “frontier-only” (no row yet), so consolidation is preferred over new introductions.
+ */
+function territoryIdsPreferActive<
+	T extends {
+		id: string
+		effectiveRank: number
+		userKnowledge: { timesTested: number; timesCorrect: number }[]
+	},
+>(territoryRowsSorted: T[], heavyMissThreshold: number): { orderedIds: string[]; winnableIds: string[] } {
+	const active = territoryRowsSorted.filter((r) => r.userKnowledge.length > 0)
+	const frontierOnly = territoryRowsSorted.filter((r) => r.userKnowledge.length === 0)
+	const merged = [...active, ...frontierOnly]
+	const orderedIds = merged.map((r) => r.id)
+	const winnable = merged
+		.filter((r) => territoryMisses(r) < heavyMissThreshold)
+		.map((r) => r.id)
+	return {
+		orderedIds,
+		winnableIds: winnable.length > 0 ? winnable : orderedIds,
+	}
+}
+
 /** Several attempts: territory list is rank-ordered but some lemmas may fail cloze resolution. */
 async function tryResolveBuildTerritoryPick(
 	orderedIds: string[],
 	testedInSession: Set<string>,
 	spreadCap: number,
 	langs: { nativeLanguageId: string; targetLanguageId: string },
+	b: VocabBuildSettings,
 ) {
 	const localTried = new Set<string>()
 	for (let a = 0; a < 16; a++) {
-		const wordId = pickPreferFreshFromOrderedIds(orderedIds, testedInSession, localTried, {
+		const wordId = pickPreferFreshFromOrderedIds(orderedIds, testedInSession, localTried, b, {
 			spreadCap,
 			biasTowardHead: true,
 		})
@@ -527,10 +537,10 @@ async function handleFrustrationNext(
 
 /**
  * BUILD mode: fill gaps in the vocab graph band (first min(corpus, ≈1.2× baseline) lemmas by rank).
- * Lowest-rank items the user has not verified known are the “territory” target: the session opens
- * on that pool, revisits it on a fixed cadence, and periodically forces the global frontier
- * (lowest rank in-band, including holes below assumed rank). Shaky picks are rank-ordered within
- * the band. Guests keep the legacy rank-window random walk (no profile / knowledge).
+ * Two bands: a **frontier** (no knowledge row yet, rank > assumedRank, capped) for introductions, and
+ * an **active** band (in-flight learning: not verified known). Territory opening/revisit prefers
+ * active rows over brand-new lemmas. Shaky picks are rank-ordered within the band. Guests keep the
+ * legacy rank-window random walk (no profile / knowledge).
  */
 async function handleBuildGuestNext(
 	// biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
@@ -647,9 +657,10 @@ async function handleBuildNext(
 		)
 	}
 	const rankAboveFloor = Math.max(0, assumedRank)
+	const build = await resolveVocabBuildSettings()
 
 	const testedInSession = new Set(sessionAnswers.map((a) => a.wordId))
-	const eligibleMood = tailConsecutiveWrongs(sessionAnswers) >= BUILD_MOOD_MIN_STREAK_WRONG
+	const eligibleMood = tailConsecutiveWrongs(sessionAnswers) >= build.moodMinStreakWrong
 
 	const [newWords, shakyKnowledge, moodKnowledge, territoryRowsRaw] = await Promise.all([
 		prisma.word.findMany({
@@ -667,7 +678,7 @@ async function handleBuildNext(
 				},
 			},
 			orderBy: { effectiveRank: "asc" },
-			take: BUILD_CANDIDATE_CAP,
+			take: build.frontierBandMax,
 			select: { id: true },
 		}),
 		prisma.userWordKnowledge.findMany({
@@ -691,7 +702,7 @@ async function handleBuildNext(
 				},
 			},
 			orderBy: [{ word: { effectiveRank: "asc" } }, { lastTestedAt: "asc" }, { confidence: "asc" }],
-			take: BUILD_CANDIDATE_CAP,
+			take: build.candidateCap,
 			select: { wordId: true },
 		}),
 		eligibleMood
@@ -711,7 +722,7 @@ async function handleBuildNext(
 							},
 						},
 					},
-					take: BUILD_CANDIDATE_CAP,
+					take: build.candidateCap,
 					select: { wordId: true },
 				})
 			: Promise.resolve([] as { wordId: string }[]),
@@ -750,20 +761,24 @@ async function handleBuildNext(
 	const moodIds = moodKnowledge.map((k) => k.wordId)
 
 	const territoryRows = sortBuildTerritoryRows(territoryRowsRaw)
-	const territoryIds = territoryRows.map((r) => r.id)
-	const territoryWinnableIds = territoryRows
-		.filter((r) => territoryMisses(r) < BUILD_HEAVY_MISS_THRESHOLD)
-		.map((r) => r.id)
+	const { orderedIds: territoryPreferActiveIds, winnableIds: territoryPreferActiveWinnableIds } =
+		territoryIdsPreferActive(territoryRows, build.heavyMissThreshold)
 
 	const nextBuildQuestionNumber = sessionAnswers.length + 1
 
 	if (
+		build.territoryOpening > 0 &&
 		nextBuildQuestionNumber > 1 &&
-		nextBuildQuestionNumber <= BUILD_TERRITORY_OPENING &&
-		territoryIds.length > 0
+		nextBuildQuestionNumber <= build.territoryOpening &&
+		territoryPreferActiveIds.length > 0
 	) {
-		const openingPool = territoryWinnableIds.length > 0 ? territoryWinnableIds : territoryIds
-		const resolved = await tryResolveBuildTerritoryPick(openingPool, testedInSession, 3, langs)
+		const resolved = await tryResolveBuildTerritoryPick(
+			territoryPreferActiveWinnableIds,
+			testedInSession,
+			3,
+			langs,
+			build,
+		)
 		if (resolved) {
 			return c.json({
 				wordId: resolved.wordId,
@@ -782,22 +797,25 @@ async function handleBuildNext(
 				devSelection: devSelection(
 					vocabMode,
 					"territory_opening",
-					`Territory opening: Q${nextBuildQuestionNumber} of first ${BUILD_TERRITORY_OPENING} — lowest-rank not-yet-known in graph band`,
+					`Territory opening: Q${nextBuildQuestionNumber} of first ${build.territoryOpening} — active (in-flight) before new introductions`,
 				),
 			})
 		}
 	}
 
 	if (
-		nextBuildQuestionNumber > BUILD_TERRITORY_OPENING &&
-		territoryIds.length > 0 &&
-		nextBuildQuestionNumber % BUILD_TERRITORY_REVISIT_EVERY === 0
+		build.territoryOpening > 0 &&
+		nextBuildQuestionNumber > build.territoryOpening &&
+		territoryPreferActiveIds.length > 0 &&
+		build.territoryRevisitEvery > 0 &&
+		nextBuildQuestionNumber % build.territoryRevisitEvery === 0
 	) {
 		const resolved = await tryResolveBuildTerritoryPick(
-			territoryIds,
+			territoryPreferActiveIds,
 			testedInSession,
-			BUILD_TERRITORY_HEAD_SPREAD,
+			build.territoryHeadSpread,
 			langs,
+			build,
 		)
 		if (resolved) {
 			return c.json({
@@ -817,65 +835,13 @@ async function handleBuildNext(
 				devSelection: devSelection(
 					vocabMode,
 					"territory_revisit",
-					`Territory revisit: every ${BUILD_TERRITORY_REVISIT_EVERY} questions after Q${BUILD_TERRITORY_OPENING}`,
+					`Territory revisit: every ${build.territoryRevisitEvery} questions after Q${build.territoryOpening} — active before new`,
 				),
 			})
 		}
 	}
 
-	if (nextBuildQuestionNumber === 1 || nextBuildQuestionNumber % BUILD_FRONTIER_EVERY === 0) {
-		const frontierWord = await prisma.word.findFirst({
-			where: {
-				languageId: langs.targetLanguageId,
-				id: { in: graphVisibleWordIds },
-				isOffensive: false,
-				isAbbreviation: false,
-				testSentenceIds: { isEmpty: false },
-				NOT: {
-					userKnowledge: {
-						some: {
-							userId: session.userId,
-							confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD },
-							timesTested: { gte: KNOWN_MIN_TESTS },
-						},
-					},
-				},
-			},
-			orderBy: { effectiveRank: "asc" },
-			select: { id: true },
-		})
-		if (frontierWord) {
-			const resolved = await resolveClozeWithHint({
-				wordId: frontierWord.id,
-				nativeLanguageId: langs.nativeLanguageId,
-				targetLanguageId: langs.targetLanguageId,
-			})
-			if (resolved.ok) {
-				return c.json({
-					wordId: resolved.wordId,
-					lemma: resolved.lemma,
-					rank: resolved.rank,
-					targetSentenceId: resolved.targetSentenceId,
-					promptText: resolved.promptText,
-					targetSentenceText: resolved.targetSentenceText,
-					hintText: resolved.hintText,
-					hintSentenceId: resolved.hintSentenceId,
-					hintSource: resolved.hintSource,
-					inlineHint: resolved.inlineHint,
-					answerType: "TRANSLATION_TYPED" as const,
-					sessionMode: session.mode,
-					vocabMode,
-					devSelection: devSelection(
-						vocabMode,
-						"frontier",
-						`Frontier: Q${nextBuildQuestionNumber} (Q1 or every ${BUILD_FRONTIER_EVERY}) — lowest in-band rank not verified known`,
-					),
-				})
-			}
-		}
-	}
-
-	const primaryBucket = rollBuildBucket(eligibleMood)
+	const primaryBucket = rollBuildBucket(eligibleMood, build)
 	const bucketOrder: ("new" | "shaky" | "mood")[] =
 		primaryBucket === "new"
 			? ["new", "shaky", ...(eligibleMood ? (["mood"] as const) : [])]
@@ -890,17 +856,18 @@ async function handleBuildNext(
 		for (const bucket of bucketOrder) {
 			let wordId: string | null = null
 			if (bucket === "new") {
-				wordId = pickPreferFreshFromOrderedIds(newIds, testedInSession, tried, {
-					spreadCap: BUILD_NEW_SPREAD,
+				wordId = pickPreferFreshFromOrderedIds(newIds, testedInSession, tried, build, {
+					spreadCap: build.newSpread,
 					biasTowardHead: true,
+					sliceCap: build.frontierBandMax,
 				})
 			} else if (bucket === "shaky") {
-				wordId = pickPreferFreshFromOrderedIds(shakyIds, testedInSession, tried, {
-					spreadCap: BUILD_NEW_SPREAD + 2,
+				wordId = pickPreferFreshFromOrderedIds(shakyIds, testedInSession, tried, build, {
+					spreadCap: build.newSpread + 2,
 					biasTowardHead: true,
 				})
 			} else if (bucket === "mood" && eligibleMood) {
-				wordId = pickPreferFreshFromOrderedIds(moodIds, testedInSession, tried)
+				wordId = pickPreferFreshFromOrderedIds(moodIds, testedInSession, tried, build)
 			}
 			if (!wordId) continue
 			tried.add(wordId)
@@ -932,10 +899,10 @@ async function handleBuildNext(
 			const orderLabel = bucketOrder.join(" → ")
 			const bucketSummary =
 				bucket === "new"
-					? `New word bucket (no knowledge row yet). Rolled primary: ${primaryBucket}. Try order: ${orderLabel}`
+					? `Frontier band (no knowledge row yet, rank > assumed, capped). Rolled primary: ${primaryBucket}. Try order: ${orderLabel}`
 					: bucket === "shaky"
 						? `Shaky bucket (in band, not verified known). Rolled primary: ${primaryBucket}. Try order: ${orderLabel}`
-						: `Mood bucket (verified known; eligible after ${BUILD_MOOD_MIN_STREAK_WRONG}+ consecutive wrong). Rolled primary: ${primaryBucket}. Try order: ${orderLabel}`
+						: `Mood bucket (verified known; eligible after ${build.moodMinStreakWrong}+ consecutive wrong). Rolled primary: ${primaryBucket}. Try order: ${orderLabel}`
 
 			const baseSel = devSelection(vocabMode, bucketKind, bucketSummary)
 			return c.json({
@@ -1731,6 +1698,7 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 			vocabSize,
 		)
 		const rankAboveFloor = Math.max(0, assumedRank)
+		const build = await resolveVocabBuildSettings()
 		const testedInSession = new Set(sessionAnswers.map((a) => a.wordId))
 		const peekWordIdRaw = c.req.query("peekWordId")?.trim()
 		const peekWordId =
@@ -1745,7 +1713,7 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 
 		const answersChrono = sessionAnswers.map((a) => ({ correct: a.correct }))
 		const consecutiveWrongStreak = tailConsecutiveWrongs(answersChrono)
-		const eligibleMoodNow = consecutiveWrongStreak >= BUILD_MOOD_MIN_STREAK_WRONG
+		const eligibleMoodNow = consecutiveWrongStreak >= build.moodMinStreakWrong
 
 		const wordSelect = {
 			id: true,
@@ -1754,173 +1722,174 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 			testSentenceIds: true,
 		} as const
 
-		const [newWords, shakyKnowledge, territoryRowsRaw, peekWordRow, moodKnowledge] = await Promise.all([
-			// "new": never-attempted words within the graph band, ordered by rank.
-			// We deliberately do NOT require rank > assumedRank — once a user has
-			// touched every word above their assumed rank, that stricter filter
-			// produced an empty list even though plenty of never-tested words
-			// existed elsewhere in the band.
-			prisma.word.findMany({
-				where: {
-					languageId: langs.targetLanguageId,
-					id: { in: graphVisibleWordIds },
-					isOffensive: false,
-					isAbbreviation: false,
-					testSentenceIds: { isEmpty: false },
-					NOT: {
-						userKnowledge: {
-							some: { userId: sessionUserId },
-						},
-					},
-				},
-				orderBy: { effectiveRank: "asc" },
-				take: 30,
-				select: wordSelect,
-			}),
-			prisma.userWordKnowledge.findMany({
-				where: {
-					userId: sessionUserId,
-					NOT: {
-						AND: [
-							{ confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD } },
-							{ timesTested: { gte: KNOWN_MIN_TESTS } },
-						],
-					},
-					word: {
-						is: {
-							languageId: langs.targetLanguageId,
-							id: { in: graphVisibleWordIds },
-							effectiveRank: { gte: 1 },
-							isOffensive: false,
-							isAbbreviation: false,
-							testSentenceIds: { isEmpty: false },
-						},
-					},
-				},
-				orderBy: [
-					{ word: { effectiveRank: "asc" } },
-					{ lastTestedAt: "asc" },
-					{ confidence: "asc" },
-				],
-				take: 30,
-				select: {
-					wordId: true,
-					confidence: true,
-					timesTested: true,
-					word: { select: wordSelect },
-				},
-			}),
-			prisma.word.findMany({
-				where: {
-					languageId: langs.targetLanguageId,
-					id: { in: graphVisibleWordIds },
-					isOffensive: false,
-					isAbbreviation: false,
-					testSentenceIds: { isEmpty: false },
-					NOT: {
-						userKnowledge: {
-							some: {
-								userId: sessionUserId,
-								confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD },
-								timesTested: { gte: KNOWN_MIN_TESTS },
+		const [newWords, shakyKnowledge, territoryRowsRaw, peekWordRow, moodKnowledge] =
+			await Promise.all([
+				// "new" / frontier band: matches `handleBuildNext` (rank > assumedRank, no row, capped).
+				prisma.word.findMany({
+					where: {
+						languageId: langs.targetLanguageId,
+						id: { in: graphVisibleWordIds },
+						effectiveRank: { gt: rankAboveFloor },
+						isOffensive: false,
+						isAbbreviation: false,
+						testSentenceIds: { isEmpty: false },
+						NOT: {
+							userKnowledge: {
+								some: { userId: sessionUserId },
 							},
 						},
 					},
-				},
-				orderBy: { effectiveRank: "asc" },
-				take: 30,
-				select: {
-					...wordSelect,
-					userKnowledge: {
-						where: { userId: sessionUserId },
-						select: { timesTested: true, timesCorrect: true },
+					orderBy: { effectiveRank: "asc" },
+					take: build.frontierBandMax,
+					select: wordSelect,
+				}),
+				prisma.userWordKnowledge.findMany({
+					where: {
+						userId: sessionUserId,
+						NOT: {
+							AND: [
+								{ confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD } },
+								{ timesTested: { gte: KNOWN_MIN_TESTS } },
+							],
+						},
+						word: {
+							is: {
+								languageId: langs.targetLanguageId,
+								id: { in: graphVisibleWordIds },
+								effectiveRank: { gte: 1 },
+								isOffensive: false,
+								isAbbreviation: false,
+								testSentenceIds: { isEmpty: false },
+							},
+						},
 					},
-				},
-			}),
-			// Always resolve the current/peeked word so we can explicitly surface
-			// it in the dev panel even when the filter queries above exclude it
-			// (e.g. frontier words picked via dedicated logic that don't match
-			// any standard bucket).
-			peekWordId
-				? prisma.word.findUnique({
-						where: { id: peekWordId },
-						select: wordSelect,
-					})
-				: Promise.resolve(null),
-			eligibleMoodNow
-				? prisma.userWordKnowledge.findMany({
-						where: {
-							userId: sessionUserId,
-							confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD },
-							timesTested: { gte: KNOWN_MIN_TESTS },
-							word: {
-								is: {
-									languageId: langs.targetLanguageId,
-									id: { in: graphVisibleWordIds },
-									effectiveRank: { gte: 1 },
-									isOffensive: false,
-									isAbbreviation: false,
-									testSentenceIds: { isEmpty: false },
+					orderBy: [
+						{ word: { effectiveRank: "asc" } },
+						{ lastTestedAt: "asc" },
+						{ confidence: "asc" },
+					],
+					take: build.candidateCap,
+					select: {
+						wordId: true,
+						confidence: true,
+						timesTested: true,
+						word: { select: wordSelect },
+					},
+				}),
+				prisma.word.findMany({
+					where: {
+						languageId: langs.targetLanguageId,
+						id: { in: graphVisibleWordIds },
+						isOffensive: false,
+						isAbbreviation: false,
+						testSentenceIds: { isEmpty: false },
+						NOT: {
+							userKnowledge: {
+								some: {
+									userId: sessionUserId,
+									confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD },
+									timesTested: { gte: KNOWN_MIN_TESTS },
 								},
 							},
 						},
-						orderBy: [{ lastTestedAt: "asc" }, { confidence: "asc" }],
-						take: 30,
-						select: {
-							wordId: true,
-							confidence: true,
-							timesTested: true,
-							word: { select: wordSelect },
+					},
+					orderBy: { effectiveRank: "asc" },
+					take: Math.min(graphVisibleWordIds.length, 120),
+					select: {
+						...wordSelect,
+						userKnowledge: {
+							where: { userId: sessionUserId },
+							select: { timesTested: true, timesCorrect: true },
 						},
-					})
-				: Promise.resolve(
-						[] as {
-							wordId: string
-							confidence: number
-							timesTested: number
-							word: {
-								id: string
-								lemma: string
-								effectiveRank: number
-								testSentenceIds: string[]
-							}
-						}[],
-					),
-		])
+					},
+				}),
+				// Always resolve the current/peeked word so we can surface it in the dev panel
+				// when the filter queries above exclude it (e.g. cloze resolution edge cases).
+				peekWordId
+					? prisma.word.findUnique({
+							where: { id: peekWordId },
+							select: wordSelect,
+						})
+					: Promise.resolve(null),
+				eligibleMoodNow
+					? prisma.userWordKnowledge.findMany({
+							where: {
+								userId: sessionUserId,
+								confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD },
+								timesTested: { gte: KNOWN_MIN_TESTS },
+								word: {
+									is: {
+										languageId: langs.targetLanguageId,
+										id: { in: graphVisibleWordIds },
+										effectiveRank: { gte: 1 },
+										isOffensive: false,
+										isAbbreviation: false,
+										testSentenceIds: { isEmpty: false },
+									},
+								},
+							},
+							orderBy: [{ lastTestedAt: "asc" }, { confidence: "asc" }],
+							take: build.candidateCap,
+							select: {
+								wordId: true,
+								confidence: true,
+								timesTested: true,
+								word: { select: wordSelect },
+							},
+						})
+					: Promise.resolve(
+							[] as {
+								wordId: string
+								confidence: number
+								timesTested: number
+								word: {
+									id: string
+									lemma: string
+									effectiveRank: number
+									testSentenceIds: string[]
+								}
+							}[],
+						),
+			])
 
-		// Deduplicate: "territory" is the catch-all "not verified known" query,
-		// which overlaps entirely with "shaky" (has-knowledge-but-not-known) and
-		// "new" (never-tested). Subtract those so each tab shows a distinct
-		// slice — territory becomes "words we haven't cleanly bucketed into
-		// shaky or new yet", i.e. true frontier candidates.
+		// Deduplicate: raw territory overlaps "shaky" and frontier "new". Subtract those so each
+		// tab is distinct — remainder is usually not-yet-known with no row at rank ≤ assumedRank
+		// (outside the frontier band filter) or other edge cases.
 		const shakyWordIds = new Set(shakyKnowledge.map((k) => k.wordId))
 		const newWordIds = new Set(newWords.map((w) => w.id))
 		const territoryRows = sortBuildTerritoryRows(
 			territoryRowsRaw.filter((w) => !shakyWordIds.has(w.id) && !newWordIds.has(w.id)),
 		)
+		const territoryRowsSortedForPreview = sortBuildTerritoryRows(territoryRowsRaw)
+		const territoryCountForPreview = territoryIdsPreferActive(
+			territoryRowsSortedForPreview,
+			build.heavyMissThreshold,
+		).orderedIds.length
 		const nextQ = sessionAnswers.length + 1
 		const vocabMode = session.vocabMode ?? "BUILD"
 
 		const eligibleMoodAfterCorrect =
-			tailConsecutiveWrongs([...answersChrono, { correct: true }]) >= BUILD_MOOD_MIN_STREAK_WRONG
+			tailConsecutiveWrongs([...answersChrono, { correct: true }]) >= build.moodMinStreakWrong
 		const eligibleMoodAfterWrong =
-			tailConsecutiveWrongs([...answersChrono, { correct: false }]) >= BUILD_MOOD_MIN_STREAK_WRONG
+			tailConsecutiveWrongs([...answersChrono, { correct: false }]) >= build.moodMinStreakWrong
 
 		const nextQAfterSubmit = sessionAnswers.length + 2
 		const nextAfterCorrect =
 			vocabMode === "BUILD"
 				? buildNextPickPreview({
 						nextBuildQuestionNumber: nextQAfterSubmit,
-						territoryCount: territoryRows.length,
+						territoryCount: territoryCountForPreview,
 						eligibleMood: eligibleMoodAfterCorrect,
+						build,
 					})
 				: null
 		const nextAfterWrong =
 			vocabMode === "BUILD"
 				? buildNextPickPreview({
 						nextBuildQuestionNumber: nextQAfterSubmit,
-						territoryCount: territoryRows.length,
+						territoryCount: territoryCountForPreview,
 						eligibleMood: eligibleMoodAfterWrong,
+						build,
 					})
 				: null
 

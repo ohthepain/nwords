@@ -1,6 +1,6 @@
 # Vocabulary and Testing Architecture and Design
 
-This document tracks **design intent** and **where it lives in code**. Authoritative formulas and thresholds are in `packages/shared/src/constants/confidence.ts` (`updateConfidence`, `isWordKnown`, and exported constants). Build / assessment / frustration **word selection** is implemented in `apps/api/src/routes/test.ts`. Progress and heatmap data come from `apps/api/src/routes/progress.ts`. The practice heatmap UI is `apps/web/src/components/vocab-graph.tsx`.
+This document tracks **design intent** and **where it lives in code**. Authoritative formulas and thresholds are in `packages/shared/src/constants/confidence.ts` (`updateConfidence`, `isWordKnown`, and exported constants). Build / assessment / frustration **word selection** is implemented in `apps/api/src/routes/test.ts` (Build uses `BUILD_FRONTIER_BAND_MAX` for the introduction queue). Progress and heatmap data come from `apps/api/src/routes/progress.ts`. The practice heatmap UI is `apps/web/src/components/vocab-graph.tsx`.
 
 ## Database
 
@@ -90,6 +90,8 @@ Binary measurement: correct → `1.0`, wrong → `0.0`. Streak still updates (+1
 | `KNOWN_CONFIDENCE_THRESHOLD` | 0.95  | “Known” for size + build bucket boundaries |
 | `KNOWN_MIN_TESTS`            | 3     | Min tests for “known”                     |
 
+Build-only selection constants (e.g. `BUILD_FRONTIER_BAND_MAX` **50**, `BUILD_CANDIDATE_CAP` **45**, bucket weights) live in `apps/api/src/routes/test.ts`, not in `confidence.ts`. Defaults are defined in `@nwords/shared` as `VOCAB_BUILD_SETTINGS_DEFAULTS`; **Admin → Site settings** can override them (stored in `app_settings.vocab_build_settings` JSON, merged on read).
+
 ## Testing modes
 
 ### Assessment mode
@@ -106,16 +108,22 @@ Binary measurement: correct → `1.0`, wrong → `0.0`. Streak still updates (+1
 
 **Graph band:** Words with `rank` 1–10000, not offensive, not abbreviation, ordered by `rank`. The band is truncated to the first `n` lemmas where `n = min(totalInRange, ceil(baseline * 1.2))` and `baseline = max(assumedRank, vocabSize, 50)`. This matches `heatmapTargetCellCount` in `vocab-graph.tsx` (ordinal cap, not a raw rank cutoff).
 
+**Two bands (Build):**
+
+- **Frontier band (introductions):** In-band lemmas with `rank > assumedRank`, no `UserWordKnowledge` row yet, with test sentences. Only the first `BUILD_FRONTIER_BAND_MAX` (**50**) by ascending rank are eligible for the **new** bucket; the rest stay “behind” the queue until a frontier word gets a row (then it joins the active band as learning).
+- **Active band (in-flight learning):** In-band words that are **not** verified known but already have learning signal — primarily **shaky** (has a knowledge row, fails `KNOWN_*`), plus any other not-yet-known lemmas surfaced through territory preflight (see below).
+
 **Preflight selection (before weighted buckets):**
 
-1. **Territory opening:** For the first `BUILD_TERRITORY_OPENING` (**5**) questions, prefer the lowest-rank **unverified** words in the band (words lacking verified-known knowledge). Words with `timesTested - timesCorrect >= BUILD_HEAVY_MISS_THRESHOLD` (**8**) are de-emphasized in this opening only.
-2. **Territory revisit:** After the opening, every `BUILD_TERRITORY_REVISIT_EVERY` (**4**th) question revisits that territory pool (`BUILD_TERRITORY_HEAD_SPREAD` **5** for spread).
-3. **Frontier:** Every `BUILD_FRONTIER_EVERY` (**6**th) question targets the **lowest rank** in-band that is not yet verified known (global frontier in the visible slice, including gaps below `assumedRank`).
+1. **Territory opening:** For questions **2** through `BUILD_TERRITORY_OPENING` (**5**), sample from not-yet-verified-known words in the graph slice. Order **prefers active** (has a knowledge row) over **frontier-only** (no row yet), rank-ordered within each group. Words with `timesTested - timesCorrect >= BUILD_HEAVY_MISS_THRESHOLD` (**8**) are de-emphasized in this opening only (winnable pool when non-empty).
+2. **Territory revisit:** After the opening, every `BUILD_TERRITORY_REVISIT_EVERY` (**4**th) question revisits the same pool with the same active-first ordering (`BUILD_TERRITORY_HEAD_SPREAD` **5** for spread).
 
-**Buckets (weighted random when mood eligible):** `BUILD_WEIGHT_NEW` **48%** new, `BUILD_WEIGHT_SHAKY` **37%** shaky, remainder **~15%** mood. If not eligible for mood (see below), only new vs shaky are rolled, preserving the **48 : 37** ratio.
+There is **no** separate forced “global frontier” question every Nth card; introductions are handled by the frontier-capped **new** bucket and territory when it reaches frontier-only rows.
 
-- **New:** In-band, `rank > assumedRank`, no `UserWordKnowledge` row yet, has test sentences; capped to `BUILD_CANDIDATE_CAP` (**45**), rank-ordered. Sampling uses `BUILD_NEW_SPREAD` (**6**) and session exclusion spread `BUILD_SESSION_EXCLUSION_SPREAD` (**28**) inside the resolver.
-- **Shaky:** In-band knowledge rows that are **not** verified known (`KNOWN_*` thresholds); ordered by word rank, then `lastTestedAt`, then `confidence`; capped at **45**.
+**Buckets (weighted random when mood eligible):** `BUILD_WEIGHT_NEW` **48%** new, `BUILD_WEIGHT_SHAKY` **37%** shaky, remainder **~15%** mood. If not eligible for mood (see below), only new vs shaky are rolled, preserving the **48 : 37** ratio. Internal names remain `new` / `shaky`; **new** means frontier band only.
+
+- **New (frontier band):** As above; rank-ordered; sampling uses `BUILD_NEW_SPREAD` (**6**) and session exclusion spread `BUILD_SESSION_EXCLUSION_SPREAD` (**28**) inside the resolver (`sliceCap` matches `BUILD_FRONTIER_BAND_MAX`).
+- **Shaky:** In-band knowledge rows that are **not** verified known (`KNOWN_*` thresholds); ordered by word rank, then `lastTestedAt`, then `confidence`; capped at `BUILD_CANDIDATE_CAP` (**45**).
 - **Mood:** Verified-known words in-band; only if `eligibleMood`.
 
 **Mood eligibility:** `tailConsecutiveWrongs(sessionAnswers) >= BUILD_MOOD_MIN_STREAK_WRONG` (**2**) — i.e. **last two answers in this session** are wrong, not the persisted `UserWordKnowledge.streak`.
@@ -130,7 +138,7 @@ Binary measurement: correct → `1.0`, wrong → `0.0`. Streak still updates (+1
 
 ### Spaced repetition (lightweight)
 
-No `nextReviewAt`. Lower confidence and staleness on wrong answers skew selection toward shaky items; Build territory / frontier cadence adds structure on top.
+No `nextReviewAt`. Lower confidence and staleness on wrong answers skew selection toward shaky items; Build territory cadence and the capped frontier band add structure on top.
 
 ## UI: vocab graph
 

@@ -528,6 +528,8 @@ model AppSettings {
   aiProvider String?  @map("ai_provider")
   aiModel    String?  @map("ai_model")
   aiApiKey   String?  @map("ai_api_key")
+  /// Build-mode tuning (merged with code defaults). See `VocabBuildSettings` in @nwords/shared.
+  vocabBuildSettings Json? @map("vocab_build_settings")
   updatedAt DateTime @updatedAt
 
   @@map("app_settings")

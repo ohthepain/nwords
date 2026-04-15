@@ -909,14 +909,13 @@ function DevUpcomingPanel({
 			: data[activeTab]
 	// Surface the current card at the top of its own bucket even when the
 	// filter queries don't include it — otherwise the user can't see where
-	// "krig" (or any frontier pick) sits in the list.
+	// the current pick sits in the list.
 	const shouldInjectCurrent =
 		data?.current != null &&
 		currentSelection?.panelTab === activeTab &&
 		!baseWords.some((w) => w.wordId === data.current?.wordId)
-	const words: UpcomingWord[] = shouldInjectCurrent && data?.current
-		? [data.current, ...baseWords]
-		: baseWords
+	const words: UpcomingWord[] =
+		shouldInjectCurrent && data?.current ? [data.current, ...baseWords] : baseWords
 	const refreshedAt = data?.generatedAt
 		? new Date(data.generatedAt).toLocaleTimeString([], {
 				hour: "2-digit",
