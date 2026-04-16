@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { AuthedAppHeader } from "~/components/authed-app-header"
 import { AppHeaderBrand } from "~/components/header"
 import { NewWordsIntroDialog } from "~/components/new-words-intro-dialog"
-import { NextColumnWordsPanel } from "~/components/next-column-words-panel"
 import { ThemeToggleButton } from "~/components/theme-toggle-button"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
@@ -117,7 +116,6 @@ type PracticeSearch = {
 
 /** Intro dialog state: `wordIds`/`words` are the column batch; session uses `practiceWordIds` only. */
 type NewWordsColumnIntroPayload = TerritoryColumnAdvancedPayload & {
-	practiceWordIds: string[]
 	/** Some column lemmas have curated sentence IDs but none pass the cloze join (links / sentence rows). */
 	showCuratedUnlinkedCopy?: boolean
 }
@@ -205,9 +203,6 @@ function PracticePage() {
 	const [devUpcomingLoading, setDevUpcomingLoading] = useState(false)
 	const [devTab, setDevTab] = useState<DevSelectionPanelTab>("territory")
 	const [devHoverWordId, setDevHoverWordId] = useState<string | null>(null)
-	const [columnAdvancePrompt, setColumnAdvancePrompt] =
-		useState<TerritoryColumnAdvancedPayload | null>(null)
-	const [columnAdvanceBusy, setColumnAdvanceBusy] = useState(false)
 	const [newWordsIntroPayload, setNewWordsIntroPayload] =
 		useState<NewWordsColumnIntroPayload | null>(null)
 	const [newWordsIntroBusy, setNewWordsIntroBusy] = useState(false)
@@ -221,16 +216,14 @@ function PracticePage() {
 			} catch {
 				/* sessionStorage unavailable */
 			}
-			setColumnAdvancePrompt(payload)
+			setNewWordsIntroPayload({
+				...payload,
+				practiceWordIds: payload.practiceWordIds,
+			})
 		},
 		[sessionId, vocabMode, practiceTargetId],
 	)
 
-	useEffect(() => {
-		if (!sessionId) {
-			setColumnAdvancePrompt(null)
-		}
-	}, [sessionId])
 
 	const fetchUpcoming = useCallback(async () => {
 		if (!sessionId) return
@@ -535,7 +528,7 @@ function PracticePage() {
 						setStatus("idle")
 						setNewWordsIntroPayload({
 							...analysis.payload,
-							practiceWordIds: [],
+							practiceWordIds: [] as string[],
 							showCuratedUnlinkedCopy,
 						})
 						return
@@ -848,7 +841,17 @@ function PracticePage() {
 			<NewWordsIntroDialog
 				open={newWordsIntroPayload !== null}
 				onOpenChange={(open) => {
-					if (!open) setNewWordsIntroPayload(null)
+					if (!open) {
+						if (newWordsIntroPayload && sessionId && practiceTargetId) {
+							try {
+								sessionStorage.setItem(
+									`dismissedColumnBatch:${practiceTargetId}:${newWordsIntroPayload.columnIndex}`,
+									"1",
+								)
+							} catch { /* ignore */ }
+						}
+						setNewWordsIntroPayload(null)
+					}
 				}}
 				words={newWordsIntroPayload?.words ?? []}
 				columnIndex={newWordsIntroPayload?.columnIndex ?? 0}
@@ -860,7 +863,10 @@ function PracticePage() {
 					if (newWordsIntroPayload.practiceWordIds.length === 0) return
 					setNewWordsIntroBusy(true)
 					try {
-						const ok = await beginNewWordsColumnSession(newWordsIntroPayload.practiceWordIds)
+						const ok = await beginNewWordsColumnSession(
+							newWordsIntroPayload.practiceWordIds,
+							sessionId ? { endActiveSessionId: sessionId } : undefined,
+						)
 						if (ok) setNewWordsIntroPayload(null)
 					} finally {
 						setNewWordsIntroBusy(false)
@@ -884,41 +890,6 @@ function PracticePage() {
 							}
 						/>
 					</div>
-					{columnAdvancePrompt && sessionId ? (
-						<div className="mx-auto w-max max-w-none px-6 pb-2 min-w-[280px]">
-							<NextColumnWordsPanel
-								payload={columnAdvancePrompt}
-								busy={columnAdvanceBusy}
-								onPracticeThisColumn={async () => {
-									setColumnAdvanceBusy(true)
-									try {
-										const ok = await beginNewWordsColumnSession(columnAdvancePrompt.wordIds, {
-											endActiveSessionId: sessionId,
-										})
-										if (ok) setColumnAdvancePrompt(null)
-									} finally {
-										setColumnAdvanceBusy(false)
-									}
-								}}
-								onNotNow={async () => {
-									setColumnAdvanceBusy(true)
-									try {
-										try {
-											sessionStorage.setItem(
-												`dismissedColumnBatch:${practiceTargetId}:${columnAdvancePrompt.columnIndex}`,
-												"1",
-											)
-										} catch {
-											/* ignore */
-										}
-										setColumnAdvancePrompt(null)
-									} finally {
-										setColumnAdvanceBusy(false)
-									}
-								}}
-							/>
-						</div>
-					) : null}
 				</div>
 			) : null}
 			<div

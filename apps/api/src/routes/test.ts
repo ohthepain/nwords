@@ -554,7 +554,8 @@ async function handleFrustrationNext(
 
 /**
  * NEWWORDS: only the session’s ordered `columnFocusWordIds` list (heatmap column, etc.).
- * Prefers lemmas not yet answered this session, then cycles. Same cloze stack as Build.
+ * Prefers lemmas not yet answered this session, then cycles by **least-recently answered in this
+ * session** (column order tiebreak) so repeats do not stick on the list head. Same cloze stack as Build.
  */
 async function handleNewWordsNext(
 	// biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
@@ -565,7 +566,7 @@ async function handleNewWordsNext(
 	const sessionAnswers = await prisma.testAnswer.findMany({
 		where: { testSessionId: session.id },
 		orderBy: { answeredAt: "asc" },
-		select: { wordId: true },
+		select: { wordId: true, answeredAt: true },
 	})
 	const testedInSession = new Set(sessionAnswers.map((a) => a.wordId))
 	const ordered = parseColumnFocusWordIds(session.columnFocusWordIds)
@@ -582,7 +583,17 @@ async function handleNewWordsNext(
 
 	const untested = ordered.filter((id) => !testedInSession.has(id))
 	const tested = ordered.filter((id) => testedInSession.has(id))
-	const tryOrder = [...untested, ...tested]
+	const lastAnswerAtByWord = new Map<string, number>()
+	for (const a of sessionAnswers) {
+		lastAnswerAtByWord.set(a.wordId, a.answeredAt.getTime())
+	}
+	const testedRetryOrder = [...tested].sort((a, b) => {
+		const ta = lastAnswerAtByWord.get(a) ?? 0
+		const tb = lastAnswerAtByWord.get(b) ?? 0
+		if (ta !== tb) return ta - tb
+		return ordered.indexOf(a) - ordered.indexOf(b)
+	})
+	const tryOrder = [...untested, ...testedRetryOrder]
 
 	for (const wordId of tryOrder) {
 		const resolved = await resolveClozeWithHint({
@@ -608,7 +619,7 @@ async function handleNewWordsNext(
 				devSelection: devSelection(
 					"NEWWORDS",
 					"new_words",
-					`New words: ${ordered.length}-word ordered queue; prefer not-yet-tested-this-session`,
+					`New words: ${ordered.length}-word list; untested first, then retries least-recently-answered-this-session`,
 				),
 			})
 		}

@@ -322,6 +322,80 @@ function wordRunsInOrder(text: string): string[] {
 	return text.match(WORD_RUN) ?? []
 }
 
+/**
+ * Languages where common words are not capitalized mid-sentence (unlike German nouns).
+ * A mid-sentence token that matches a lowercase lemma but is capitalized is almost always a proper noun.
+ */
+const CLOZE_NO_COMMON_TITLECASE_MID_SENTENCE = new Set([
+	"sv",
+	"da",
+	"nb",
+	"nn",
+	"no",
+	"es",
+	"fr",
+	"pt",
+	"it",
+	"nl",
+	"fi",
+	"is",
+	"fo",
+])
+
+function lemmaIsAllLowercase(lemma: string): boolean {
+	return lemma.length > 0 && lemma === lemma.toLowerCase()
+}
+
+function startsWithUppercaseLetter(s: string): boolean {
+	return /^[\p{Lu}]/u.test(s)
+}
+
+/**
+ * Skip cloze candidates where the linked surface form is almost certainly a proper noun
+ * (e.g. Swedish *Tom* as a person's name) rather than the intended lowercase lemma (*tom* "empty").
+ *
+ * - Mid-sentence: capitalized run equal to lemma under case-folding → proper noun in listed langs.
+ * - Sentence-initial: same spelling capitalized in both target and parallel at the blank, and the
+ *   parallel scores no overlap with dictionary sense tokens → cross-lingual name preservation
+ *   (e.g. Tatoeba "Tom skickade …" / "Tom sent …" for lemma *tom*).
+ */
+function shouldSkipLikelyProperNounMisuse(
+	lemma: string,
+	definitions: unknown,
+	targetLangCode: string,
+	candidate: ClozeCandidate,
+	parallelText: string | null,
+): boolean {
+	if (!CLOZE_NO_COMMON_TITLECASE_MID_SENTENCE.has(targetLangCode)) return false
+
+	const runs = wordRunsInOrder(candidate.targetSentenceText)
+	if (candidate.position < 0 || candidate.position >= runs.length) return false
+	// biome-ignore lint/style/noNonNullAssertion: bounds checked above
+	const raw = runs[candidate.position]!
+	if (raw.toLowerCase() !== lemma.toLowerCase()) return false
+	if (!lemmaIsAllLowercase(lemma)) return false
+
+	// Mid-sentence: only proper nouns stay capitalized (Tom, Anna, …).
+	if (candidate.position > 0 && raw !== lemma && startsWithUppercaseLetter(raw)) return true
+
+	// Sentence-initial: distinguish sentence case of the lemma from a homograph name via parallel.
+	if (candidate.position !== 0 || !parallelText) return false
+	if (raw === lemma) return false
+
+	const paraRuns = wordRunsInOrder(parallelText)
+	if (candidate.position >= paraRuns.length) return false
+	// biome-ignore lint/style/noNonNullAssertion: bounds checked above
+	const paraRaw = paraRuns[candidate.position]!
+	if (paraRaw.toLowerCase() !== lemma.toLowerCase()) return false
+	if (!startsWithUppercaseLetter(raw) || !startsWithUppercaseLetter(paraRaw)) return false
+
+	const sense = definitionSenseTokens(definitions)
+	if (sense.size === 0) return false
+	if (scoreParallelForSense(parallelText, sense) > 0) return false
+
+	return true
+}
+
 /** How far we search left/right when token counts differ (e.g. "That's" → That + s). */
 const PARALLEL_HINT_ALIGN_WINDOW = 4
 
@@ -652,6 +726,7 @@ export async function resolveClozeWithHint(params: {
 			definitions: true,
 			testSentenceIds: true,
 			isAbbreviation: true,
+			language: { select: { code: true } },
 		},
 	})
 
@@ -666,11 +741,19 @@ export async function resolveClozeWithHint(params: {
 
 	// Empty curated list is OK: `loadClozeCandidates` falls back to `SentenceWord`-linked sentences.
 
-	const candidates = await loadClozeCandidates(
+	let candidates = await loadClozeCandidates(
 		word.id,
 		params.targetLanguageId,
 		sentenceIds,
 	)
+
+	const targetLangCode = word.language.code
+	if (!params.forceSentenceId) {
+		candidates = candidates.filter(
+			(c) =>
+				!shouldSkipLikelyProperNounMisuse(word.lemma, word.definitions, targetLangCode, c, null),
+		)
+	}
 
 	if (candidates.length === 0) {
 		return { ok: false, reason: "no_blank_position" }
@@ -701,6 +784,18 @@ export async function resolveClozeWithHint(params: {
 			params.nativeLanguageId,
 			word.definitions,
 		)
+		if (
+			!params.forceSentenceId &&
+			shouldSkipLikelyProperNounMisuse(
+				word.lemma,
+				word.definitions,
+				targetLangCode,
+				c,
+				parallel?.text ?? null,
+			)
+		) {
+			continue
+		}
 		if (parallel) {
 			const parallelTok = await tryParallelInlineHintWithWindow(
 				parallel.text,

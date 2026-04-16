@@ -31,6 +31,8 @@ export type VocabGraphCell = {
 	confidence: number | null
 	timesTested: number
 	timesCorrect: number
+	/** `SentenceWord` rows to non-removed target-language sentences (joinable cloze count). */
+	testSentenceCount: number
 	/** Raw `testSentenceIds.length` from API when present (may exceed joinable cloze count). */
 	curatedTestSentenceCount?: number
 	/** Present only when the heatmap request used `dev=1`; `null` means no knowledge row. */
@@ -66,7 +68,10 @@ function territorySlabFill(): string {
 /** Floor for the auto-suggested session goal — fewer than this feels trivial. */
 const MIN_SESSION_GOAL = 6
 
-export type TerritoryColumnAdvancedPayload = BuildColumnFocusPayload
+export type TerritoryColumnAdvancedPayload = BuildColumnFocusPayload & {
+	/** Word IDs filtered to only those with joinable cloze sentences (testSentenceCount > 0). */
+	practiceWordIds: string[]
+}
 
 export function VocabGraph({
 	languageId,
@@ -187,7 +192,13 @@ export function VocabGraph({
 				const wordIds = nonTerritoryWordIdsInColumn(visibleCells, numCols, numRows, columnIndex)
 				if (wordIds.length > 0) {
 					const words = columnWordSummaries(visibleCells, numCols, numRows, columnIndex)
-					onTerritoryColumnAdvanced({ columnIndex, wordIds, words })
+					const testableSet = new Set(
+						visibleCells
+							.filter((cell) => (cell.testSentenceCount ?? 0) > 0)
+							.map((cell) => cell.wordId),
+					)
+					const practiceWordIds = wordIds.filter((id) => testableSet.has(id))
+					onTerritoryColumnAdvanced({ columnIndex, wordIds, words, practiceWordIds })
 					lastFiredCompletedColsRef.current = c
 				}
 			}
