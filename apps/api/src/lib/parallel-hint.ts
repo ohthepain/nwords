@@ -1,4 +1,5 @@
 import { type Prisma, prisma } from "@nwords/db"
+import { linkedSentenceIdsForClozePool } from "./cloze-sentence-pool"
 
 /** Same rules as `sentence-link` tokenization (for gloss ↔ parallel alignment). */
 const SCORE_SPLIT = /[^\p{L}\p{N}]+/gu
@@ -231,21 +232,21 @@ type ClozeCandidate = {
 	position: number
 }
 
-async function loadClozeCandidates(
+async function materializeClozeCandidates(
 	wordId: string,
 	targetLanguageId: string,
-	testSentenceIds: string[],
+	sentenceIds: string[],
 ): Promise<ClozeCandidate[]> {
-	if (testSentenceIds.length === 0) return []
+	if (sentenceIds.length === 0) return []
 
 	const [sentenceWords, sentences] = await Promise.all([
 		prisma.sentenceWord.findMany({
-			where: { wordId, sentenceId: { in: testSentenceIds } },
+			where: { wordId, sentenceId: { in: sentenceIds } },
 			select: { sentenceId: true, position: true },
 		}),
 		prisma.sentence.findMany({
 			where: {
-				id: { in: testSentenceIds },
+				id: { in: sentenceIds },
 				languageId: targetLanguageId,
 				markedForRemoval: false,
 			},
@@ -257,13 +258,35 @@ async function loadClozeCandidates(
 	const textBySid = new Map(sentences.map((s) => [s.id, s.text]))
 
 	const out: ClozeCandidate[] = []
-	for (const sid of testSentenceIds) {
+	for (const sid of sentenceIds) {
 		const position = posBySid.get(sid)
 		const text = textBySid.get(sid)
 		if (position === undefined || text === undefined) continue
 		out.push({ targetSentenceId: sid, targetSentenceText: text, position })
 	}
 
+	return out
+}
+
+/**
+ * Curated `testSentenceIds` drive quality ordering; when empty or stale vs `SentenceWord`,
+ * fall back to linked sentences (same pool as admin word detail lists).
+ */
+async function loadClozeCandidates(
+	wordId: string,
+	targetLanguageId: string,
+	testSentenceIds: string[],
+): Promise<ClozeCandidate[]> {
+	const curated = testSentenceIds
+	let pool =
+		curated.length > 0 ? [...curated] : await linkedSentenceIdsForClozePool(wordId, targetLanguageId)
+
+	let out = await materializeClozeCandidates(wordId, targetLanguageId, pool)
+	if (out.length === 0 && curated.length > 0) {
+		const linked = await linkedSentenceIdsForClozePool(wordId, targetLanguageId)
+		pool = [...new Set([...curated, ...linked])]
+		out = await materializeClozeCandidates(wordId, targetLanguageId, pool)
+	}
 	return out
 }
 
@@ -607,39 +630,6 @@ async function translateViaGlossPivot(
 	return null
 }
 
-// #region agent log
-/** Debug: abbreviation-like lemma shape when DB `isAbbreviation` can still be false. */
-function agentAbbrevSignals(lemma: string) {
-	return {
-		letterDotAbbrev: /^([a-z]\.)+[a-z]?\.?$/.test(lemma),
-		hasPeriod: lemma.includes("."),
-		len: lemma.length,
-	}
-}
-
-function agentLogClozeServed(data: {
-	wordId: string
-	lemma: string
-	isAbbreviationDb: boolean
-	hintSource: string
-	blankTokenIndex: number
-}) {
-	const signals = agentAbbrevSignals(data.lemma)
-	fetch("http://127.0.0.1:7794/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-		method: "POST",
-		headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "a3d0a4" },
-		body: JSON.stringify({
-			sessionId: "a3d0a4",
-			location: "parallel-hint.ts:resolveClozeWithHint",
-			message: "cloze_served",
-			data: { ...data, signals },
-			timestamp: Date.now(),
-			hypothesisId: "H1",
-		}),
-	}).catch(() => {})
-}
-// #endregion
-
 /**
  * Prefer a native parallel for any curated test sentence; otherwise a dictionary gloss as hint.
  */
@@ -674,9 +664,7 @@ export async function resolveClozeWithHint(params: {
 		? Array.from(new Set([...word.testSentenceIds, params.forceSentenceId]))
 		: word.testSentenceIds
 
-	if (sentenceIds.length === 0) {
-		return { ok: false, reason: "no_test_sentences" }
-	}
+	// Empty curated list is OK: `loadClozeCandidates` falls back to `SentenceWord`-linked sentences.
 
 	const candidates = await loadClozeCandidates(
 		word.id,
@@ -722,13 +710,6 @@ export async function resolveClozeWithHint(params: {
 			)
 			const pivotFallback = parallelTok == null ? await glossPivotHint() : null
 			const inlineHint = parallelTok ?? pivotFallback
-			agentLogClozeServed({
-				wordId: word.id,
-				lemma: word.lemma,
-				isAbbreviationDb: word.isAbbreviation,
-				hintSource: "parallel",
-				blankTokenIndex: c.position,
-			})
 			return {
 				ok: true,
 				wordId: word.id,
@@ -750,13 +731,6 @@ export async function resolveClozeWithHint(params: {
 	if (gloss) {
 		const c = candidates[0]
 		const inlineHint = await glossPivotHint()
-		agentLogClozeServed({
-			wordId: word.id,
-			lemma: word.lemma,
-			isAbbreviationDb: word.isAbbreviation,
-			hintSource: "definition",
-			blankTokenIndex: c.position,
-		})
 		return {
 			ok: true,
 			wordId: word.id,
@@ -834,27 +808,6 @@ export async function pickRandomWordIdForCloze(
 		orderBy: { id: "asc" },
 		skip,
 	})
-
-	// #region agent log
-	if (word?.id) {
-		const row = await prisma.word.findUnique({
-			where: { id: word.id },
-			select: { lemma: true, isAbbreviation: true },
-		})
-		fetch("http://127.0.0.1:7794/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-			method: "POST",
-			headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "a3d0a4" },
-			body: JSON.stringify({
-				sessionId: "a3d0a4",
-				location: "parallel-hint.ts:pickRandomWordIdForCloze",
-				message: "random_cloze_pick",
-				data: { wordId: word.id, lemma: row?.lemma, isAbbreviation: row?.isAbbreviation },
-				timestamp: Date.now(),
-				hypothesisId: "H2",
-			}),
-		}).catch(() => {})
-	}
-	// #endregion
 
 	return word?.id ?? null
 }

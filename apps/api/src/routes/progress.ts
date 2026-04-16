@@ -159,37 +159,51 @@ export const progressRoute = new Hono()
 					isAbbreviation: false,
 				},
 				orderBy: [{ effectiveRank: "asc" }, { id: "asc" }],
-				select: { id: true, effectiveRank: true, lemma: true },
+				select: { id: true, effectiveRank: true, lemma: true, testSentenceIds: true },
 			})
 			const words = dedupeByEffectiveRank(wordsRaw)
 
-			// Get user knowledge for these words
+			// Get user knowledge + per-word sentence link counts (same notion as admin word panel / getWordSentences)
 			const wordIds = words.map((w) => w.id)
-			const knowledge = await prisma.userWordKnowledge.findMany({
-				where: {
-					userId: user.id,
-					wordId: { in: wordIds },
-				},
-				select: includeDev
-					? {
-							id: true,
-							wordId: true,
-							confidence: true,
-							timesTested: true,
-							timesCorrect: true,
-							lastTestedAt: true,
-							lastCorrect: true,
-							streak: true,
-							createdAt: true,
-							updatedAt: true,
-						}
-					: {
-							wordId: true,
-							confidence: true,
-							timesTested: true,
-							timesCorrect: true,
-						},
-			})
+			const [knowledge, sentenceLinkCounts] = await Promise.all([
+				prisma.userWordKnowledge.findMany({
+					where: {
+						userId: user.id,
+						wordId: { in: wordIds },
+					},
+					select: includeDev
+						? {
+								id: true,
+								wordId: true,
+								confidence: true,
+								timesTested: true,
+								timesCorrect: true,
+								lastTestedAt: true,
+								lastCorrect: true,
+								streak: true,
+								createdAt: true,
+								updatedAt: true,
+							}
+						: {
+								wordId: true,
+								confidence: true,
+								timesTested: true,
+								timesCorrect: true,
+							},
+				}),
+				prisma.sentenceWord.groupBy({
+					by: ["wordId"],
+					where: {
+						wordId: { in: wordIds },
+						sentence: { languageId, markedForRemoval: false },
+					},
+					_count: true,
+				}),
+			])
+
+			const linkCountByWordId = new Map(
+				sentenceLinkCounts.map((r) => [r.wordId, r._count as number]),
+			)
 
 			const knowledgeMap = new Map(knowledge.map((k) => [k.wordId, k]))
 
@@ -237,6 +251,10 @@ export const progressRoute = new Hono()
 					confidence: k?.confidence ?? (isAssumedKnown ? 1.0 : null),
 					timesTested: k?.timesTested ?? 0,
 					timesCorrect: k?.timesCorrect ?? 0,
+					/** `SentenceWord` rows to target-language sentences not marked for removal (admin “Sentences”). */
+					testSentenceCount: linkCountByWordId.get(w.id) ?? 0,
+					/** Curated `testSentenceIds` length (may differ from link count if lists are stale). */
+					curatedTestSentenceCount: w.testSentenceIds.length,
 				}
 				if (!includeDev) return base
 				if (!k) {

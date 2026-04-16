@@ -144,6 +144,8 @@ No `nextReviewAt`. Lower confidence and staleness on wrong answers skew selectio
 
 Heatmap loads `GET /api/progress/heatmap` (via web proxy). Cell `status` is `known` if verified known **or** `rank <= assumedRank`; else `learning` if a knowledge row exists; else `untested`.
 
+**`testSentenceCount`:** Count of `sentence_word` rows for that lemma to target-language `sentence` rows with `markedForRemoval === false` — same notion as admin word panel “Sentences” / `getWordSentences`. **`curatedTestSentenceCount`:** `word.testSentenceIds.length` (curated list; can drift from links). Cloze resolution in `parallel-hint.ts` uses curated IDs first, then merges linked sentences when the curated pool is empty or yields no candidates.
+
 **Territory slab (visual “conquered” column):** uses measured confidence `>= 0.9` (`TERRITORY_MIN_CONFIDENCE` in `vocab-graph.tsx`), which is **slightly below** the `0.95` verified-known threshold — purely a display choice.
 
 ## API use cases (formulas)

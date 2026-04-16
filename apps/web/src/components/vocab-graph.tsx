@@ -1,8 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-
-const GAP_PX = 1
-/** Solid territory only includes cells at or above this measured confidence (below assumed rank can still be “learning” in practice). */
-const TERRITORY_MIN_CONFIDENCE = 0.9
+import type { BuildColumnFocusPayload } from "~/lib/vocab-graph-column-utils"
+import {
+	GAP_PX,
+	GRAPH_MIN_WIDTH_PX,
+	TERRITORY_MIN_CONFIDENCE,
+	cellQualifiesForTerritory,
+	columnWordSummaries,
+	completedColsFromLeft as countCompletedColsFromLeft,
+	graphWidthBasePx,
+	heatmapTargetCellCount,
+	nonTerritoryWordIdsInColumn,
+	squareSizePx,
+} from "~/lib/vocab-graph-column-utils"
 
 /** Extra `UserWordKnowledge` fields when heatmap is loaded with `dev=1` (admin dev mode). */
 export type VocabGraphKnowledgeDebug = {
@@ -22,6 +31,8 @@ export type VocabGraphCell = {
 	confidence: number | null
 	timesTested: number
 	timesCorrect: number
+	/** Raw `testSentenceIds.length` from API when present (may exceed joinable cloze count). */
+	curatedTestSentenceCount?: number
 	/** Present only when the heatmap request used `dev=1`; `null` means no knowledge row. */
 	knowledgeDebug?: VocabGraphKnowledgeDebug | null
 }
@@ -38,31 +49,6 @@ type HeatmapResponse = {
 	cells: VocabGraphCell[]
 }
 
-function squareSizePx(wordCount: number): number {
-	if (wordCount <= 100) return 16
-	if (wordCount <= 200) return 12
-	if (wordCount <= 400) return 10
-	if (wordCount <= 1000) return 8
-	if (wordCount <= 2000) return 6
-	return 5
-}
-
-function graphWidthBasePx(wordCount: number): number {
-	if (wordCount <= 400) return 600
-	if (wordCount <= 1000) return 800
-	return 800
-}
-
-/** Target number of ranks to show: max(assumed, vocab) with a floor, ×1.2, capped by loaded cells. */
-function heatmapTargetCellCount(
-	assumedRank: number,
-	vocabSize: number,
-	cellsLength: number,
-): number {
-	const baseline = Math.max(assumedRank, vocabSize, 50)
-	return Math.min(cellsLength, Math.ceil(baseline * 1.2))
-}
-
 /** Background color for a cell from continuous confidence; null = untested (neutral). */
 function cellBackground(confidence: number | null): string {
 	if (confidence === null) {
@@ -77,13 +63,10 @@ function territorySlabFill(): string {
 	return "var(--vocab-graph-territory-conquered)"
 }
 
-function cellQualifiesForTerritory(confidence: number | null): boolean {
-	return confidence !== null && confidence >= TERRITORY_MIN_CONFIDENCE
-}
-
-const GRAPH_MIN_WIDTH_PX = 220
 /** Floor for the auto-suggested session goal — fewer than this feels trivial. */
 const MIN_SESSION_GOAL = 6
+
+export type TerritoryColumnAdvancedPayload = BuildColumnFocusPayload
 
 export function VocabGraph({
 	languageId,
@@ -91,6 +74,7 @@ export function VocabGraph({
 	answerFlash,
 	showDevGrid,
 	pointerProbe = true,
+	onTerritoryColumnAdvanced,
 }: {
 	languageId: string
 	/** Current question word — brief highlight when it changes. */
@@ -107,6 +91,8 @@ export function VocabGraph({
 	showDevGrid?: boolean
 	/** When false, disable drag/hover word list (e.g. settings live preview). */
 	pointerProbe?: boolean
+	/** Fires once when a new column becomes fully conquered and the next column has words to learn. */
+	onTerritoryColumnAdvanced?: (payload: TerritoryColumnAdvancedPayload) => void
 }) {
 	const [cells, setCells] = useState<VocabGraphCell[]>([])
 	const [assumedRank, setAssumedRank] = useState(0)
@@ -170,22 +156,55 @@ export function VocabGraph({
 	 * Leftmost columns where every occupied cell has measured confidence ≥ TERRITORY_MIN_CONFIDENCE.
 	 * (`status` can be “known” below assumed rank while confidence reflects real tests; we follow confidence.)
 	 */
-	const completedColsFromLeft = useMemo(() => {
-		let col = 0
-		for (; col < numCols; col++) {
-			let colOk = true
-			for (let row = 0; row < numRows; row++) {
-				const idx = col * numRows + row
-				if (idx >= visibleCells.length) break
-				if (!cellQualifiesForTerritory(visibleCells[idx].confidence)) {
-					colOk = false
-					break
+	const completedColsFromLeft = useMemo(
+		() => countCompletedColsFromLeft(visibleCells, numCols, numRows),
+		[visibleCells, numCols, numRows],
+	)
+
+	const heatmapEpochRef = useRef("")
+	const prevCompletedColsRef = useRef<number | null>(null)
+	const lastFiredCompletedColsRef = useRef<number | null>(null)
+
+	useEffect(() => {
+		if (!onTerritoryColumnAdvanced || loadState !== "idle" || visibleCells.length === 0) return
+
+		const epoch = `${languageId}:${visibleCells.length}:${assumedRank}:${vocabSize}`
+		if (heatmapEpochRef.current !== epoch) {
+			heatmapEpochRef.current = epoch
+			prevCompletedColsRef.current = null
+			lastFiredCompletedColsRef.current = null
+		}
+
+		const c = completedColsFromLeft
+		if (prevCompletedColsRef.current === null) {
+			prevCompletedColsRef.current = c
+			return
+		}
+
+		if (c > prevCompletedColsRef.current && lastFiredCompletedColsRef.current !== c) {
+			const columnIndex = c
+			if (columnIndex < numCols) {
+				const wordIds = nonTerritoryWordIdsInColumn(visibleCells, numCols, numRows, columnIndex)
+				if (wordIds.length > 0) {
+					const words = columnWordSummaries(visibleCells, numCols, numRows, columnIndex)
+					onTerritoryColumnAdvanced({ columnIndex, wordIds, words })
+					lastFiredCompletedColsRef.current = c
 				}
 			}
-			if (!colOk) break
 		}
-		return col
-	}, [visibleCells, numCols, numRows])
+
+		prevCompletedColsRef.current = c
+	}, [
+		languageId,
+		loadState,
+		visibleCells,
+		numCols,
+		numRows,
+		completedColsFromLeft,
+		assumedRank,
+		vocabSize,
+		onTerritoryColumnAdvanced,
+	])
 
 	const territoryWidthPx = completedColsFromLeft > 0 ? completedColsFromLeft * step - GAP_PX : 0
 

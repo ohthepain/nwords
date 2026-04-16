@@ -361,6 +361,8 @@ model TestSession {
   endedAt           DateTime?
   wordsTestedCount  Int        @default(0)
   wordsCorrectCount Int        @default(0)
+  /// NEWWORDS: ordered queue of lemmas for this session. (Optional PATCH on BUILD for legacy tooling.)
+  columnFocusWordIds Json?
 
   answers TestAnswer[]
 
@@ -379,6 +381,7 @@ enum VocabMode {
   ASSESSMENT
   BUILD
   FRUSTRATION
+  NEWWORDS
 }
 
 model TestAnswer {

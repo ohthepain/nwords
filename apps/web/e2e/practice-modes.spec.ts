@@ -61,6 +61,11 @@ const modeCases = [
 		title: "Frustration words",
 		description: "stubbornest words",
 	},
+	{
+		search: "?vocabMode=NEWWORDS",
+		title: "New words (listed)",
+		description: "Only the word list",
+	},
 ] as const
 
 test("practice page shows copy for each vocab mode", async ({ page }) => {

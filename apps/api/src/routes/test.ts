@@ -1,5 +1,5 @@
 import { zValidator } from "@hono/zod-validator"
-import { type TestSession, type VocabMode, prisma } from "@nwords/db"
+import { Prisma, type TestSession, type VocabMode, prisma } from "@nwords/db"
 import type { VocabBuildSettings } from "@nwords/shared"
 import {
 	FRUSTRATION_WORD_MIN_TESTS,
@@ -18,9 +18,9 @@ import {
 	resolveClozeWithHint,
 } from "../lib/parallel-hint"
 import { lookupUserAnswerPos } from "../lib/pos-lookup"
+import { resolveVocabBuildSettings } from "../lib/vocab-build-settings"
 import type { AuthUser } from "../middleware/auth"
 import { type OptionalAuthEnv, optionalAuth } from "../middleware/auth"
-import { resolveVocabBuildSettings } from "../lib/vocab-build-settings"
 
 async function getSessionIfAllowed(
 	sessionId: string,
@@ -85,17 +85,32 @@ export type DevSelection = {
 		| "new"
 		| "shaky"
 		| "mood"
+		| "column_focus"
 		| "fallback"
 		| "guest_random"
 		| "forced_sentence"
 		| "assessment_binary_search"
 		| "frustration"
+		| "new_words"
 	panelTab: DevSelectionPanelTab | null
 	summary: string
 	/** BUILD bucket pass only: which bucket was rolled first. */
 	primaryBucket?: "new" | "shaky" | "mood"
 	/** BUILD bucket pass only: order buckets are tried this question. */
 	bucketOrder?: ("new" | "shaky" | "mood")[]
+}
+
+const COLUMN_FOCUS_UUID_RE =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function parseColumnFocusWordIds(raw: unknown): string[] {
+	if (!Array.isArray(raw)) return []
+	const out: string[] = []
+	for (const x of raw) {
+		if (typeof x !== "string" || !COLUMN_FOCUS_UUID_RE.test(x)) continue
+		out.push(x)
+	}
+	return out
 }
 
 function devSelection(
@@ -112,7 +127,9 @@ function devSelection(
 					? "shaky"
 					: kind === "mood"
 						? "mood"
-						: null
+						: kind === "column_focus"
+							? "new"
+							: null
 	return { vocabMode, kind, panelTab, summary }
 }
 
@@ -158,8 +175,7 @@ function buildNextPickPreview(args: {
 		: `Q${q}: weighted buckets — rolls new vs shaky (${b.weightNew}% / ${b.weightShaky}%), then alternates`
 
 	const den = b.weightNew + b.weightShaky
-	const newPct =
-		den > 0 ? Math.round((b.weightNew / den) * 100) : 50
+	const newPct = den > 0 ? Math.round((b.weightNew / den) * 100) : 50
 	const shakyPct = den > 0 ? Math.round((b.weightShaky / den) * 100) : 50
 
 	return {
@@ -287,14 +303,15 @@ function territoryIdsPreferActive<
 		effectiveRank: number
 		userKnowledge: { timesTested: number; timesCorrect: number }[]
 	},
->(territoryRowsSorted: T[], heavyMissThreshold: number): { orderedIds: string[]; winnableIds: string[] } {
+>(
+	territoryRowsSorted: T[],
+	heavyMissThreshold: number,
+): { orderedIds: string[]; winnableIds: string[] } {
 	const active = territoryRowsSorted.filter((r) => r.userKnowledge.length > 0)
 	const frontierOnly = territoryRowsSorted.filter((r) => r.userKnowledge.length === 0)
 	const merged = [...active, ...frontierOnly]
 	const orderedIds = merged.map((r) => r.id)
-	const winnable = merged
-		.filter((r) => territoryMisses(r) < heavyMissThreshold)
-		.map((r) => r.id)
+	const winnable = merged.filter((r) => territoryMisses(r) < heavyMissThreshold).map((r) => r.id)
 	return {
 		orderedIds,
 		winnableIds: winnable.length > 0 ? winnable : orderedIds,
@@ -533,6 +550,78 @@ async function handleFrustrationNext(
 			"Frustration: high test count, low confidence, stale last tested",
 		),
 	})
+}
+
+/**
+ * NEWWORDS: only the session’s ordered `columnFocusWordIds` list (heatmap column, etc.).
+ * Prefers lemmas not yet answered this session, then cycles. Same cloze stack as Build.
+ */
+async function handleNewWordsNext(
+	// biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
+	c: Context<any>,
+	session: TestSession,
+	langs: { nativeLanguageId: string; targetLanguageId: string },
+) {
+	const sessionAnswers = await prisma.testAnswer.findMany({
+		where: { testSessionId: session.id },
+		orderBy: { answeredAt: "asc" },
+		select: { wordId: true },
+	})
+	const testedInSession = new Set(sessionAnswers.map((a) => a.wordId))
+	const ordered = parseColumnFocusWordIds(session.columnFocusWordIds)
+	if (ordered.length === 0) {
+		return c.json(
+			{
+				error: "no_question_available",
+				message:
+					"This New words session has no word list. End it and start again from the Build heatmap.",
+			},
+			404,
+		)
+	}
+
+	const untested = ordered.filter((id) => !testedInSession.has(id))
+	const tested = ordered.filter((id) => testedInSession.has(id))
+	const tryOrder = [...untested, ...tested]
+
+	for (const wordId of tryOrder) {
+		const resolved = await resolveClozeWithHint({
+			wordId,
+			nativeLanguageId: langs.nativeLanguageId,
+			targetLanguageId: langs.targetLanguageId,
+		})
+		if (resolved.ok) {
+			return c.json({
+				wordId: resolved.wordId,
+				lemma: resolved.lemma,
+				rank: resolved.rank,
+				targetSentenceId: resolved.targetSentenceId,
+				promptText: resolved.promptText,
+				targetSentenceText: resolved.targetSentenceText,
+				hintText: resolved.hintText,
+				hintSentenceId: resolved.hintSentenceId,
+				hintSource: resolved.hintSource,
+				inlineHint: resolved.inlineHint,
+				answerType: "TRANSLATION_TYPED" as const,
+				sessionMode: session.mode,
+				vocabMode: "NEWWORDS" as const,
+				devSelection: devSelection(
+					"NEWWORDS",
+					"new_words",
+					`New words: ${ordered.length}-word ordered queue; prefer not-yet-tested-this-session`,
+				),
+			})
+		}
+	}
+
+	return c.json(
+		{
+			error: "no_question_available",
+			message:
+				"Could not build a cloze for any word in this New words list (each needs a usable hint). Try Build mode instead, or add parallel / dictionary coverage for these lemmas.",
+		},
+		404,
+	)
 }
 
 /**
@@ -872,21 +961,6 @@ async function handleBuildNext(
 			if (!wordId) continue
 			tried.add(wordId)
 
-			// #region agent log
-			fetch("http://127.0.0.1:7794/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-				method: "POST",
-				headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "a3d0a4" },
-				body: JSON.stringify({
-					sessionId: "a3d0a4",
-					location: "test.ts:handleBuildNext",
-					message: "build_pick_word",
-					data: { bucket, wordId },
-					timestamp: Date.now(),
-					hypothesisId: "H3",
-				}),
-			}).catch(() => {})
-			// #endregion
-
 			const resolved = await resolveClozeWithHint({
 				wordId,
 				nativeLanguageId: langs.nativeLanguageId,
@@ -1016,83 +1090,52 @@ async function computeAssessedRank(sessionId: string): Promise<number> {
 	return Math.floor((low + high) / 2)
 }
 
+const startTestSessionBodySchema = z
+	.object({
+		mode: z.enum(["MULTIPLE_CHOICE", "TRANSLATION", "VOICE", "MIXED"]),
+		vocabMode: z.enum(["ASSESSMENT", "BUILD", "FRUSTRATION", "NEWWORDS"]).default("BUILD"),
+		nativeLanguageId: z.string().uuid().optional(),
+		targetLanguageId: z.string().uuid().optional(),
+		columnFocusWordIds: z.array(z.string().uuid()).max(200).optional(),
+	})
+	.refine((d) => d.vocabMode !== "NEWWORDS" || (d.columnFocusWordIds?.length ?? 0) > 0, {
+		message: "NEWWORDS sessions require a non-empty columnFocusWordIds list",
+		path: ["columnFocusWordIds"],
+	})
+
 export const testRoute = new Hono<OptionalAuthEnv>()
 	.use("*", optionalAuth)
-
 	// Start a new test session
-	.post(
-		"/sessions",
-		zValidator(
-			"json",
-			z.object({
-				mode: z.enum(["MULTIPLE_CHOICE", "TRANSLATION", "VOICE", "MIXED"]),
-				vocabMode: z.enum(["ASSESSMENT", "BUILD", "FRUSTRATION"]).default("BUILD"),
-				nativeLanguageId: z.string().uuid().optional(),
-				targetLanguageId: z.string().uuid().optional(),
-			}),
-		),
-		async (c) => {
-			const user = c.get("user")
-			const body = c.req.valid("json")
+	.post("/sessions", zValidator("json", startTestSessionBodySchema), async (c) => {
+		const user = c.get("user")
+		const body = c.req.valid("json")
 
-			if (user) {
-				const { nativeLanguageId, targetLanguageId } = body
-				const hasPair = !!(nativeLanguageId && targetLanguageId)
-				const hasOne = !!(nativeLanguageId || targetLanguageId)
-				if (hasOne && !hasPair) {
-					return c.json(
-						{ error: "Provide both nativeLanguageId and targetLanguageId for a practice pair." },
-						400,
-					)
+		if (user) {
+			const { nativeLanguageId, targetLanguageId } = body
+			const hasPair = !!(nativeLanguageId && targetLanguageId)
+			const hasOne = !!(nativeLanguageId || targetLanguageId)
+			if (hasOne && !hasPair) {
+				return c.json(
+					{ error: "Provide both nativeLanguageId and targetLanguageId for a practice pair." },
+					400,
+				)
+			}
+
+			if (hasPair) {
+				if (nativeLanguageId === targetLanguageId) {
+					return c.json({ error: "Native and target languages must be different" }, 400)
 				}
 
-				if (hasPair) {
-					if (nativeLanguageId === targetLanguageId) {
-						return c.json({ error: "Native and target languages must be different" }, 400)
-					}
+				const [nativeLang, targetLang] = await Promise.all([
+					prisma.language.findUnique({ where: { id: nativeLanguageId } }),
+					prisma.language.findUnique({ where: { id: targetLanguageId } }),
+				])
 
-					const [nativeLang, targetLang] = await Promise.all([
-						prisma.language.findUnique({ where: { id: nativeLanguageId } }),
-						prisma.language.findUnique({ where: { id: targetLanguageId } }),
-					])
-
-					if (!nativeLang) {
-						return c.json({ error: "Native language not found" }, 404)
-					}
-					if (!targetLang?.enabled) {
-						return c.json({ error: "Target language is not available" }, 400)
-					}
-
-					const session = await prisma.testSession.create({
-						data: {
-							userId: user.id,
-							mode: body.mode,
-							vocabMode: body.vocabMode,
-							nativeLanguageId,
-							targetLanguageId,
-						},
-					})
-
-					return c.json(
-						{ sessionId: session.id, mode: body.mode, vocabMode: session.vocabMode },
-						201,
-					)
+				if (!nativeLang) {
+					return c.json({ error: "Native language not found" }, 404)
 				}
-
-				const dbUser = await prisma.user.findUnique({
-					where: { id: user.id },
-					select: { nativeLanguageId: true, targetLanguageId: true },
-				})
-
-				if (!dbUser?.nativeLanguageId || !dbUser.targetLanguageId) {
-					return c.json(
-						{
-							error: "languages_required",
-							message:
-								"Set native and target language in settings, or pass nativeLanguageId and targetLanguageId.",
-						},
-						400,
-					)
+				if (!targetLang?.enabled) {
+					return c.json({ error: "Target language is not available" }, 400)
 				}
 
 				const session = await prisma.testSession.create({
@@ -1100,49 +1143,121 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 						userId: user.id,
 						mode: body.mode,
 						vocabMode: body.vocabMode,
+						nativeLanguageId,
+						targetLanguageId,
+						...(body.columnFocusWordIds?.length
+							? { columnFocusWordIds: body.columnFocusWordIds }
+							: {}),
 					},
 				})
 
 				return c.json({ sessionId: session.id, mode: body.mode, vocabMode: session.vocabMode }, 201)
 			}
 
-			const { nativeLanguageId, targetLanguageId } = body
-			if (!nativeLanguageId || !targetLanguageId) {
+			const dbUser = await prisma.user.findUnique({
+				where: { id: user.id },
+				select: { nativeLanguageId: true, targetLanguageId: true },
+			})
+
+			if (!dbUser?.nativeLanguageId || !dbUser.targetLanguageId) {
 				return c.json(
 					{
-						error: "guest_languages_required",
-						message: "Sign in or provide nativeLanguageId and targetLanguageId.",
+						error: "languages_required",
+						message:
+							"Set native and target language in settings, or pass nativeLanguageId and targetLanguageId.",
 					},
 					400,
 				)
 			}
 
-			if (nativeLanguageId === targetLanguageId) {
-				return c.json({ error: "Native and target languages must be different" }, 400)
-			}
-
-			const [nativeLang, targetLang] = await Promise.all([
-				prisma.language.findUnique({ where: { id: nativeLanguageId } }),
-				prisma.language.findUnique({ where: { id: targetLanguageId } }),
-			])
-
-			if (!nativeLang) {
-				return c.json({ error: "Native language not found" }, 404)
-			}
-			if (!targetLang?.enabled) {
-				return c.json({ error: "Target language is not available" }, 400)
-			}
-
 			const session = await prisma.testSession.create({
 				data: {
+					userId: user.id,
 					mode: body.mode,
 					vocabMode: body.vocabMode,
-					nativeLanguageId,
-					targetLanguageId,
+					...(body.columnFocusWordIds?.length
+						? { columnFocusWordIds: body.columnFocusWordIds }
+						: {}),
 				},
 			})
 
 			return c.json({ sessionId: session.id, mode: body.mode, vocabMode: session.vocabMode }, 201)
+		}
+
+		const { nativeLanguageId, targetLanguageId } = body
+		if (!nativeLanguageId || !targetLanguageId) {
+			return c.json(
+				{
+					error: "guest_languages_required",
+					message: "Sign in or provide nativeLanguageId and targetLanguageId.",
+				},
+				400,
+			)
+		}
+
+		if (nativeLanguageId === targetLanguageId) {
+			return c.json({ error: "Native and target languages must be different" }, 400)
+		}
+
+		const [nativeLang, targetLang] = await Promise.all([
+			prisma.language.findUnique({ where: { id: nativeLanguageId } }),
+			prisma.language.findUnique({ where: { id: targetLanguageId } }),
+		])
+
+		if (!nativeLang) {
+			return c.json({ error: "Native language not found" }, 404)
+		}
+		if (!targetLang?.enabled) {
+			return c.json({ error: "Target language is not available" }, 400)
+		}
+
+		const session = await prisma.testSession.create({
+			data: {
+				mode: body.mode,
+				vocabMode: body.vocabMode,
+				nativeLanguageId,
+				targetLanguageId,
+				...(body.columnFocusWordIds?.length ? { columnFocusWordIds: body.columnFocusWordIds } : {}),
+			},
+		})
+
+		return c.json({ sessionId: session.id, mode: body.mode, vocabMode: session.vocabMode }, 201)
+	})
+
+	/** Set or clear optional word-queue JSON on this session (signed-in owner only). */
+	.patch(
+		"/sessions/:id/column-focus",
+		zValidator(
+			"json",
+			z.union([
+				z.object({ wordIds: z.array(z.string().uuid()).min(1).max(200) }),
+				z.object({ clear: z.literal(true) }),
+			]),
+		),
+		async (c) => {
+			const user = c.get("user")
+			if (!user) return c.json({ error: "Unauthorized" }, 401)
+
+			const sessionId = c.req.param("id")
+			const session = await getSessionIfAllowed(sessionId, user, { requireActive: true })
+			if (!session?.userId || session.userId !== user.id) {
+				return c.json({ error: "Session not found or already ended" }, 404)
+			}
+
+			const body = c.req.valid("json")
+			if ("clear" in body) {
+				await prisma.testSession.update({
+					where: { id: sessionId },
+					data: { columnFocusWordIds: Prisma.JsonNull },
+				})
+			} else {
+				await prisma.testSession.update({
+					where: { id: sessionId },
+					data: { columnFocusWordIds: body.wordIds },
+				})
+			}
+
+			return c.body(null, 204)
 		},
 	)
 
@@ -1247,6 +1362,10 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 
 		if (vocabMode === "FRUSTRATION") {
 			return await handleFrustrationNext(c, session, langs)
+		}
+
+		if (vocabMode === "NEWWORDS") {
+			return await handleNewWordsNext(c, session, langs)
 		}
 
 		return handleBuildNext(c, session, langs, vocabMode)

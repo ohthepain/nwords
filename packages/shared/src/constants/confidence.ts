@@ -15,7 +15,7 @@
  * so no word is ever permanently stuck.
  */
 
-export type VocabMode = "ASSESSMENT" | "BUILD" | "FRUSTRATION"
+export type VocabMode = "ASSESSMENT" | "BUILD" | "FRUSTRATION" | "NEWWORDS"
 
 export interface ConfidenceInput {
 	/** Current confidence 0–1 */
@@ -130,6 +130,7 @@ export function updateConfidence(
 			newConfidence = correct ? assessmentCorrect(input) : assessmentWrong(input)
 			break
 		case "BUILD":
+		case "NEWWORDS":
 			newConfidence = correct ? buildCorrect(input) : buildWrong(input)
 			break
 		case "FRUSTRATION":

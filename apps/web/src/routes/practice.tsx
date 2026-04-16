@@ -1,14 +1,17 @@
 import { updateConfidence } from "@nwords/shared"
-import { Link, createFileRoute } from "@tanstack/react-router"
+import { Link, createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { AuthedAppHeader } from "~/components/authed-app-header"
 import { AppHeaderBrand } from "~/components/header"
+import { NewWordsIntroDialog } from "~/components/new-words-intro-dialog"
+import { NextColumnWordsPanel } from "~/components/next-column-words-panel"
 import { ThemeToggleButton } from "~/components/theme-toggle-button"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
-import { VocabGraph } from "~/components/vocab-graph"
+import { type TerritoryColumnAdvancedPayload, VocabGraph } from "~/components/vocab-graph"
+import { analyzeBuildPracticeColumn } from "~/lib/vocab-graph-column-utils"
 import { WordDetailDialog } from "~/components/word-detail-dialog"
 import {
 	type WordPanelKnowledge,
@@ -28,7 +31,7 @@ type UserMe = {
 
 type LanguageOption = { id: string; name: string; code: string }
 
-type VocabMode = "ASSESSMENT" | "BUILD" | "FRUSTRATION"
+type VocabMode = "ASSESSMENT" | "BUILD" | "FRUSTRATION" | "NEWWORDS"
 
 type DevSelectionPanelTab = "territory" | "new" | "shaky" | "mood"
 
@@ -103,6 +106,7 @@ const VOCAB_MODE_LABELS: Record<VocabMode, string> = {
 	ASSESSMENT: "Assessment",
 	BUILD: "Build vocabulary",
 	FRUSTRATION: "Frustration words",
+	NEWWORDS: "New words (listed)",
 }
 
 type PracticeSearch = {
@@ -111,10 +115,19 @@ type PracticeSearch = {
 	wordId?: string
 }
 
+/** Intro dialog state: `wordIds`/`words` are the column batch; session uses `practiceWordIds` only. */
+type NewWordsColumnIntroPayload = TerritoryColumnAdvancedPayload & {
+	practiceWordIds: string[]
+	/** Some column lemmas have curated sentence IDs but none pass the cloze join (links / sentence rows). */
+	showCuratedUnlinkedCopy?: boolean
+}
+
 export const Route = createFileRoute("/practice")({
 	component: PracticePage,
 	validateSearch: (search: Record<string, unknown>): PracticeSearch => ({
-		vocabMode: (["ASSESSMENT", "BUILD", "FRUSTRATION"].includes(search.vocabMode as string)
+		vocabMode: (["ASSESSMENT", "BUILD", "FRUSTRATION", "NEWWORDS"].includes(
+			search.vocabMode as string,
+		)
 			? search.vocabMode
 			: "BUILD") as VocabMode,
 		sentenceId:
@@ -156,6 +169,7 @@ function revealedLemmaDisplay(lemma: string, beforeBlank: string): string {
 
 function PracticePage() {
 	const { vocabMode, sentenceId: forceSentenceId, wordId: forceWordId } = Route.useSearch()
+	const navigate = useNavigate()
 	/** `undefined` = loading; `null` = not signed in; object = signed-in profile */
 	const [profile, setProfile] = useState<UserMe | null | undefined>(undefined)
 	const [languageOptions, setLanguageOptions] = useState<LanguageOption[]>([])
@@ -191,6 +205,32 @@ function PracticePage() {
 	const [devUpcomingLoading, setDevUpcomingLoading] = useState(false)
 	const [devTab, setDevTab] = useState<DevSelectionPanelTab>("territory")
 	const [devHoverWordId, setDevHoverWordId] = useState<string | null>(null)
+	const [columnAdvancePrompt, setColumnAdvancePrompt] =
+		useState<TerritoryColumnAdvancedPayload | null>(null)
+	const [columnAdvanceBusy, setColumnAdvanceBusy] = useState(false)
+	const [newWordsIntroPayload, setNewWordsIntroPayload] =
+		useState<NewWordsColumnIntroPayload | null>(null)
+	const [newWordsIntroBusy, setNewWordsIntroBusy] = useState(false)
+
+	const onTerritoryColumnAdvanced = useCallback(
+		(payload: TerritoryColumnAdvancedPayload) => {
+			if (!sessionId || vocabMode !== "BUILD" || !practiceTargetId) return
+			try {
+				const k = `dismissedColumnBatch:${practiceTargetId}:${payload.columnIndex}`
+				if (sessionStorage.getItem(k)) return
+			} catch {
+				/* sessionStorage unavailable */
+			}
+			setColumnAdvancePrompt(payload)
+		},
+		[sessionId, vocabMode, practiceTargetId],
+	)
+
+	useEffect(() => {
+		if (!sessionId) {
+			setColumnAdvancePrompt(null)
+		}
+	}, [sessionId])
 
 	const fetchUpcoming = useCallback(async () => {
 		if (!sessionId) return
@@ -271,6 +311,145 @@ function PracticePage() {
 	const nativeLabel = languageOptions.find((l) => l.id === practiceNativeId)?.name
 	const targetLabel = languageOptions.find((l) => l.id === practiceTargetId)?.name
 
+	const loadNext = useCallback(async (sid: string): Promise<boolean> => {
+		setStatus("loading")
+		setFeedback(null)
+		try {
+			const nextRes = await fetch(`/api/test/sessions/${sid}/next`, { credentials: "include" })
+			if (!nextRes.ok) {
+				const errBody = await nextRes.json().catch(() => ({}))
+				const msg =
+					typeof errBody === "object" && errBody && "message" in errBody
+						? String((errBody as { message?: string }).message)
+						: await nextRes.text()
+				throw new Error(msg || "No more questions")
+			}
+			const data = await nextRes.json()
+
+			// Assessment mode: check if the binary search is done
+			if (data.done) {
+				setAssessmentDone({
+					assumedRank: data.assumedRank,
+					wordsTestedCount: data.wordsTestedCount,
+					message: data.message,
+				})
+				setQuestion(null)
+				setStatus("idle")
+				// Auto-end the session to save the assumed rank
+				await fetch(`/api/test/sessions/${sid}/end`, {
+					method: "POST",
+					credentials: "include",
+				})
+				return true
+			}
+
+			const q = data as NextQuestion
+			setQuestion(q)
+			setAnswer("")
+			setStatus("idle")
+			return true
+		} catch (e) {
+			setFeedback(e instanceof Error ? e.message : "Something went wrong")
+			setStatus("error")
+			return false
+		}
+	}, [])
+
+	const startBuildFallbackSession = useCallback(async (): Promise<boolean> => {
+		setFeedback(null)
+		setStatus("loading")
+		try {
+			const res = await fetch("/api/test/sessions", {
+				method: "POST",
+				credentials: "include",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					mode: "TRANSLATION",
+					vocabMode: "BUILD",
+					nativeLanguageId: practiceNativeId,
+					targetLanguageId: practiceTargetId,
+				}),
+			})
+			if (!res.ok) {
+				const t = await res.text()
+				throw new Error(t || res.statusText)
+			}
+			const data = (await res.json()) as { sessionId: string }
+			setSessionId(data.sessionId)
+			navigate({
+				to: "/practice",
+				search: (prev) => ({ ...prev, vocabMode: "BUILD" }),
+				replace: true,
+			})
+			return await loadNext(data.sessionId)
+		} catch (e) {
+			setSessionId(null)
+			setQuestion(null)
+			setFeedback(e instanceof Error ? e.message : "Could not start session")
+			setStatus("error")
+			return false
+		}
+	}, [practiceNativeId, practiceTargetId, navigate, loadNext])
+
+	const beginNewWordsColumnSession = useCallback(
+		async (
+			columnFocusWordIds: string[],
+			opts?: { endActiveSessionId?: string | null },
+		): Promise<boolean> => {
+			setFeedback(null)
+			setStatus("loading")
+			try {
+				if (opts?.endActiveSessionId) {
+					await fetch(`/api/test/sessions/${opts.endActiveSessionId}/end`, {
+						method: "POST",
+						credentials: "include",
+					})
+				}
+				const res = await fetch("/api/test/sessions", {
+					method: "POST",
+					credentials: "include",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						mode: "TRANSLATION",
+						vocabMode: "NEWWORDS",
+						nativeLanguageId: practiceNativeId,
+						targetLanguageId: practiceTargetId,
+						columnFocusWordIds,
+					}),
+				})
+				if (!res.ok) {
+					const t = await res.text()
+					throw new Error(t || res.statusText)
+				}
+				const created = (await res.json()) as { sessionId: string }
+				setSessionId(created.sessionId)
+				navigate({
+					to: "/practice",
+					search: (prev) => ({ ...prev, vocabMode: "NEWWORDS" }),
+					replace: true,
+				})
+				const ok = await loadNext(created.sessionId)
+				if (!ok) {
+					// No cloze could be built for any word in the list — end the
+					// dead NEWWORDS session and fall back to a normal BUILD session.
+					await fetch(`/api/test/sessions/${created.sessionId}/end`, {
+						method: "POST",
+						credentials: "include",
+					})
+					return await startBuildFallbackSession()
+				}
+				return true
+			} catch (e) {
+				setSessionId(null)
+				setQuestion(null)
+				setFeedback(e instanceof Error ? e.message : "Could not start session")
+				setStatus("error")
+				return false
+			}
+		},
+		[practiceNativeId, practiceTargetId, navigate, loadNext, startBuildFallbackSession],
+	)
+
 	const startSession = useCallback(async () => {
 		setStatus("loading")
 		setFeedback(null)
@@ -279,6 +458,89 @@ function PracticePage() {
 				setFeedback("Choose two different languages (your language / language you're learning).")
 				setStatus("error")
 				return
+			}
+
+			if (vocabMode === "NEWWORDS") {
+				setFeedback(
+					"New words lists open from Build vocabulary. Switch to Build vocabulary and press Start practice — we line up the next heatmap column for you.",
+				)
+				setStatus("error")
+				return
+			}
+
+			if (vocabMode === "BUILD" && profile) {
+				const heatmapRes = await fetch(
+					`/api/progress/heatmap?from=1&to=10000&languageId=${encodeURIComponent(practiceTargetId)}`,
+					{ credentials: "include" },
+				)
+				if (heatmapRes.ok) {
+					const heatmap = (await heatmapRes.json()) as {
+						assumedRank: number
+						vocabSize: number
+						cells: {
+							wordId: string
+							rank: number
+							lemma: string
+							confidence: number | null
+							timesTested: number
+							testSentenceCount: number
+							curatedTestSentenceCount?: number
+						}[]
+					}
+					const cellsForAnalysis = heatmap.cells.map((c) => ({
+						wordId: c.wordId,
+						rank: c.rank,
+						lemma: c.lemma,
+						confidence: c.confidence,
+						timesTested: c.timesTested ?? 0,
+					}))
+					const analysis = analyzeBuildPracticeColumn(
+						cellsForAnalysis,
+						heatmap.assumedRank,
+						heatmap.vocabSize,
+					)
+					if (analysis) {
+						// Filter to words that actually have test sentences (cloze-resolvable).
+						const testableSet = new Set(
+							heatmap.cells
+								.filter((c) => (c.testSentenceCount ?? 0) > 0)
+								.map((c) => c.wordId),
+						)
+						const testableWordIds = analysis.payload.wordIds.filter((id) =>
+							testableSet.has(id),
+						)
+						const testableWords = analysis.payload.words.filter((w) =>
+							testableSet.has(w.wordId),
+						)
+						if (testableWordIds.length > 0) {
+							const testablePayload: NewWordsColumnIntroPayload = {
+								...analysis.payload,
+								wordIds: testableWordIds,
+								words: testableWords,
+								practiceWordIds: testableWordIds,
+							}
+							if (analysis.testedNotMasteredCount >= 1) {
+								await beginNewWordsColumnSession(testablePayload.wordIds)
+								return
+							}
+							setStatus("idle")
+							setNewWordsIntroPayload(testablePayload)
+							return
+						}
+						// Frontier column has words but none have joinable cloze rows — still show intro.
+						const showCuratedUnlinkedCopy = analysis.payload.wordIds.some((id) => {
+							const cell = heatmap.cells.find((c) => c.wordId === id)
+							return (cell?.curatedTestSentenceCount ?? 0) > 0
+						})
+						setStatus("idle")
+						setNewWordsIntroPayload({
+							...analysis.payload,
+							practiceWordIds: [],
+							showCuratedUnlinkedCopy,
+						})
+						return
+					}
+				}
 			}
 
 			const body: Record<string, unknown> = {
@@ -343,7 +605,15 @@ function PracticePage() {
 			setFeedback(e instanceof Error ? e.message : "Something went wrong")
 			setStatus("error")
 		}
-	}, [practiceNativeId, practiceTargetId, vocabMode, forceSentenceId, forceWordId])
+	}, [
+		practiceNativeId,
+		practiceTargetId,
+		vocabMode,
+		forceSentenceId,
+		forceWordId,
+		profile,
+		beginNewWordsColumnSession,
+	])
 
 	// Auto-start when routed with a forced sentenceId (admin sentence testing)
 	const autoStarted = useRef(false)
@@ -391,48 +661,6 @@ function PracticePage() {
 		}
 	}, [question, practiceNativeId, profile?.nativeLanguage?.id])
 
-	const loadNext = useCallback(async (sid: string) => {
-		setStatus("loading")
-		setFeedback(null)
-		try {
-			const nextRes = await fetch(`/api/test/sessions/${sid}/next`, { credentials: "include" })
-			if (!nextRes.ok) {
-				const errBody = await nextRes.json().catch(() => ({}))
-				const msg =
-					typeof errBody === "object" && errBody && "message" in errBody
-						? String((errBody as { message?: string }).message)
-						: await nextRes.text()
-				throw new Error(msg || "No more questions")
-			}
-			const data = await nextRes.json()
-
-			// Assessment mode: check if the binary search is done
-			if (data.done) {
-				setAssessmentDone({
-					assumedRank: data.assumedRank,
-					wordsTestedCount: data.wordsTestedCount,
-					message: data.message,
-				})
-				setQuestion(null)
-				setStatus("idle")
-				// Auto-end the session to save the assumed rank
-				await fetch(`/api/test/sessions/${sid}/end`, {
-					method: "POST",
-					credentials: "include",
-				})
-				return
-			}
-
-			const q = data as NextQuestion
-			setQuestion(q)
-			setAnswer("")
-			setStatus("idle")
-		} catch (e) {
-			setFeedback(e instanceof Error ? e.message : "Something went wrong")
-			setStatus("error")
-		}
-	}, [])
-
 	const submitAnswer = useCallback(async () => {
 		if (!sessionId || !question) return
 		const correct = normalizeAnswer(answer) === normalizeAnswer(question.lemma)
@@ -476,7 +704,7 @@ function PracticePage() {
 				setFeedback(expectedLine)
 			}
 		}
-		if (typeof data.confidence === "number" && vocabMode === "BUILD") {
+		if (typeof data.confidence === "number" && (vocabMode === "BUILD" || vocabMode === "NEWWORDS")) {
 			setAnswerConfidenceFlash({
 				wordId: question.wordId,
 				confidence: data.confidence,
@@ -611,11 +839,34 @@ function PracticePage() {
 			/>
 		)
 
-	const showVocabGraph = vocabMode === "BUILD" && !isGuest && !!practiceTargetId
+	const showVocabGraph =
+		(vocabMode === "BUILD" || vocabMode === "NEWWORDS") && !isGuest && !!practiceTargetId
 
 	return (
 		<div className="flex-1 flex flex-col min-h-0">
 			{header}
+			<NewWordsIntroDialog
+				open={newWordsIntroPayload !== null}
+				onOpenChange={(open) => {
+					if (!open) setNewWordsIntroPayload(null)
+				}}
+				words={newWordsIntroPayload?.words ?? []}
+				columnIndex={newWordsIntroPayload?.columnIndex ?? 0}
+				busy={newWordsIntroBusy}
+				showCuratedUnlinkedCopy={newWordsIntroPayload?.showCuratedUnlinkedCopy ?? false}
+				canBeginPractice={(newWordsIntroPayload?.practiceWordIds.length ?? 0) > 0}
+				onBegin={async () => {
+					if (!newWordsIntroPayload) return
+					if (newWordsIntroPayload.practiceWordIds.length === 0) return
+					setNewWordsIntroBusy(true)
+					try {
+						const ok = await beginNewWordsColumnSession(newWordsIntroPayload.practiceWordIds)
+						if (ok) setNewWordsIntroPayload(null)
+					} finally {
+						setNewWordsIntroBusy(false)
+					}
+				}}
+			/>
 			{showVocabGraph ? (
 				<div className="w-full min-w-0 overflow-x-auto">
 					<div className="mx-auto w-max max-w-none px-6 pt-8 pb-2">
@@ -628,8 +879,46 @@ function PracticePage() {
 							}
 							answerFlash={answerConfidenceFlash}
 							showDevGrid={account?.role === "ADMIN" && devMode}
+							onTerritoryColumnAdvanced={
+								sessionId && vocabMode === "BUILD" ? onTerritoryColumnAdvanced : undefined
+							}
 						/>
 					</div>
+					{columnAdvancePrompt && sessionId ? (
+						<div className="mx-auto w-max max-w-none px-6 pb-2 min-w-[280px]">
+							<NextColumnWordsPanel
+								payload={columnAdvancePrompt}
+								busy={columnAdvanceBusy}
+								onPracticeThisColumn={async () => {
+									setColumnAdvanceBusy(true)
+									try {
+										const ok = await beginNewWordsColumnSession(columnAdvancePrompt.wordIds, {
+											endActiveSessionId: sessionId,
+										})
+										if (ok) setColumnAdvancePrompt(null)
+									} finally {
+										setColumnAdvanceBusy(false)
+									}
+								}}
+								onNotNow={async () => {
+									setColumnAdvanceBusy(true)
+									try {
+										try {
+											sessionStorage.setItem(
+												`dismissedColumnBatch:${practiceTargetId}:${columnAdvancePrompt.columnIndex}`,
+												"1",
+											)
+										} catch {
+											/* ignore */
+										}
+										setColumnAdvancePrompt(null)
+									} finally {
+										setColumnAdvanceBusy(false)
+									}
+								}}
+							/>
+						</div>
+					) : null}
 				</div>
 			) : null}
 			<div
@@ -651,6 +940,15 @@ function PracticePage() {
 									</>
 								) : vocabMode === "FRUSTRATION" ? (
 									<>Drill your stubbornest words. Short bursts, repeat throughout the day.</>
+								) : vocabMode === "NEWWORDS" ? (
+									<>
+										You&apos;re on a short list tied to the next heatmap column — right past your
+										conquered territory. When you&apos;re done,{" "}
+										<Link to="/practice" search={{ vocabMode: "BUILD" }} className="underline">
+											switch back to Build
+										</Link>
+										.
+									</>
 								) : (
 									<>
 										Fill the blank in{" "}
@@ -972,7 +1270,7 @@ function DevUpcomingPanel({
 							: data.devNextPickAfterSubmit.ifLastAnswerCorrect.summary}
 					</p>
 				</div>
-			) : data?.vocabMode && data.vocabMode !== "BUILD" ? (
+			) : data?.vocabMode && !["BUILD", "NEWWORDS"].includes(data.vocabMode) ? (
 				<p className="text-[10px] font-mono text-muted-foreground border-b border-brand/15 pb-2">
 					Next-pick preview applies to BUILD mode only (session: {data.vocabMode}).
 				</p>
