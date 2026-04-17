@@ -157,6 +157,7 @@ export const progressRoute = new Hono()
 					effectiveRank: { gte: from, lte: to },
 					isOffensive: false,
 					isAbbreviation: false,
+					isTestable: true,
 				},
 				orderBy: [{ effectiveRank: "asc" }, { id: "asc" }],
 				select: { id: true, effectiveRank: true, lemma: true, testSentenceIds: true },
@@ -222,7 +223,7 @@ export const progressRoute = new Hono()
 						userId: user.id,
 						confidence: { gte: 0.95 },
 						timesTested: { gte: 3 },
-						word: { is: { languageId, isAbbreviation: false } },
+						word: { is: { languageId, isAbbreviation: false, isTestable: true } },
 					},
 				}),
 			])

@@ -384,27 +384,59 @@ function PracticePage() {
 		}
 	}, [practiceNativeId, practiceTargetId, navigate, loadNext])
 
-	const beginNewWordsColumnSession = useCallback(
+	/** Attach heatmap column words to Build: server prioritizes them until each is tested once this session. */
+	const beginColumnFocusBuildPractice = useCallback(
 		async (
 			columnFocusWordIds: string[],
-			opts?: { endActiveSessionId?: string | null },
+			opts?: { existingSessionId?: string | null },
 		): Promise<boolean> => {
 			setFeedback(null)
 			setStatus("loading")
 			try {
-				if (opts?.endActiveSessionId) {
-					await fetch(`/api/test/sessions/${opts.endActiveSessionId}/end`, {
-						method: "POST",
+				const existingId = opts?.existingSessionId ?? null
+				if (existingId) {
+					const patchRes = await fetch(`/api/test/sessions/${existingId}/column-focus`, {
+						method: "PATCH",
 						credentials: "include",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ wordIds: columnFocusWordIds }),
 					})
+					if (!patchRes.ok) {
+						const t = await patchRes.text()
+						throw new Error(t || patchRes.statusText)
+					}
+					let ok = false
+					for (let attempt = 0; attempt < 6; attempt++) {
+						ok = await loadNext(existingId)
+						if (ok) break
+					}
+					if (!ok) {
+						await fetch(`/api/test/sessions/${existingId}/column-focus`, {
+							method: "PATCH",
+							credentials: "include",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ clear: true }),
+						})
+						for (let attempt = 0; attempt < 4; attempt++) {
+							ok = await loadNext(existingId)
+							if (ok) break
+						}
+						if (!ok) {
+							setFeedback("No cloze available for this column. Try again later.")
+							setStatus("error")
+							return false
+						}
+					}
+					return true
 				}
+
 				const res = await fetch("/api/test/sessions", {
 					method: "POST",
 					credentials: "include",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
 						mode: "TRANSLATION",
-						vocabMode: "NEWWORDS",
+						vocabMode: "BUILD",
 						nativeLanguageId: practiceNativeId,
 						targetLanguageId: practiceTargetId,
 						columnFocusWordIds,
@@ -418,13 +450,15 @@ function PracticePage() {
 				setSessionId(created.sessionId)
 				navigate({
 					to: "/practice",
-					search: (prev) => ({ ...prev, vocabMode: "NEWWORDS" }),
+					search: (prev) => ({ ...prev, vocabMode: "BUILD" }),
 					replace: true,
 				})
-				const ok = await loadNext(created.sessionId)
+				let ok = false
+				for (let attempt = 0; attempt < 6; attempt++) {
+					ok = await loadNext(created.sessionId)
+					if (ok) break
+				}
 				if (!ok) {
-					// No cloze could be built for any word in the list — end the
-					// dead NEWWORDS session and fall back to a normal BUILD session.
 					await fetch(`/api/test/sessions/${created.sessionId}/end`, {
 						method: "POST",
 						credentials: "include",
@@ -455,7 +489,7 @@ function PracticePage() {
 
 			if (vocabMode === "NEWWORDS") {
 				setFeedback(
-					"New words lists open from Build vocabulary. Switch to Build vocabulary and press Start practice — we line up the next heatmap column for you.",
+					"List-only New words sessions are started via the API with a word-id list. For heatmap columns, stay on Build vocabulary — column words are prioritized automatically until each is tested once.",
 				)
 				setStatus("error")
 				return
@@ -493,6 +527,24 @@ function PracticePage() {
 						heatmap.vocabSize,
 					)
 					if (analysis) {
+						// #region agent log
+						fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
+							method: "POST",
+							headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b66d9c" },
+							body: JSON.stringify({
+								sessionId: "b66d9c",
+								hypothesisId: "H1",
+								location: "practice.tsx:startSession:analysis",
+								message: "heatmap column analysis",
+								data: {
+									testedNotMasteredCount: analysis.testedNotMasteredCount,
+									columnWordIdsLen: analysis.payload.wordIds.length,
+									columnIndex: analysis.payload.columnIndex,
+								},
+								timestamp: Date.now(),
+							}),
+						}).catch(() => {})
+						// #endregion
 						// Filter to words that actually have test sentences (cloze-resolvable).
 						const testableSet = new Set(
 							heatmap.cells
@@ -506,18 +558,47 @@ function PracticePage() {
 							testableSet.has(w.wordId),
 						)
 						if (testableWordIds.length > 0) {
-							const testablePayload: NewWordsColumnIntroPayload = {
+							const introPayload: NewWordsColumnIntroPayload = {
 								...analysis.payload,
-								wordIds: testableWordIds,
-								words: testableWords,
 								practiceWordIds: testableWordIds,
 							}
 							if (analysis.testedNotMasteredCount >= 1) {
-								await beginNewWordsColumnSession(testablePayload.wordIds)
+								// #region agent log
+								fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
+									method: "POST",
+									headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b66d9c" },
+									body: JSON.stringify({
+										sessionId: "b66d9c",
+										hypothesisId: "H1",
+										location: "practice.tsx:startSession:autoColumn",
+										message: "auto attach column focus",
+										data: { wordIdsLen: introPayload.wordIds.length },
+										timestamp: Date.now(),
+									}),
+								}).catch(() => {})
+								// #endregion
+								await beginColumnFocusBuildPractice(introPayload.wordIds)
 								return
 							}
+							// #region agent log
+							fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
+								method: "POST",
+								headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b66d9c" },
+								body: JSON.stringify({
+									sessionId: "b66d9c",
+									hypothesisId: "H1",
+									location: "practice.tsx:startSession:introOnly",
+									message: "show intro only — no auto column (testedNotMasteredCount < 1)",
+									data: {
+										testedNotMasteredCount: analysis.testedNotMasteredCount,
+										wordIdsLen: introPayload.wordIds.length,
+									},
+									timestamp: Date.now(),
+								}),
+							}).catch(() => {})
+							// #endregion
 							setStatus("idle")
-							setNewWordsIntroPayload(testablePayload)
+							setNewWordsIntroPayload(introPayload)
 							return
 						}
 						// Frontier column has words but none have joinable cloze rows — still show intro.
@@ -542,6 +623,20 @@ function PracticePage() {
 				nativeLanguageId: practiceNativeId,
 				targetLanguageId: practiceTargetId,
 			}
+			// #region agent log
+			fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
+				method: "POST",
+				headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b66d9c" },
+				body: JSON.stringify({
+					sessionId: "b66d9c",
+					hypothesisId: "H1",
+					location: "practice.tsx:startSession:plainPost",
+					message: "POST session without columnFocus (default build path)",
+					data: { vocabMode, hasColumnFocusInBody: false },
+					timestamp: Date.now(),
+				}),
+			}).catch(() => {})
+			// #endregion
 
 			const res = await fetch("/api/test/sessions", {
 				method: "POST",
@@ -605,7 +700,7 @@ function PracticePage() {
 		forceSentenceId,
 		forceWordId,
 		profile,
-		beginNewWordsColumnSession,
+		beginColumnFocusBuildPractice,
 	])
 
 	// Auto-start when routed with a forced sentenceId (admin sentence testing)
@@ -854,6 +949,7 @@ function PracticePage() {
 					}
 				}}
 				words={newWordsIntroPayload?.words ?? []}
+				practiceLemmaCount={newWordsIntroPayload?.practiceWordIds.length ?? 0}
 				columnIndex={newWordsIntroPayload?.columnIndex ?? 0}
 				busy={newWordsIntroBusy}
 				showCuratedUnlinkedCopy={newWordsIntroPayload?.showCuratedUnlinkedCopy ?? false}
@@ -863,9 +959,9 @@ function PracticePage() {
 					if (newWordsIntroPayload.practiceWordIds.length === 0) return
 					setNewWordsIntroBusy(true)
 					try {
-						const ok = await beginNewWordsColumnSession(
-							newWordsIntroPayload.practiceWordIds,
-							sessionId ? { endActiveSessionId: sessionId } : undefined,
+						const ok = await beginColumnFocusBuildPractice(
+							newWordsIntroPayload.wordIds,
+							sessionId ? { existingSessionId: sessionId } : undefined,
 						)
 						if (ok) setNewWordsIntroPayload(null)
 					} finally {
@@ -913,12 +1009,12 @@ function PracticePage() {
 									<>Drill your stubbornest words. Short bursts, repeat throughout the day.</>
 								) : vocabMode === "NEWWORDS" ? (
 									<>
-										You&apos;re on a short list tied to the next heatmap column — right past your
-										conquered territory. When you&apos;re done,{" "}
+										Ordered word list only (API or legacy links). Heatmap columns from{" "}
 										<Link to="/practice" search={{ vocabMode: "BUILD" }} className="underline">
-											switch back to Build
-										</Link>
-										.
+											Build vocabulary
+										</Link>{" "}
+										stay in Build: each column word is asked first until you&apos;ve seen every
+										one once, then normal Build picks resume.
 									</>
 								) : (
 									<>

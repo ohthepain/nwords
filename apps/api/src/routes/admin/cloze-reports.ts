@@ -16,6 +16,7 @@ const statusSchema = z.enum([
 	"DISMISSED",
 	"GOOD_SYNONYM",
 	"BAD_SYNONYM",
+	"EXCLUDED_FROM_TESTS",
 ])
 
 export const adminClozeReportsRoute = new Hono()
@@ -37,14 +38,16 @@ export const adminClozeReportsRoute = new Hono()
 			const reports = await prisma.clozeIssueReport.findMany({
 				where: {
 					...(targetLanguageId ? { targetLanguageId } : {}),
-					...(status ? { status } : { status: { not: "DISMISSED" } }),
+					...(status
+						? { status }
+						: { status: { notIn: ["DISMISSED", "EXCLUDED_FROM_TESTS"] } }),
 				},
 				orderBy: { createdAt: "desc" },
 				take: limit,
 				include: {
 					nativeLanguage: { select: { id: true, name: true, code: true } },
 					targetLanguage: { select: { id: true, name: true, code: true } },
-					word: { select: { positionAdjust: true } },
+					word: { select: { positionAdjust: true, isTestable: true } },
 				},
 			})
 
@@ -58,6 +61,7 @@ export const adminClozeReportsRoute = new Hono()
 					targetLanguage: r.targetLanguage,
 					wordId: r.wordId,
 					wordLemma: r.wordLemma,
+					wordIsTestable: r.word.isTestable,
 					positionAdjust: r.word.positionAdjust,
 					targetSentenceId: r.targetSentenceId,
 					hintSentenceId: r.hintSentenceId,
@@ -71,6 +75,46 @@ export const adminClozeReportsRoute = new Hono()
 					adminNote: r.adminNote,
 				})),
 			})
+		},
+	)
+
+	.post(
+		"/:id/exclude-from-vocab-tests",
+		zValidator(
+			"json",
+			z.object({ adminNote: z.string().max(2000).optional() }).default({}),
+		),
+		async (c) => {
+			const { id } = c.req.param()
+			const body = c.req.valid("json")
+
+			const report = await prisma.clozeIssueReport.findUnique({ where: { id } })
+			if (!report) {
+				return c.json({ error: "Report not found" }, 404)
+			}
+
+			const tag = "Excluded lemma from vocabulary tests (isTestable=false)."
+			const noteParts = [report.adminNote?.trim(), body.adminNote?.trim()]
+			if (report.status !== "EXCLUDED_FROM_TESTS") {
+				noteParts.push(tag)
+			}
+			const mergedNote = noteParts.filter(Boolean).join("\n")
+
+			await prisma.$transaction([
+				prisma.word.update({
+					where: { id: report.wordId },
+					data: { isTestable: false },
+				}),
+				prisma.clozeIssueReport.update({
+					where: { id },
+					data: {
+						status: "EXCLUDED_FROM_TESTS",
+						...(mergedNote ? { adminNote: mergedNote } : {}),
+					},
+				}),
+			])
+
+			return c.json({ ok: true, wordId: report.wordId, status: "EXCLUDED_FROM_TESTS" as const })
 		},
 	)
 

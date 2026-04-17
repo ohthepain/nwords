@@ -64,7 +64,7 @@ const modeCases = [
 	{
 		search: "?vocabMode=NEWWORDS",
 		title: "New words (listed)",
-		description: "Only the word list",
+		description: "Ordered word list only",
 	},
 ] as const
 

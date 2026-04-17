@@ -57,6 +57,7 @@ type ReportRow = {
   adminCorrectClue: string | null;
   adminNote: string | null;
   positionAdjust: number;
+  wordIsTestable: boolean;
 };
 
 function parseSearch(raw: Record<string, unknown>): { languageId?: string; status?: string } {
@@ -80,6 +81,7 @@ const STATUSES = [
   { value: "DISMISSED", label: "Dismissed" },
   { value: "GOOD_SYNONYM", label: "Resolved — good synonym" },
   { value: "BAD_SYNONYM", label: "Resolved — bad synonym" },
+  { value: "EXCLUDED_FROM_TESTS", label: "Resolved — word excluded from tests" },
 ] as const;
 
 function AdminClozeReportsPage() {
@@ -142,7 +144,12 @@ function AdminClozeReportsPage() {
         throw new Error(t || res.statusText);
       }
       const data = (await res.json()) as { reports: ReportRow[] };
-      setReports(data.reports);
+      setReports(
+        data.reports.map((row) => ({
+          ...row,
+          wordIsTestable: typeof row.wordIsTestable === "boolean" ? row.wordIsTestable : true,
+        })),
+      );
       setLoadState("idle");
     } catch (e) {
       setListError(e instanceof Error ? e.message : "Failed to load");
@@ -389,6 +396,30 @@ function ReportCard({
     return true;
   }
 
+  async function excludeLemmaFromVocabTests() {
+    setErr(null);
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/admin/cloze-reports/${r.id}/exclude-from-vocab-tests`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...(note.trim() ? { adminNote: note.trim() } : {}),
+        }),
+      });
+      const payload = (await res.json().catch(() => null)) as { error?: string } | null;
+      if (!res.ok) {
+        throw new Error(payload?.error ?? res.statusText);
+      }
+      await onRefresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not exclude word");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function registerSynonym(quality: "GOOD" | "BAD") {
     setErr(null);
     setSynonymSaved(null);
@@ -467,13 +498,18 @@ function ReportCard({
 
       <div className="space-y-1">
         <p className="text-xs font-mono uppercase tracking-wider text-muted-foreground">Word</p>
-        <button
-          type="button"
-          className="font-medium underline decoration-muted-foreground/40 hover:decoration-foreground cursor-pointer"
-          onClick={() => void onOpenWord(r.wordId)}
-        >
-          {r.wordLemma}
-        </button>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <button
+            type="button"
+            className="font-medium underline decoration-muted-foreground/40 hover:decoration-foreground cursor-pointer"
+            onClick={() => void onOpenWord(r.wordId)}
+          >
+            {r.wordLemma}
+          </button>
+          {r.wordIsTestable === false && (
+            <span className="text-xs text-muted-foreground">(not in vocabulary tests)</span>
+          )}
+        </div>
       </div>
 
         <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
@@ -664,6 +700,22 @@ function ReportCard({
       {err && <p className="text-sm text-destructive">{err}</p>}
 
       <div className="flex flex-wrap gap-2 pt-1">
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          disabled={busy || r.status === "EXCLUDED_FROM_TESTS"}
+          title={
+            r.status === "EXCLUDED_FROM_TESTS"
+              ? "This report is already resolved as word excluded from tests."
+              : r.wordIsTestable === false
+                ? "Lemma is already not in test pools; still records this report as handled."
+                : undefined
+          }
+          onClick={() => void excludeLemmaFromVocabTests()}
+        >
+          Remove word from tests
+        </Button>
         <Button
           type="button"
           size="sm"

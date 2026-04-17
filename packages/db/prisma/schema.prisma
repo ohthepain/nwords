@@ -418,6 +418,8 @@ enum ClozeIssueStatus {
   GOOD_SYNONYM
   /// Reporter's guess registered as a non-synonym (explicit mismatch) for the target word.
   BAD_SYNONYM
+  /// Target lemma marked non-testable (`Word.isTestable` false); excluded from cloze / heatmap pools.
+  EXCLUDED_FROM_TESTS
 }
 
 model ClozeIssueReport {

@@ -726,11 +726,12 @@ export async function resolveClozeWithHint(params: {
 			definitions: true,
 			testSentenceIds: true,
 			isAbbreviation: true,
+			isTestable: true,
 			language: { select: { code: true } },
 		},
 	})
 
-	if (!word || word.isAbbreviation) {
+	if (!word || word.isAbbreviation || !word.isTestable) {
 		return { ok: false, reason: "no_test_sentences" }
 	}
 
@@ -862,6 +863,7 @@ export async function pickRandomWordIdForCloze(
 		languageId: targetLanguageId,
 		isOffensive: false,
 		isAbbreviation: false,
+		isTestable: true,
 		testSentenceIds: { isEmpty: false },
 		...(rankRange ? { effectiveRank: { gte: rankRange.min, lte: rankRange.max } } : { effectiveRank: { gt: 0 } }),
 		...(restrict && restrict.length > 0 ? { id: { in: restrict } } : {}),
@@ -887,6 +889,7 @@ export async function pickRandomWordIdForCloze(
 			languageId: targetLanguageId,
 			isOffensive: false,
 			isAbbreviation: false,
+			isTestable: true,
 			testSentenceIds: { isEmpty: false },
 			effectiveRank: { gt: 0 },
 		}
@@ -920,6 +923,7 @@ export async function pickWordNearRank(
 		languageId: targetLanguageId,
 		isOffensive: false,
 		isAbbreviation: false,
+		isTestable: true,
 		testSentenceIds: { isEmpty: false },
 		effectiveRank: { gte: Math.max(1, targetRank - 25), lte: targetRank + 25 },
 		...(excludeWordIds.length > 0 ? { id: { notIn: excludeWordIds } } : {}),
@@ -939,6 +943,7 @@ export async function pickWordNearRank(
 			languageId: targetLanguageId,
 			isOffensive: false,
 			isAbbreviation: false,
+			isTestable: true,
 			testSentenceIds: { isEmpty: false },
 			effectiveRank: { gte: Math.max(1, targetRank - 100), lte: targetRank + 100 },
 			...(excludeWordIds.length > 0 ? { id: { notIn: excludeWordIds } } : {}),

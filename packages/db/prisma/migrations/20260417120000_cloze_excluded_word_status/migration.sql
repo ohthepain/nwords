@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "ClozeIssueStatus" ADD VALUE 'EXCLUDED_FROM_TESTS';

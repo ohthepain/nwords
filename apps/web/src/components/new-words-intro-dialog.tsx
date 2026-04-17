@@ -48,6 +48,8 @@ type Props = {
 	open: boolean
 	onOpenChange: (open: boolean) => void
 	words: WordLine[]
+	/** Lemmas with joinable cloze (subset of `words`); used for honest “practice N” copy. */
+	practiceLemmaCount: number
 	columnIndex: number
 	busy: boolean
 	/** When false, lemmas are shown but none have cloze lines yet — primary action stays off. */
@@ -99,6 +101,7 @@ export function NewWordsIntroDialog({
 	open,
 	onOpenChange,
 	words,
+	practiceLemmaCount,
 	columnIndex,
 	busy,
 	canBeginPractice,
@@ -134,12 +137,24 @@ export function NewWordsIntroDialog({
 						</DialogTitle>
 						<DialogDescription className="text-base text-foreground/85">
 							{canBeginPractice ? (
-								<>
-									Column {columnIndex + 1} on your heatmap is open. You&apos;ll practice{" "}
-									<span className="font-semibold text-foreground">{words.length}</span> fresh lemmas
-									at the edge of what you&apos;ve conquered — short, focused, and right where
-									you&apos;re growing.
-								</>
+								practiceLemmaCount === words.length ? (
+									<>
+										Column {columnIndex + 1} on your heatmap is open. You&apos;ll practice{" "}
+										<span className="font-semibold text-foreground">{words.length}</span> fresh
+										lemmas at the edge of what you&apos;ve conquered — short, focused, and right
+										where you&apos;re growing.
+									</>
+								) : (
+									<>
+										Column {columnIndex + 1} on your heatmap lists{" "}
+										<span className="font-semibold text-foreground">{words.length}</span> lemmas at
+										the frontier.{" "}
+										<span className="font-semibold text-foreground">{practiceLemmaCount}</span>{" "}
+										have cloze-ready sentences now — we&apos;ll run through those first (in column
+										order), then return to normal Build when each has been checked once this
+										session.
+									</>
+								)
 							) : showCuratedUnlinkedCopy ? (
 								<>
 									Column {columnIndex + 1} on your heatmap is open with{" "}
