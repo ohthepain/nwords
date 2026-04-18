@@ -106,4 +106,3 @@ export function checkFixedExpression(
 
 	return null
 }
-

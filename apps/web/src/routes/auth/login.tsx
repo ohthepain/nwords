@@ -72,7 +72,9 @@ function LoginPage() {
 				setResetError(result.error.message ?? "Something went wrong")
 				return
 			}
-			setResetSentMessage("If an account exists for that email, we sent a reset link. Check your inbox.")
+			setResetSentMessage(
+				"If an account exists for that email, we sent a reset link. Check your inbox.",
+			)
 			setResetResendCooldownSec(RESET_RESEND_COOLDOWN_SEC)
 		} catch {
 			setResetError("An unexpected error occurred")

@@ -16,8 +16,14 @@ export interface FixedExpressionsJobData {
 
 /** Zod schema for the LLM's structured output. */
 const fixedExpressionRuleSchema = z.object({
-	trigger: z.string().describe("A word that must appear in the cloze sentence for this rule to fire (e.g. 'tycker')"),
-	required: z.string().describe("The correct particle/preposition the exercise expects (e.g. 'om')"),
+	trigger: z
+		.string()
+		.describe(
+			"A word that must appear in the cloze sentence for this rule to fire (e.g. 'tycker')",
+		),
+	required: z
+		.string()
+		.describe("The correct particle/preposition the exercise expects (e.g. 'om')"),
 	invalid: z.array(z.string()).describe("Common wrong guesses a learner might enter instead"),
 	expression: z.string().describe("The full fixed expression in dictionary form (e.g. 'tycka om')"),
 	meaning: z.string().describe("Brief English meaning of the expression (e.g. 'to like')"),
@@ -53,9 +59,7 @@ export async function processFixedExpressionsJob(job: PgBoss.Job<FixedExpression
 		// ── Get AI config ──
 		const aiConfig = await getAiConfig()
 		if (!aiConfig) {
-			throw new Error(
-				"AI is not configured. Set provider, model, and API key in admin settings.",
-			)
+			throw new Error("AI is not configured. Set provider, model, and API key in admin settings.")
 		}
 
 		const model = createModel(aiConfig)
@@ -149,11 +153,7 @@ Now generate the rules for ${language.name}. Return them as a JSON object with a
 			})
 		}
 
-		await appendJobLog(
-			jobId,
-			"out",
-			`Done: ${upserted} rules upserted, ${errors} errors`,
-		)
+		await appendJobLog(jobId, "out", `Done: ${upserted} rules upserted, ${errors} errors`)
 
 		await prisma.ingestionJob.update({
 			where: { id: jobId },

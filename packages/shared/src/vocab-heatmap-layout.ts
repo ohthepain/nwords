@@ -11,7 +11,11 @@ export const GAP_PX = 1
 export const GRAPH_MIN_WIDTH_PX = 220
 
 /** Target number of ranks to show: max(assumed, vocab) with a floor, ×1.2, capped by loaded cells. */
-export function heatmapTargetCellCount(assumedRank: number, vocabSize: number, cellsLength: number): number {
+export function heatmapTargetCellCount(
+	assumedRank: number,
+	vocabSize: number,
+	cellsLength: number,
+): number {
 	const baseline = Math.max(assumedRank, vocabSize, 50)
 	return Math.min(cellsLength, Math.ceil(baseline * 1.2))
 }
@@ -87,7 +91,9 @@ export function completedConqueredColsFromLeft(
 			const idx = col * numRows + row
 			if (idx >= visibleCells.length) break
 			const cell = visibleCells[idx]
-			if (!territoryCellQualifiesForConqueredColumn(cell.confidence, cell.effectiveRank, assumedRank)) {
+			if (
+				!territoryCellQualifiesForConqueredColumn(cell.confidence, cell.effectiveRank, assumedRank)
+			) {
 				colOk = false
 				break
 			}

@@ -10,10 +10,7 @@
 			"runtimeArgs": ["exec", "tsx", "src/standalone.ts"],
 			"console": "integratedTerminal",
 			"skipFiles": ["<node_internals>/**", "**/node_modules/**"],
-			"resolveSourceMapLocations": [
-				"${workspaceFolder}/**",
-				"!**/node_modules/**"
-			]
+			"resolveSourceMapLocations": ["${workspaceFolder}/**", "!**/node_modules/**"]
 		},
 		{
 			"name": "Web",
@@ -24,10 +21,7 @@
 			"runtimeArgs": ["exec", "vite", "dev"],
 			"console": "integratedTerminal",
 			"skipFiles": ["<node_internals>/**", "**/node_modules/**"],
-			"resolveSourceMapLocations": [
-				"${workspaceFolder}/**",
-				"!**/node_modules/**"
-			],
+			"resolveSourceMapLocations": ["${workspaceFolder}/**", "!**/node_modules/**"],
 			"serverReadyAction": {
 				"action": "debugWithChrome",
 				"pattern": "https?://localhost:3000",
@@ -44,10 +38,7 @@
 			"runtimeArgs": ["exec", "vite", "dev"],
 			"console": "integratedTerminal",
 			"skipFiles": ["<node_internals>/**", "**/node_modules/**"],
-			"resolveSourceMapLocations": [
-				"${workspaceFolder}/**",
-				"!**/node_modules/**"
-			]
+			"resolveSourceMapLocations": ["${workspaceFolder}/**", "!**/node_modules/**"]
 		}
 	],
 	"compounds": [

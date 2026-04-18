@@ -1,6 +1,9 @@
-import { KNOWN_CONFIDENCE_THRESHOLD, KNOWN_MIN_TESTS } from "@nwords/shared"
 import { type Prisma, prisma } from "@nwords/db"
-import { linkedSentenceIdsForClozePool, prismaWhereWordHasResolvableClozeMaterial } from "./cloze-sentence-pool"
+import { KNOWN_CONFIDENCE_THRESHOLD, KNOWN_MIN_TESTS } from "@nwords/shared"
+import {
+	linkedSentenceIdsForClozePool,
+	prismaWhereWordHasResolvableClozeMaterial,
+} from "./cloze-sentence-pool"
 
 /** Same rules as `sentence-link` tokenization (for gloss ↔ parallel alignment). */
 const SCORE_SPLIT = /[^\p{L}\p{N}]+/gu

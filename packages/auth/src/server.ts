@@ -57,7 +57,8 @@ export const auth = betterAuth({
 		sendResetPassword: async ({ user, url }) => {
 			const { html, text } = renderAuthEmailTemplate({
 				heading: "Reset your password",
-				intro: "We received a request to reset the password for your nwords account. Use the button below to choose a new password. This link expires soon.",
+				intro:
+					"We received a request to reset the password for your nwords account. Use the button below to choose a new password. This link expires soon.",
 				actionLabel: "Reset password",
 				actionUrl: url,
 				outro: "If you did not request this, you can ignore this email.",
@@ -76,7 +77,8 @@ export const auth = betterAuth({
 					sendVerificationEmail: async ({ user, url }) => {
 						const { html, text } = renderAuthEmailTemplate({
 							heading: "Verify your email",
-							intro: "Thanks for signing up for nwords. Confirm your email address to finish setting up your account.",
+							intro:
+								"Thanks for signing up for nwords. Confirm your email address to finish setting up your account.",
 							actionLabel: "Verify email",
 							actionUrl: url,
 							outro: "If you did not create an account, you can ignore this email.",

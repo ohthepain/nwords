@@ -155,7 +155,7 @@ const searchWords = createServerFn({ method: "POST" })
 		const idMatchIds = uuidLike
 			? (
 					await prisma.$queryRaw<{ id: string }[]>(
-						Prisma.sql`SELECT id FROM "Word" WHERE "languageId" = ${languageId}::uuid AND id::text ILIKE ${q + "%"} LIMIT 100`,
+						Prisma.sql`SELECT id FROM "Word" WHERE "languageId" = ${languageId}::uuid AND id::text ILIKE ${`${q}%`} LIMIT 100`,
 					)
 				).map((r) => r.id)
 			: []
@@ -499,7 +499,10 @@ function AdminWordsPage() {
 								<span className="text-right" title="positionAdjust (admin offset added to rank)">
 									Adj
 								</span>
-								<span className="text-right" title="effectiveRank = rank + positionAdjust (used for ordering)">
+								<span
+									className="text-right"
+									title="effectiveRank = rank + positionAdjust (used for ordering)"
+								>
 									Eff
 								</span>
 								<span>CEFR</span>
@@ -513,10 +516,13 @@ function AdminWordsPage() {
 									<div
 										key={word.id}
 										className="group grid grid-cols-[1fr_1fr_80px_56px_56px_56px_52px_52px_1fr] gap-2 sm:gap-3 items-center px-4 py-2 hover:bg-muted/30 transition-colors w-full text-left cursor-pointer"
+										// biome-ignore lint/a11y/useSemanticElements: grid layout requires div
 										role="button"
 										tabIndex={0}
 										onClick={() => void openWordDetail(word)}
-										onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && void openWordDetail(word)}
+										onKeyDown={(e) =>
+											(e.key === "Enter" || e.key === " ") && void openWordDetail(word)
+										}
 									>
 										<span className="text-[10px] font-mono text-muted-foreground/60 break-all">
 											{word.id}

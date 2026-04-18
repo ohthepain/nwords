@@ -236,7 +236,7 @@ function AdminSentencesPage() {
 								<span>Tatoeba</span>
 								<span>Quality</span>
 								<span>Linked Words</span>
-									<span />
+								<span />
 							</div>
 							<div className="divide-y divide-border max-h-[60vh] overflow-auto">
 								{results.sentences.map((sentence) => (
@@ -284,7 +284,11 @@ function AdminSentencesPage() {
 													<Link
 														key={w.id}
 														to="/practice"
-														search={{ vocabMode: "BUILD", sentenceId: sentence.id, wordId: w.wordId }}
+														search={{
+															vocabMode: "BUILD",
+															sentenceId: sentence.id,
+															wordId: w.wordId,
+														}}
 														target="_blank"
 														className="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground hover:bg-brand/15 hover:text-brand transition-colors cursor-pointer"
 													>

@@ -11,7 +11,10 @@ export const adminWordsRoute = new Hono()
 
 	.post("/:id/exclude-from-tests", async (c) => {
 		const { id } = c.req.param()
-		const word = await prisma.word.findUnique({ where: { id }, select: { id: true, isTestable: true } })
+		const word = await prisma.word.findUnique({
+			where: { id },
+			select: { id: true, isTestable: true },
+		})
 		if (!word) return c.json({ error: "Word not found" }, 404)
 		await prisma.word.update({ where: { id }, data: { isTestable: false } })
 		return c.json({ ok: true, wordId: id })

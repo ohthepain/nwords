@@ -8,7 +8,9 @@ const LINKED_POOL_TAKE = 80
  * curated `testSentenceIds` and/or at least one `SentenceWord` in the target language (not
  * marked for removal). Matches `resolveClozeWithHint` / `linkedSentenceIdsForClozePool`.
  */
-export function prismaWhereWordHasResolvableClozeMaterial(targetLanguageId: string): Prisma.WordWhereInput {
+export function prismaWhereWordHasResolvableClozeMaterial(
+	targetLanguageId: string,
+): Prisma.WordWhereInput {
 	return {
 		isOffensive: false,
 		isAbbreviation: false,

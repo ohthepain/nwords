@@ -38,9 +38,7 @@ export const adminClozeReportsRoute = new Hono()
 			const reports = await prisma.clozeIssueReport.findMany({
 				where: {
 					...(targetLanguageId ? { targetLanguageId } : {}),
-					...(status
-						? { status }
-						: { status: { notIn: ["DISMISSED", "EXCLUDED_FROM_TESTS"] } }),
+					...(status ? { status } : { status: { notIn: ["DISMISSED", "EXCLUDED_FROM_TESTS"] } }),
 				},
 				orderBy: { createdAt: "desc" },
 				take: limit,
@@ -80,10 +78,7 @@ export const adminClozeReportsRoute = new Hono()
 
 	.post(
 		"/:id/exclude-from-vocab-tests",
-		zValidator(
-			"json",
-			z.object({ adminNote: z.string().max(2000).optional() }).default({}),
-		),
+		zValidator("json", z.object({ adminNote: z.string().max(2000).optional() }).default({})),
 		async (c) => {
 			const { id } = c.req.param()
 			const body = c.req.valid("json")

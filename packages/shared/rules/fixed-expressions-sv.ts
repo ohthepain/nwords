@@ -38,7 +38,8 @@ export const SWEDISH_FIXED_EXPRESSION_RULES: FixedExpressionRule[] = [
 		trigger: "gift",
 		required: "med",
 		invalid: ["i"],
-		messageId: "fixed_expression{ expression: "vara gift med", meaning: "to be married to" },
+		messageId: "fixed_expression",
+		params: { expression: "vara gift med", meaning: "to be married to" },
 	},
 	{
 		trigger: "van",
@@ -79,7 +80,7 @@ export const SWEDISH_FIXED_EXPRESSION_RULES: FixedExpressionRule[] = [
 		trigger: "ledsen",
 		required: "för",
 		invalid: ["över"],
-		messageId: "fin",
+		messageId: "fixed_expression",
 		params: { expression: "vara ledsen för", meaning: "to feel sorry for" },
 	},
 	{
@@ -122,7 +123,7 @@ export const SWEDISH_FIXED_EXPRESSION_RULES: FixedExpressionRule[] = [
 		required: "efter",
 		invalid: ["för"],
 		messageId: "fixed_expression",
-		params: {: "leta efter", meaning: "to look for" },
+		params: { expression: "leta efter", meaning: "to look for" },
 	},
 	{
 		trigger: "lyssnar",
@@ -164,7 +165,9 @@ export const SWEDISH_FIXED_EXPRESSION_RULES: FixedExpressionRule[] = [
 		required: "från",
 		invalid: ["av"],
 		messageId: "fixed_expression",
-		params: { expression: "komma från", meaning: "to co	{
+		params: { expression: "komma från", meaning: "to come from" },
+	},
+	{
 		trigger: "bor",
 		required: "i",
 		invalid: ["på"],
@@ -207,11 +210,10 @@ export const SWEDISH_FIXED_EXPRESSION_RULES: FixedExpressionRule[] = [
 		params: { expression: "hjälpa med", meaning: "to help with" },
 	},
 	{
-		ker",
+		trigger: "tänker",
 		required: "att",
 		invalid: ["på"],
 		messageId: "fixed_expression",
 		params: { expression: "tänka att", meaning: "to think (that)" },
 	},
-];
-
+]

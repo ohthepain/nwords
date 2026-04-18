@@ -1,4 +1,4 @@
-import { SendEmailCommand, SESv2Client } from "@aws-sdk/client-sesv2"
+import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2"
 
 const PRODUCT_NAME = "nwords"
 
