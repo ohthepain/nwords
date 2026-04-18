@@ -68,6 +68,7 @@ const searchWords = createServerFn({ method: "POST" })
 			definitions: unknown
 			cefrLevel: CefrLevel | null
 			isOffensive: boolean
+			isTestable: boolean
 			language: { code: string }
 			_count: { sentenceWords: number }
 		}) {
@@ -82,6 +83,7 @@ const searchWords = createServerFn({ method: "POST" })
 				definitions: w.definitions as string[],
 				cefrLevel: w.cefrLevel ?? cefrLevelForFrequencyRank(w.effectiveRank),
 				isOffensive: w.isOffensive,
+				isTestable: w.isTestable,
 				langCode: w.language.code,
 				sentenceCount: w._count.sentenceWords,
 			}
@@ -252,6 +254,7 @@ type AdminWordRow = {
 	definitions: string[]
 	cefrLevel: string | null
 	isOffensive: boolean
+	isTestable: boolean
 	langCode: string
 	sentenceCount: number
 }
@@ -287,6 +290,18 @@ function AdminWordsPage() {
 	const [selectedWord, setSelectedWord] = useState<AdminWordRow | null>(null)
 	const [sentences, setSentences] = useState<WordSentence[]>([])
 	const [loadingSentences, setLoadingSentences] = useState(false)
+
+	async function excludeWordFromTests(wordId: string) {
+		const res = await fetch(`/api/admin/words/${wordId}/exclude-from-tests`, {
+			method: "POST",
+			credentials: "include",
+		})
+		if (!res.ok) {
+			const body = (await res.json().catch(() => ({}))) as { error?: string }
+			throw new Error(body.error ?? "Failed to exclude word")
+		}
+		setSelectedWord((w) => (w ? { ...w, isTestable: false } : null))
+	}
 
 	async function openWordDetail(word: AdminWordRow) {
 		setSelectedWord(word)
@@ -570,6 +585,7 @@ function AdminWordsPage() {
 				word={selectedWord}
 				sentences={sentences}
 				loadingSentences={loadingSentences}
+				onExcludeFromTests={selectedWord ? () => excludeWordFromTests(selectedWord.id) : undefined}
 			/>
 		</div>
 	)

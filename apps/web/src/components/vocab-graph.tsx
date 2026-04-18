@@ -3,6 +3,7 @@ import type { BuildColumnFocusPayload } from "~/lib/vocab-graph-column-utils"
 import {
 	GAP_PX,
 	GRAPH_MIN_WIDTH_PX,
+	MIN_TERRITORY_COLUMN_INTRO_LEMMAS,
 	TERRITORY_MIN_CONFIDENCE,
 	cellQualifiesForTerritory,
 	columnWordSummaries,
@@ -198,7 +199,9 @@ export function VocabGraph({
 							.map((cell) => cell.wordId),
 					)
 					const practiceWordIds = wordIds.filter((id) => testableSet.has(id))
-					onTerritoryColumnAdvanced({ columnIndex, wordIds, words, practiceWordIds })
+					if (wordIds.length >= MIN_TERRITORY_COLUMN_INTRO_LEMMAS && practiceWordIds.length > 0) {
+						onTerritoryColumnAdvanced({ columnIndex, wordIds, words, practiceWordIds })
+					}
 					lastFiredCompletedColsRef.current = c
 				}
 			}

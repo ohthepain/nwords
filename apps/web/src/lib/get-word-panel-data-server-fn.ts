@@ -16,6 +16,7 @@ export type WordPanelWord = {
 	definitions: string[]
 	cefrLevel: string | null
 	isOffensive: boolean
+	isTestable: boolean
 	langCode: string
 	sentenceCount: number
 }
@@ -54,6 +55,7 @@ export const getWordPanelData = createServerFn({ method: "POST" })
 			definitions: (word.definitions as string[]) ?? [],
 			cefrLevel: cefrLevel ?? null,
 			isOffensive: word.isOffensive,
+			isTestable: word.isTestable,
 			langCode: word.language.code,
 			sentenceCount: word._count.sentenceWords,
 		}

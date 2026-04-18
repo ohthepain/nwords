@@ -1,4 +1,5 @@
-import type { ReactNode } from "react"
+import { type ReactNode, useState } from "react"
+import { Button } from "~/components/ui/button"
 import {
 	Dialog,
 	DialogContent,
@@ -53,6 +54,7 @@ type WordDetailDialogProps =
 			word: WordPanelWord | null
 			sentences: WordSentence[]
 			loadingSentences: boolean
+			onExcludeFromTests?: () => Promise<void>
 	  }
 	| {
 			open: boolean
@@ -66,6 +68,8 @@ type WordDetailDialogProps =
 
 export function WordDetailDialog(props: WordDetailDialogProps) {
 	const { open, onOpenChange, sentences, loadingSentences } = props
+	const [excludeBusy, setExcludeBusy] = useState(false)
+	const [excludeError, setExcludeError] = useState<string | null>(null)
 
 	function vocabBody(word: VocabWordDetail) {
 		return (
@@ -111,6 +115,7 @@ export function WordDetailDialog(props: WordDetailDialogProps) {
 	function adminHeaderAndStats(
 		word: WordPanelWord,
 		knowledge: WordPanelKnowledge | null | undefined,
+		onExcludeFromTests?: () => Promise<void>,
 	) {
 		const showVocabStats = knowledge != null
 
@@ -182,6 +187,32 @@ export function WordDetailDialog(props: WordDetailDialogProps) {
 						<StatCard label="Sentences" value={word.sentenceCount.toLocaleString()} />
 						<StatCard label="Language" value={word.langCode} />
 						<StatCard label="Offensive" value={word.isOffensive ? "Yes" : "No"} />
+						<StatCard label="Testable" value={word.isTestable ? "Yes" : "No"} />
+					</div>
+				)}
+				{onExcludeFromTests && (
+					<div className="pt-1 space-y-1">
+						<Button
+							type="button"
+							size="sm"
+							variant="secondary"
+							disabled={excludeBusy || !word.isTestable}
+							title={!word.isTestable ? "Word is already excluded from tests" : undefined}
+							onClick={async () => {
+								setExcludeBusy(true)
+								setExcludeError(null)
+								try {
+									await onExcludeFromTests()
+								} catch (e) {
+									setExcludeError(e instanceof Error ? e.message : "Failed to exclude word")
+								} finally {
+									setExcludeBusy(false)
+								}
+							}}
+						>
+							{excludeBusy ? "Removing…" : "Remove word from tests"}
+						</Button>
+						{excludeError && <p className="text-xs text-destructive">{excludeError}</p>}
 					</div>
 				)}
 			</>
@@ -192,7 +223,7 @@ export function WordDetailDialog(props: WordDetailDialogProps) {
 	if (props.variant === "vocab" && props.word) {
 		body = vocabBody(props.word)
 	} else if (props.variant === "admin" && props.word) {
-		body = adminHeaderAndStats(props.word, undefined)
+		body = adminHeaderAndStats(props.word, undefined, props.onExcludeFromTests)
 	} else if (props.variant === "practice" && props.word) {
 		body = adminHeaderAndStats(props.word, props.knowledge)
 	}

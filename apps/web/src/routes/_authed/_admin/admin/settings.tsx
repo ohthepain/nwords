@@ -57,7 +57,7 @@ const VOCAB_BUILD_FIELD_COPY: Record<
 	newWordsIntroChunkSize: {
 		title: "New words intro chunk",
 		description:
-			"Max untested (`timesTested === 0`) clozable lemmas per **New words** batch. Practice opens that dialog when the clozable working set is **below** the target **or** when the number of queued untested band lemmas is **at least** this value (so a large working set does not mean endless one-off intros).",
+			"Max untested (`timesTested === 0`) clozable lemmas per **chunk intro** batch. The dialog runs only when the clozable **working set** is **below** the working-set target and there are intros to pull from — not when the working set is already full.",
 	},
 	confidenceCriterion: {
 		title: "Confidence bar (non-confident threshold)",
@@ -153,10 +153,11 @@ function VocabBuildModeSettingsCard({
 			<CardHeader>
 				<CardTitle className="text-base">Build mode — vocabulary selection</CardTitle>
 				<CardDescription>
-					Controls how <strong>signed-in Build</strong> practice picks the next word: one heatmap-aligned{" "}
-					<strong>active band</strong>, a <strong>working set</strong> vs confidence bar, and random{" "}
-					<strong>strategy percentages</strong>. Values are stored on the server and apply to all users
-					immediately. Unset fields use code defaults from <span className="font-mono">@nwords/shared</span> (
+					Controls how <strong>signed-in Build</strong> practice picks the next word: one
+					heatmap-aligned <strong>active band</strong>, a <strong>working set</strong> vs confidence
+					bar, and random <strong>strategy percentages</strong>. Values are stored on the server and
+					apply to all users immediately. Unset fields use code defaults from{" "}
+					<span className="font-mono">@nwords/shared</span> (
 					<code className="text-xs">VOCAB_BUILD_SETTINGS_DEFAULTS</code>
 					).
 				</CardDescription>
@@ -201,7 +202,8 @@ function VocabBuildModeSettingsCard({
 				{strategyInvalid ? (
 					<p className="text-sm text-amber-700 dark:text-amber-400 bg-amber-500/10 border border-amber-500/25 rounded-md px-3 py-2">
 						Strategy percents sum to{" "}
-						{draft.pReinforceWorkingSet + draft.pIntroduce + draft.pBandWalk}; must total 100 before saving.
+						{draft.pReinforceWorkingSet + draft.pIntroduce + draft.pBandWalk}; must total 100 before
+						saving.
 					</p>
 				) : null}
 				<div className="flex flex-wrap gap-2 pt-2">

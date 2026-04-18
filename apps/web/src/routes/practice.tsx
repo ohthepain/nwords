@@ -10,7 +10,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/com
 import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
 import { type TerritoryColumnAdvancedPayload, VocabGraph } from "~/components/vocab-graph"
-import { analyzeBuildPracticeColumn } from "~/lib/vocab-graph-column-utils"
 import { WordDetailDialog } from "~/components/word-detail-dialog"
 import {
 	type WordPanelKnowledge,
@@ -18,6 +17,10 @@ import {
 	getWordPanelData,
 } from "~/lib/get-word-panel-data-server-fn"
 import { type WordSentence, getWordSentences } from "~/lib/get-word-sentences-server-fn"
+import {
+	MIN_TERRITORY_COLUMN_INTRO_LEMMAS,
+	analyzeBuildPracticeColumn,
+} from "~/lib/vocab-graph-column-utils"
 import { useDevStore } from "~/stores/dev"
 type UserMe = {
 	id: string
@@ -106,7 +109,7 @@ type UpcomingData = {
 	clozableInBand: number
 	workingSetCount: number
 	workingSetThin: boolean
-	/** True when Build will attach `newWordsBandIntroOffer` / skip auto-intros (thin working set or intro backlog ≥ chunk). */
+	/** True when Build will attach `newWordsBandIntroOffer` / skip auto-intros (working set below target). */
 	introChunkGateActive: boolean
 	devNextPickAfterSubmit: {
 		questionNumber: number
@@ -166,6 +169,29 @@ function normalizeAnswer(s: string): string {
 
 function clozeQuestionReportKey(q: NextQuestion): string {
 	return `${q.wordId}:${q.targetSentenceId}`
+}
+
+function bandIntroChunkStorageKey(targetLangId: string, practiceWordIds: string[]): string {
+	const fp = [...practiceWordIds].sort().join(",")
+	return `dismissedBandIntroChunk:${targetLangId}:${fp}`
+}
+
+function bandIntroBuildSessionStorageKey(targetLangId: string, sid: string): string {
+	return `dismissedBandIntroBuildSession:${targetLangId}:${sid}`
+}
+
+/** Persist dismiss for this chunk and (when `sid` is set) suppress further band-intro dialogs this Build session. */
+function persistBandIntroDismissal(
+	targetLangId: string,
+	practiceWordIds: string[],
+	sid: string | null | undefined,
+) {
+	try {
+		sessionStorage.setItem(bandIntroChunkStorageKey(targetLangId, practiceWordIds), "1")
+		if (sid) sessionStorage.setItem(bandIntroBuildSessionStorageKey(targetLangId, sid), "1")
+	} catch {
+		/* ignore */
+	}
 }
 
 /** Sentence-initial blank: no letters in the prompt before the cloze (allows quotes/space/punctuation). */
@@ -241,10 +267,27 @@ function PracticePage() {
 				practiceWordIds: payload.practiceWordIds,
 				introKind: "territory_column",
 			})
+			// #region agent log
+			void fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
+				method: "POST",
+				headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "27db5e" },
+				body: JSON.stringify({
+					sessionId: "27db5e",
+					location: "practice.tsx:onTerritoryColumnAdvanced",
+					message: "territory column intro shown",
+					data: {
+						columnIndex: payload.columnIndex,
+						lemmaCount: payload.practiceWordIds.length,
+						hypothesisId: "H1",
+					},
+					timestamp: Date.now(),
+					runId: "pre-fix",
+				}),
+			}).catch(() => {})
+			// #endregion
 		},
 		[sessionId, vocabMode, practiceTargetId],
 	)
-
 
 	const fetchUpcoming = useCallback(async () => {
 		if (!sessionId) return
@@ -342,17 +385,50 @@ function PracticePage() {
 	}, [userMeLoaded, isGuest, vocabMode, navigate])
 
 	const maybeOfferWorkingSetThinIntro = useCallback(
-		(nextData: { newWordsBandIntroOffer?: NewWordsBandIntroOffer | null }) => {
+		(
+			nextData: { newWordsBandIntroOffer?: NewWordsBandIntroOffer | null },
+			gateSessionId: string | null,
+		) => {
 			if (vocabMode !== "BUILD" || !practiceTargetId) return
 			const offer = nextData.newWordsBandIntroOffer
+			// #region agent log
+			void fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
+				method: "POST",
+				headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "27db5e" },
+				body: JSON.stringify({
+					sessionId: "27db5e",
+					location: "practice.tsx:maybeOfferWorkingSetThinIntro:entry",
+					message: "band intro offer evaluation",
+					data: {
+						hasOffer: Boolean(offer),
+						offerKind: offer?.kind,
+						practiceN: offer?.practiceWordIds?.length,
+						hypothesisId: "H1",
+					},
+					timestamp: Date.now(),
+					runId: "pre-fix",
+				}),
+			}).catch(() => {})
+			// #endregion
 			if (
 				!offer ||
 				(offer.kind !== "working_set_thin" && offer.kind !== "intro_backlog") ||
 				offer.practiceWordIds.length === 0
 			)
 				return
+			if (gateSessionId) {
+				try {
+					if (
+						sessionStorage.getItem(bandIntroBuildSessionStorageKey(practiceTargetId, gateSessionId))
+					) {
+						return
+					}
+				} catch {
+					/* sessionStorage unavailable — continue */
+				}
+			}
 			const fp = [...offer.practiceWordIds].sort().join(",")
-			const dismissKey = `dismissedBandIntroChunk:${practiceTargetId}:${fp}`
+			const dismissKey = bandIntroChunkStorageKey(practiceTargetId, offer.practiceWordIds)
 			const legacyKey = `dismissedWorkingSetThinIntro:${practiceTargetId}:${fp}`
 			let dismissed = false
 			try {
@@ -360,9 +436,47 @@ function PracticePage() {
 			} catch {
 				/* sessionStorage unavailable — still offer dialog */
 			}
+			// #region agent log
+			void fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
+				method: "POST",
+				headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "27db5e" },
+				body: JSON.stringify({
+					sessionId: "27db5e",
+					location: "practice.tsx:maybeOfferWorkingSetThinIntro:dismiss",
+					message: "band intro sessionStorage gate",
+					data: { dismissed, fpLen: fp.length, dismissKey, hypothesisId: "H4" },
+					timestamp: Date.now(),
+					runId: "pre-fix",
+				}),
+			}).catch(() => {})
+			// #endregion
 			if (dismissed) return
 			setNewWordsIntroPayload((prev) => {
 				if (prev !== null) return prev
+				// #region agent log
+				void fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
+					method: "POST",
+					headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "27db5e" },
+					body: JSON.stringify({
+						sessionId: "27db5e",
+						location: "practice.tsx:maybeOfferWorkingSetThinIntro:setPayload",
+						message: "showing band intro dialog",
+						data: { introKind: offer.kind, hadPrev: prev !== null, hypothesisId: "H1" },
+						timestamp: Date.now(),
+						runId: "pre-fix",
+					}),
+				}).catch(() => {})
+				// #endregion
+				if (gateSessionId) {
+					try {
+						sessionStorage.setItem(
+							bandIntroBuildSessionStorageKey(practiceTargetId, gateSessionId),
+							"1",
+						)
+					} catch {
+						/* ignore */
+					}
+				}
 				return {
 					introKind: offer.kind === "intro_backlog" ? "intro_backlog" : "working_set_thin",
 					columnIndex: 0,
@@ -376,50 +490,73 @@ function PracticePage() {
 		[vocabMode, practiceTargetId],
 	)
 
-	const loadNext = useCallback(async (sid: string): Promise<boolean> => {
-		setStatus("loading")
-		setFeedback(null)
-		try {
-			const nextRes = await fetch(`/api/test/sessions/${sid}/next`, { credentials: "include" })
-			if (!nextRes.ok) {
-				const errBody = await nextRes.json().catch(() => ({}))
-				const msg =
-					typeof errBody === "object" && errBody && "message" in errBody
-						? String((errBody as { message?: string }).message)
-						: await nextRes.text()
-				throw new Error(msg || "No more questions")
-			}
-			const data = await nextRes.json()
+	const loadNext = useCallback(
+		async (sid: string): Promise<boolean> => {
+			setStatus("loading")
+			setFeedback(null)
+			try {
+				const nextRes = await fetch(`/api/test/sessions/${sid}/next`, { credentials: "include" })
+				if (!nextRes.ok) {
+					const errBody = await nextRes.json().catch(() => ({}))
+					const msg =
+						typeof errBody === "object" && errBody && "message" in errBody
+							? String((errBody as { message?: string }).message)
+							: await nextRes.text()
+					throw new Error(msg || "No more questions")
+				}
+				const data = await nextRes.json()
 
-			// Assessment mode: check if the binary search is done
-			if (data.done) {
-				setAssessmentDone({
-					assumedRank: data.assumedRank,
-					wordsTestedCount: data.wordsTestedCount,
-					message: data.message,
-				})
-				setQuestion(null)
-				setStatus("idle")
-				// Auto-end the session to save the assumed rank
-				await fetch(`/api/test/sessions/${sid}/end`, {
+				// Assessment mode: check if the binary search is done
+				if (data.done) {
+					setAssessmentDone({
+						assumedRank: data.assumedRank,
+						wordsTestedCount: data.wordsTestedCount,
+						message: data.message,
+					})
+					setQuestion(null)
+					setStatus("idle")
+					// Auto-end the session to save the assumed rank
+					await fetch(`/api/test/sessions/${sid}/end`, {
+						method: "POST",
+						credentials: "include",
+					})
+					return true
+				}
+
+				const q = data as NextQuestion
+				// #region agent log
+				void fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
 					method: "POST",
-					credentials: "include",
-				})
+					headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "27db5e" },
+					body: JSON.stringify({
+						sessionId: "27db5e",
+						location: "practice.tsx:loadNext",
+						message: "next response before maybeOffer",
+						data: {
+							hasBandOffer: Boolean(q.newWordsBandIntroOffer),
+							offerKind: q.newWordsBandIntroOffer?.kind,
+							offerPracticeN: q.newWordsBandIntroOffer?.practiceWordIds?.length,
+							devStrat: q.devSelection?.kind,
+							hypothesisId: "H2",
+						},
+						timestamp: Date.now(),
+						runId: "pre-fix",
+					}),
+				}).catch(() => {})
+				// #endregion
+				setQuestion(q)
+				setAnswer("")
+				setStatus("idle")
+				maybeOfferWorkingSetThinIntro(q, sid)
 				return true
+			} catch (e) {
+				setFeedback(e instanceof Error ? e.message : "Something went wrong")
+				setStatus("error")
+				return false
 			}
-
-			const q = data as NextQuestion
-			setQuestion(q)
-			setAnswer("")
-			setStatus("idle")
-			maybeOfferWorkingSetThinIntro(q)
-			return true
-		} catch (e) {
-			setFeedback(e instanceof Error ? e.message : "Something went wrong")
-			setStatus("error")
-			return false
-		}
-	}, [maybeOfferWorkingSetThinIntro])
+		},
+		[maybeOfferWorkingSetThinIntro],
+	)
 
 	const startBuildFallbackSession = useCallback(async (): Promise<boolean> => {
 		setFeedback(null)
@@ -602,16 +739,9 @@ function PracticePage() {
 					if (analysis) {
 						// Filter to words that actually have test sentences (cloze-resolvable).
 						const testableSet = new Set(
-							heatmap.cells
-								.filter((c) => (c.testSentenceCount ?? 0) > 0)
-								.map((c) => c.wordId),
+							heatmap.cells.filter((c) => (c.testSentenceCount ?? 0) > 0).map((c) => c.wordId),
 						)
-						const testableWordIds = analysis.payload.wordIds.filter((id) =>
-							testableSet.has(id),
-						)
-						const testableWords = analysis.payload.words.filter((w) =>
-							testableSet.has(w.wordId),
-						)
+						const testableWordIds = analysis.payload.wordIds.filter((id) => testableSet.has(id))
 						if (testableWordIds.length > 0) {
 							const introPayload: NewWordsColumnIntroPayload = {
 								...analysis.payload,
@@ -621,22 +751,15 @@ function PracticePage() {
 								await beginColumnFocusBuildPractice(introPayload.wordIds)
 								return
 							}
-							setStatus("idle")
-							setNewWordsIntroPayload(introPayload)
+							if (analysis.payload.wordIds.length >= MIN_TERRITORY_COLUMN_INTRO_LEMMAS) {
+								setStatus("idle")
+								setNewWordsIntroPayload(introPayload)
+								return
+							}
+							await beginColumnFocusBuildPractice(introPayload.wordIds)
 							return
 						}
-						// Frontier column has words but none have joinable cloze rows — still show intro.
-						const showCuratedUnlinkedCopy = analysis.payload.wordIds.some((id) => {
-							const cell = heatmap.cells.find((c) => c.wordId === id)
-							return (cell?.curatedTestSentenceCount ?? 0) > 0
-						})
-						setStatus("idle")
-						setNewWordsIntroPayload({
-							...analysis.payload,
-							practiceWordIds: [] as string[],
-							showCuratedUnlinkedCopy,
-						})
-						return
+						// Frontier column has lemmas but none have joinable cloze — skip dead-end intro.
 					}
 				}
 			}
@@ -697,7 +820,7 @@ function PracticePage() {
 			setQuestion(q)
 			setAnswer("")
 			setStatus("idle")
-			maybeOfferWorkingSetThinIntro(q)
+			maybeOfferWorkingSetThinIntro(q, data.sessionId)
 		} catch (e) {
 			setSessionId(null)
 			setQuestion(null)
@@ -804,7 +927,10 @@ function PracticePage() {
 				setFeedback(expectedLine)
 			}
 		}
-		if (typeof data.confidence === "number" && (vocabMode === "BUILD" || vocabMode === "NEWWORDS")) {
+		if (
+			typeof data.confidence === "number" &&
+			(vocabMode === "BUILD" || vocabMode === "NEWWORDS")
+		) {
 			setAnswerConfidenceFlash({
 				wordId: question.wordId,
 				confidence: data.confidence,
@@ -955,15 +1081,52 @@ function PracticePage() {
 									newWordsIntroPayload.introKind === "working_set_thin" ||
 									newWordsIntroPayload.introKind === "intro_backlog"
 								) {
-									const fp = [...newWordsIntroPayload.practiceWordIds].sort().join(",")
-									sessionStorage.setItem(`dismissedBandIntroChunk:${practiceTargetId}:${fp}`, "1")
+									persistBandIntroDismissal(
+										practiceTargetId,
+										newWordsIntroPayload.practiceWordIds,
+										sessionId,
+									)
+									// #region agent log
+									void fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
+										method: "POST",
+										headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "27db5e" },
+										body: JSON.stringify({
+											sessionId: "27db5e",
+											location: "practice.tsx:NewWordsIntroDialog.onOpenChange",
+											message: "dismiss: band intro chunk",
+											data: { introKind: newWordsIntroPayload.introKind, hypothesisId: "H3" },
+											timestamp: Date.now(),
+											runId: "pre-fix",
+										}),
+									}).catch(() => {})
+									// #endregion
 								} else {
 									sessionStorage.setItem(
 										`dismissedColumnBatch:${practiceTargetId}:${newWordsIntroPayload.columnIndex}`,
 										"1",
 									)
+									// #region agent log
+									void fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
+										method: "POST",
+										headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "27db5e" },
+										body: JSON.stringify({
+											sessionId: "27db5e",
+											location: "practice.tsx:NewWordsIntroDialog.onOpenChange",
+											message: "dismiss: column batch",
+											data: {
+												columnIndex: newWordsIntroPayload.columnIndex,
+												introKind: newWordsIntroPayload.introKind,
+												hypothesisId: "H3",
+											},
+											timestamp: Date.now(),
+											runId: "pre-fix",
+										}),
+									}).catch(() => {})
+									// #endregion
 								}
-							} catch { /* ignore */ }
+							} catch {
+								/* ignore */
+							}
 						}
 						setNewWordsIntroPayload(null)
 					}
@@ -987,6 +1150,36 @@ function PracticePage() {
 							newWordsIntroPayload.wordIds,
 							sessionId ? { existingSessionId: sessionId } : undefined,
 						)
+						// #region agent log
+						if (ok) {
+							if (
+								newWordsIntroPayload.introKind === "working_set_thin" ||
+								newWordsIntroPayload.introKind === "intro_backlog"
+							) {
+								persistBandIntroDismissal(
+									practiceTargetId,
+									newWordsIntroPayload.practiceWordIds,
+									sessionId,
+								)
+							}
+							void fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
+								method: "POST",
+								headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "27db5e" },
+								body: JSON.stringify({
+									sessionId: "27db5e",
+									location: "practice.tsx:onBeginLetsPractice",
+									message: "begin practice OK; payload cleared without onOpenChange path",
+									data: {
+										introKind: newWordsIntroPayload.introKind,
+										wordCount: newWordsIntroPayload.wordIds.length,
+										hypothesisId: "H3",
+									},
+									timestamp: Date.now(),
+									runId: "pre-fix",
+								}),
+							}).catch(() => {})
+						}
+						// #endregion
 						if (ok) setNewWordsIntroPayload(null)
 					} finally {
 						setNewWordsIntroBusy(false)
@@ -1037,8 +1230,8 @@ function PracticePage() {
 										<Link to="/practice" search={{ vocabMode: "BUILD" }} className="underline">
 											Build vocabulary
 										</Link>{" "}
-										stay in Build: each column word is asked first until you&apos;ve seen every
-										one once, then normal Build picks resume.
+										stay in Build: each column word is asked first until you&apos;ve seen every one
+										once, then normal Build picks resume.
 									</>
 								) : (
 									<>
@@ -1400,10 +1593,10 @@ function DevUpcomingPanel({
 							· working set thin ({data.workingSetCount} clozable in band)
 						</span>
 					) : null}
-					{data?.introChunkGateActive && !data.workingSetThin ? (
+					{data?.introChunkGateActive ? (
 						<span className="normal-case text-muted-foreground font-mono">
 							{" "}
-							· intro chunk gate (backlog ≥ chunk)
+							· band chunk intro on next pick
 						</span>
 					) : null}
 				</span>

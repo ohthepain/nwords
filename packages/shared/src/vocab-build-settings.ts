@@ -16,9 +16,9 @@ export type VocabBuildSettings = {
 	/** Target size of the working set (tested + non-confident); intro path is favored when actual count is below this. */
 	workingSetSize: number
 	/**
-	 * Max **intro** band lemmas (`timesTested === 0`) per New words batch. The dialog also appears when the
-	 * clozable intro **backlog** in the active band is **≥** this value, even if the working set is already
-	 * at or above `workingSetSize` (avoids endless one-at-a-time intros).
+	 * Max **intro** band lemmas (`timesTested === 0`) per New words batch when the reinforce working set is
+	 * **below** `workingSetSize` (chunk dialog + column-style first pass). Does not trigger while the working
+	 * set is already at target.
 	 */
 	newWordsIntroChunkSize: number
 	/** Words with `confidence == null` or `confidence < confidenceCriterion` count as non-confident (0–1). */

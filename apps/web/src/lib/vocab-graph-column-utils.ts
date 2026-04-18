@@ -6,6 +6,12 @@ export const GAP_PX = 1
 /** Same threshold as the heatmap “conquered column” slab in `vocab-graph.tsx`. */
 export const TERRITORY_MIN_CONFIDENCE = 0.9
 
+/**
+ * “New territory” intro needs at least this many lemmas in the frontier column — a single
+ * below-threshold cell is normal in-flight review, not a batch worth celebrating.
+ */
+export const MIN_TERRITORY_COLUMN_INTRO_LEMMAS = 2
+
 export const GRAPH_MIN_WIDTH_PX = 220
 
 export function squareSizePx(wordCount: number): number {
