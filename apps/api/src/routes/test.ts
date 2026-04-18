@@ -623,6 +623,52 @@ async function handleNewWordsNext(
   );
 }
 
+type NewWordsBandIntroOfferJson = {
+  kind: "working_set_thin" | "intro_backlog";
+  wordIds: string[];
+  words: { wordId: string; lemma: string; rank: number }[];
+  practiceWordIds: string[];
+  workingSetCount: number;
+  workingSetTarget: number;
+  /** Clozable `timesTested===0` lemmas still in the active band when this offer was built. */
+  introBacklogCount: number;
+};
+
+/** Clozable intro lemmas (band order) for the New words chunk dialog; `null` if nothing to offer. */
+async function buildNewWordsBandIntroOfferJson(args: {
+  languageId: string;
+  introIdsOrdered: string[];
+  chunkSize: number;
+  workingSetCount: number;
+  workingSetTarget: number;
+  kind: "working_set_thin" | "intro_backlog";
+}): Promise<NewWordsBandIntroOfferJson | null> {
+  const { languageId, introIdsOrdered, chunkSize, workingSetCount, workingSetTarget, kind } = args;
+  if (introIdsOrdered.length === 0 || chunkSize < 1) return null;
+  const slice = introIdsOrdered.slice(0, chunkSize);
+  const rows = await prisma.word.findMany({
+    where: { languageId, id: { in: slice } },
+    select: { id: true, lemma: true, effectiveRank: true },
+  });
+  const byId = new Map(rows.map((w) => [w.id, w]));
+  const words: { wordId: string; lemma: string; rank: number }[] = [];
+  for (const id of slice) {
+    const w = byId.get(id);
+    if (w) words.push({ wordId: w.id, lemma: w.lemma, rank: w.effectiveRank });
+  }
+  if (words.length === 0) return null;
+  const wordIds = words.map((w) => w.wordId);
+  return {
+    kind,
+    wordIds,
+    words,
+    practiceWordIds: wordIds,
+    workingSetCount,
+    workingSetTarget,
+    introBacklogCount: introIdsOrdered.length,
+  };
+}
+
 /**
  * BUILD mode (signed-in): heatmap-aligned **active band**, then random **strategy** among reinforce /
  * introduce / band-walk. Column focus (if any) runs first until each listed lemma has one session
@@ -764,6 +810,29 @@ async function handleBuildNext(
     .map((r) => r.wordId);
 
   const workingSetThin = workingIds.length < build.workingSetSize;
+  const introBacklog = introIds.length;
+  const backlogMeetsChunk = introBacklog >= build.newWordsIntroChunkSize;
+  /** Chunk new intros instead of random Build when the working set is thin OR enough untested band lemmas queued. */
+  const gateBandIntrosToChunk =
+    introBacklog > 0 && (workingSetThin || backlogMeetsChunk);
+  const introOfferKind: "working_set_thin" | "intro_backlog" = workingSetThin
+    ? "working_set_thin"
+    : "intro_backlog";
+  const newWordsBandIntroOffer = gateBandIntrosToChunk
+    ? await buildNewWordsBandIntroOfferJson({
+        languageId: langs.targetLanguageId,
+        introIdsOrdered: introIds,
+        chunkSize: build.newWordsIntroChunkSize,
+        workingSetCount: workingIds.length,
+        workingSetTarget: build.workingSetSize,
+        kind: introOfferKind,
+      })
+    : null;
+  const maybeBandIntro = newWordsBandIntroOffer ? { newWordsBandIntroOffer } : {};
+  /** Only gate when the offer JSON built; otherwise Build can still pick intros (avoid no-question deadlock). */
+  const skipAutoIntro = Boolean(newWordsBandIntroOffer);
+  const introIdSet = new Set(introIds);
+  const bandWalkIdsGated = skipAutoIntro ? bandWalkIds.filter((id) => !introIdSet.has(id)) : bandWalkIds;
   const primary = rollBuildStrategy(build, workingSetThin);
   const strategyOrder: BuildStrategyKind[] = [
     primary,
@@ -779,7 +848,14 @@ async function handleBuildNext(
 
   for (let pass = 0; pass < 40; pass++) {
     for (const strat of strategyOrder) {
-      const ordered = strat === "reinforce" ? workingIds : strat === "introduce" ? introIds : bandWalkIds;
+      const ordered =
+        strat === "reinforce"
+          ? workingIds
+          : strat === "introduce"
+            ? skipAutoIntro
+              ? []
+              : introIds
+            : bandWalkIdsGated;
       const spread = strat === "reinforce" ? SPREAD_REINFORCE : strat === "introduce" ? SPREAD_INTRO : SPREAD_WALK;
       const biasHead = strat !== "band_walk";
       const wordId = pickSpreadFromOrdered(ordered, testedInSession, tried, spread, biasHead);
@@ -796,8 +872,12 @@ async function handleBuildNext(
         strat === "reinforce"
           ? `Reinforce working set: ${workingIds.length} clozable lemmas (tested, below confidence ${build.confidenceCriterion}, not verified-known). Rolled order: ${orderLabel}. Band size ${bandRows.length}.`
           : strat === "introduce"
-            ? `Introduce: ${introIds.length} clozable lemmas with timesTested===0 in active band. Rolled order: ${orderLabel}.`
-            : `Band walk: ${bandWalkIds.length} clozable non-verified lemmas in active band. Rolled order: ${orderLabel}.`;
+            ? skipAutoIntro
+              ? `Introduce skipped: ${workingSetThin ? "working set below target" : `intro backlog ≥ chunk (${build.newWordsIntroChunkSize})`} — new band intros are offered via New words chunk first. Rolled order: ${orderLabel}.`
+              : `Introduce: ${introIds.length} clozable lemmas with timesTested===0 in active band. Rolled order: ${orderLabel}.`
+            : skipAutoIntro
+              ? `Band walk (no timesTested===0): ${bandWalkIdsGated.length} clozable tested-but-not-verified lemmas; untested band lemmas deferred to New words chunk. Rolled order: ${orderLabel}.`
+              : `Band walk: ${bandWalkIds.length} clozable non-verified lemmas in active band. Rolled order: ${orderLabel}.`;
 
       const baseSel = devSelection(vocabMode, strat, stratSummary);
       return c.json({
@@ -815,12 +895,16 @@ async function handleBuildNext(
         sessionMode: session.mode,
         vocabMode,
         devSelection: { ...baseSel, strategyOrder },
+        ...maybeBandIntro,
       });
     }
   }
 
-  const clozableBandIds = bandRows.filter((r) => clozableWordIds.has(r.wordId)).map((r) => r.wordId);
-  const ranks = bandRows.filter((r) => clozableWordIds.has(r.wordId)).map((r) => r.effectiveRank);
+  const clozableBandRows = bandRows.filter(
+    (r) => clozableWordIds.has(r.wordId) && (!skipAutoIntro || !introIdSet.has(r.wordId)),
+  );
+  const clozableBandIds = clozableBandRows.map((r) => r.wordId);
+  const ranks = clozableBandRows.map((r) => r.effectiveRank);
   if (clozableBandIds.length > 0 && ranks.length > 0) {
     const low = Math.min(...ranks);
     const high = Math.max(...ranks);
@@ -859,6 +943,7 @@ async function handleBuildNext(
           "fallback",
           "Fallback: random clozable lemma in active band (rank window from band) after strategy passes failed",
         ),
+        ...maybeBandIntro,
       });
     }
   }
@@ -1648,6 +1733,10 @@ export const testRoute = new Hono<OptionalAuthEnv>()
       .map((r) => r.wordId);
 
     const workingSetThinPreview = workingIds.length < build.workingSetSize;
+    const introBacklogPreview = introIds.length;
+    const introChunkGateActivePreview =
+      introBacklogPreview > 0 &&
+      (workingSetThinPreview || introBacklogPreview >= build.newWordsIntroChunkSize);
 
     const wordSelect = {
       id: true,
@@ -1791,6 +1880,7 @@ export const testRoute = new Hono<OptionalAuthEnv>()
       clozableInBand: clozableWordIds.size,
       workingSetCount: workingIds.length,
       workingSetThin: workingSetThinPreview,
+      introChunkGateActive: introChunkGateActivePreview,
       devNextPickAfterSubmit:
         vocabMode === "BUILD" && nextAfterCorrect && nextAfterWrong
           ? {

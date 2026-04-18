@@ -33,6 +33,7 @@ type AppSettingsResponse = {
 const VOCAB_BUILD_FIELD_ORDER: (keyof VocabBuildSettings)[] = [
 	"frontierBandMax",
 	"workingSetSize",
+	"newWordsIntroChunkSize",
 	"confidenceCriterion",
 	"pReinforceWorkingSet",
 	"pIntroduce",
@@ -52,6 +53,11 @@ const VOCAB_BUILD_FIELD_COPY: Record<
 		title: "Working set target",
 		description:
 			"Target count of **clozable** lemmas in the band that are **tested** (`timesTested > 0`), **not** verified-known, and **below** the confidence criterion. When the actual count is **below** this, the next question’s strategy roll **boosts** the introduce (untested) branch.",
+	},
+	newWordsIntroChunkSize: {
+		title: "New words intro chunk",
+		description:
+			"Max untested (`timesTested === 0`) clozable lemmas per **New words** batch. Practice opens that dialog when the clozable working set is **below** the target **or** when the number of queued untested band lemmas is **at least** this value (so a large working set does not mean endless one-off intros).",
 	},
 	confidenceCriterion: {
 		title: "Confidence bar (non-confident threshold)",
@@ -292,9 +298,14 @@ function AdminSiteSettingsPage() {
 						Deployment-wide flags. Changes apply to all users immediately.
 					</p>
 				</div>
-				<Button variant="outline" size="sm" asChild>
-					<Link to="/admin">Admin home</Link>
-				</Button>
+				<div className="flex gap-2">
+					<Button variant="outline" size="sm" onClick={() => void load()}>
+						Refresh
+					</Button>
+					<Button variant="outline" size="sm" asChild>
+						<Link to="/admin">Admin home</Link>
+					</Button>
+				</div>
 			</div>
 
 			{settings ? <VocabBuildModeSettingsCard settings={settings} onSaved={setSettings} /> : null}

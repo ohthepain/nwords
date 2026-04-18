@@ -17,6 +17,7 @@ const vocabBuildPatchSchema = z
 	.object({
 		frontierBandMax: z.number().int().min(5).max(200).optional(),
 		workingSetSize: z.number().int().min(1).max(80).optional(),
+		newWordsIntroChunkSize: z.number().int().min(1).max(40).optional(),
 		confidenceCriterion: z.number().min(0.5).max(0.99).optional(),
 		pReinforceWorkingSet: z.number().int().min(0).max(100).optional(),
 		pIntroduce: z.number().int().min(0).max(100).optional(),

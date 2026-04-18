@@ -44,6 +44,16 @@ type DevSelection = {
 	strategyOrder?: string[]
 }
 
+type NewWordsBandIntroOffer = {
+	kind: "working_set_thin" | "intro_backlog"
+	wordIds: string[]
+	words: { wordId: string; lemma: string; rank: number }[]
+	practiceWordIds: string[]
+	workingSetCount: number
+	workingSetTarget: number
+	introBacklogCount: number
+}
+
 type NextQuestion = {
 	wordId: string
 	lemma: string
@@ -60,6 +70,7 @@ type NextQuestion = {
 	sessionMode: string
 	vocabMode?: VocabMode
 	devSelection?: DevSelection
+	newWordsBandIntroOffer?: NewWordsBandIntroOffer | null
 }
 
 type UpcomingWord = {
@@ -95,6 +106,8 @@ type UpcomingData = {
 	clozableInBand: number
 	workingSetCount: number
 	workingSetThin: boolean
+	/** True when Build will attach `newWordsBandIntroOffer` / skip auto-intros (thin working set or intro backlog ≥ chunk). */
+	introChunkGateActive: boolean
 	devNextPickAfterSubmit: {
 		questionNumber: number
 		ifLastAnswerCorrect: DevNextPickPreview
@@ -116,10 +129,15 @@ type PracticeSearch = {
 	wordId?: string
 }
 
+/** Distinguishes dismiss keys; dialog maps `working_set_thin` to the same copy as `territory_column`. */
+type NewWordsIntroPayloadKind = "territory_column" | "working_set_thin" | "intro_backlog"
+
 /** Intro dialog state: `wordIds`/`words` are the column batch; session uses `practiceWordIds` only. */
 type NewWordsColumnIntroPayload = TerritoryColumnAdvancedPayload & {
 	/** Some column lemmas have curated sentence IDs but none pass the cloze join (links / sentence rows). */
 	showCuratedUnlinkedCopy?: boolean
+	introKind?: NewWordsIntroPayloadKind
+	introBacklogCount?: number
 }
 
 export const Route = createFileRoute("/practice")({
@@ -221,6 +239,7 @@ function PracticePage() {
 			setNewWordsIntroPayload({
 				...payload,
 				practiceWordIds: payload.practiceWordIds,
+				introKind: "territory_column",
 			})
 		},
 		[sessionId, vocabMode, practiceTargetId],
@@ -322,6 +341,41 @@ function PracticePage() {
 		})
 	}, [userMeLoaded, isGuest, vocabMode, navigate])
 
+	const maybeOfferWorkingSetThinIntro = useCallback(
+		(nextData: { newWordsBandIntroOffer?: NewWordsBandIntroOffer | null }) => {
+			if (vocabMode !== "BUILD" || !practiceTargetId) return
+			const offer = nextData.newWordsBandIntroOffer
+			if (
+				!offer ||
+				(offer.kind !== "working_set_thin" && offer.kind !== "intro_backlog") ||
+				offer.practiceWordIds.length === 0
+			)
+				return
+			const fp = [...offer.practiceWordIds].sort().join(",")
+			const dismissKey = `dismissedBandIntroChunk:${practiceTargetId}:${fp}`
+			const legacyKey = `dismissedWorkingSetThinIntro:${practiceTargetId}:${fp}`
+			let dismissed = false
+			try {
+				dismissed = !!(sessionStorage.getItem(dismissKey) || sessionStorage.getItem(legacyKey))
+			} catch {
+				/* sessionStorage unavailable — still offer dialog */
+			}
+			if (dismissed) return
+			setNewWordsIntroPayload((prev) => {
+				if (prev !== null) return prev
+				return {
+					introKind: offer.kind === "intro_backlog" ? "intro_backlog" : "working_set_thin",
+					columnIndex: 0,
+					wordIds: offer.wordIds,
+					words: offer.words,
+					practiceWordIds: offer.practiceWordIds,
+					introBacklogCount: offer.introBacklogCount,
+				}
+			})
+		},
+		[vocabMode, practiceTargetId],
+	)
+
 	const loadNext = useCallback(async (sid: string): Promise<boolean> => {
 		setStatus("loading")
 		setFeedback(null)
@@ -358,13 +412,14 @@ function PracticePage() {
 			setQuestion(q)
 			setAnswer("")
 			setStatus("idle")
+			maybeOfferWorkingSetThinIntro(q)
 			return true
 		} catch (e) {
 			setFeedback(e instanceof Error ? e.message : "Something went wrong")
 			setStatus("error")
 			return false
 		}
-	}, [])
+	}, [maybeOfferWorkingSetThinIntro])
 
 	const startBuildFallbackSession = useCallback(async (): Promise<boolean> => {
 		setFeedback(null)
@@ -642,6 +697,7 @@ function PracticePage() {
 			setQuestion(q)
 			setAnswer("")
 			setStatus("idle")
+			maybeOfferWorkingSetThinIntro(q)
 		} catch (e) {
 			setSessionId(null)
 			setQuestion(null)
@@ -656,6 +712,7 @@ function PracticePage() {
 		forceWordId,
 		profile,
 		beginColumnFocusBuildPractice,
+		maybeOfferWorkingSetThinIntro,
 	])
 
 	// Auto-start when routed with a forced sentenceId (admin sentence testing)
@@ -892,12 +949,20 @@ function PracticePage() {
 				open={newWordsIntroPayload !== null}
 				onOpenChange={(open) => {
 					if (!open) {
-						if (newWordsIntroPayload && sessionId && practiceTargetId) {
+						if (newWordsIntroPayload && practiceTargetId) {
 							try {
-								sessionStorage.setItem(
-									`dismissedColumnBatch:${practiceTargetId}:${newWordsIntroPayload.columnIndex}`,
-									"1",
-								)
+								if (
+									newWordsIntroPayload.introKind === "working_set_thin" ||
+									newWordsIntroPayload.introKind === "intro_backlog"
+								) {
+									const fp = [...newWordsIntroPayload.practiceWordIds].sort().join(",")
+									sessionStorage.setItem(`dismissedBandIntroChunk:${practiceTargetId}:${fp}`, "1")
+								} else {
+									sessionStorage.setItem(
+										`dismissedColumnBatch:${practiceTargetId}:${newWordsIntroPayload.columnIndex}`,
+										"1",
+									)
+								}
 							} catch { /* ignore */ }
 						}
 						setNewWordsIntroPayload(null)
@@ -905,6 +970,10 @@ function PracticePage() {
 				}}
 				words={newWordsIntroPayload?.words ?? []}
 				practiceLemmaCount={newWordsIntroPayload?.practiceWordIds.length ?? 0}
+				introKind={
+					newWordsIntroPayload?.introKind === "intro_backlog" ? "intro_backlog" : "territory_column"
+				}
+				introBacklogCount={newWordsIntroPayload?.introBacklogCount}
 				columnIndex={newWordsIntroPayload?.columnIndex ?? 0}
 				busy={newWordsIntroBusy}
 				showCuratedUnlinkedCopy={newWordsIntroPayload?.showCuratedUnlinkedCopy ?? false}
@@ -1329,6 +1398,12 @@ function DevUpcomingPanel({
 						<span className="normal-case text-muted-foreground font-mono">
 							{" "}
 							· working set thin ({data.workingSetCount} clozable in band)
+						</span>
+					) : null}
+					{data?.introChunkGateActive && !data.workingSetThin ? (
+						<span className="normal-case text-muted-foreground font-mono">
+							{" "}
+							· intro chunk gate (backlog ≥ chunk)
 						</span>
 					) : null}
 				</span>

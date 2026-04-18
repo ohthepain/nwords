@@ -15,6 +15,12 @@ export type VocabBuildSettings = {
 	frontierBandMax: number
 	/** Target size of the working set (tested + non-confident); intro path is favored when actual count is below this. */
 	workingSetSize: number
+	/**
+	 * Max **intro** band lemmas (`timesTested === 0`) per New words batch. The dialog also appears when the
+	 * clozable intro **backlog** in the active band is **≥** this value, even if the working set is already
+	 * at or above `workingSetSize` (avoids endless one-at-a-time intros).
+	 */
+	newWordsIntroChunkSize: number
 	/** Words with `confidence == null` or `confidence < confidenceCriterion` count as non-confident (0–1). */
 	confidenceCriterion: number
 	/** Random strategy: reinforce working set (0–100). Three percents must sum to 100. */
@@ -28,6 +34,7 @@ export type VocabBuildSettings = {
 export const VOCAB_BUILD_SETTINGS_DEFAULTS: VocabBuildSettings = {
 	frontierBandMax: 50,
 	workingSetSize: 10,
+	newWordsIntroChunkSize: 5,
 	confidenceCriterion: 0.85,
 	pReinforceWorkingSet: 40,
 	pIntroduce: 35,
@@ -40,6 +47,7 @@ export const VOCAB_BUILD_SETTINGS_LIMITS: {
 } = {
 	frontierBandMax: { min: 5, max: 200 },
 	workingSetSize: { min: 1, max: 80 },
+	newWordsIntroChunkSize: { min: 1, max: 40 },
 	confidenceCriterion: { min: 0.5, max: 0.99 },
 	pReinforceWorkingSet: { min: 0, max: 100 },
 	pIntroduce: { min: 0, max: 100 },
