@@ -1,0 +1,65 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "API",
+			"type": "node",
+			"request": "launch",
+			"cwd": "${workspaceFolder}/apps/api",
+			"runtimeExecutable": "pnpm",
+			"runtimeArgs": ["exec", "tsx", "src/standalone.ts"],
+			"console": "integratedTerminal",
+			"skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+			"resolveSourceMapLocations": [
+				"${workspaceFolder}/**",
+				"!**/node_modules/**"
+			]
+		},
+		{
+			"name": "Web",
+			"type": "node",
+			"request": "launch",
+			"cwd": "${workspaceFolder}/apps/web",
+			"runtimeExecutable": "pnpm",
+			"runtimeArgs": ["exec", "vite", "dev"],
+			"console": "integratedTerminal",
+			"skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+			"resolveSourceMapLocations": [
+				"${workspaceFolder}/**",
+				"!**/node_modules/**"
+			],
+			"serverReadyAction": {
+				"action": "debugWithChrome",
+				"pattern": "https?://localhost:3000",
+				"uriFormat": "http://localhost:3000",
+				"webRoot": "${workspaceFolder}/apps/web"
+			}
+		},
+		{
+			"name": "Web (no browser)",
+			"type": "node",
+			"request": "launch",
+			"cwd": "${workspaceFolder}/apps/web",
+			"runtimeExecutable": "pnpm",
+			"runtimeArgs": ["exec", "vite", "dev"],
+			"console": "integratedTerminal",
+			"skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+			"resolveSourceMapLocations": [
+				"${workspaceFolder}/**",
+				"!**/node_modules/**"
+			]
+		}
+	],
+	"compounds": [
+		{
+			"name": "Web + API",
+			"configurations": ["API", "Web"],
+			"stopAll": true,
+			"presentation": {
+				"hidden": false,
+				"group": "",
+				"order": 1
+			}
+		}
+	]
+}

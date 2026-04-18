@@ -1,69 +1,85 @@
 /**
  * Build-mode vocabulary selection tuning (signed-in Build).
- * Defaults match historical `test.ts` constants; deployments can override via AppSettings JSON.
+ * Defaults are applied when AppSettings JSON is missing keys; deployments override via admin PATCH.
+ *
+ * Selection uses one **active band** (heatmap-aligned column-major slice after conquered columns),
+ * a **working set** (tested, not verified-known, below `confidenceCriterion`), and random **strategy**
+ * percentages instead of legacy bucket/cadence weights.
  */
 
 export type VocabBuildSettings = {
-	/** Percent roll for the “new” (frontier) bucket when mood is eligible; 0–100. */
-	weightNew: number
-	/** Percent roll for the shaky bucket when mood is eligible; 0–100. */
-	weightShaky: number
-	/** Consecutive wrong answers in the session before mood bucket is eligible. */
-	moodMinStreakWrong: number
-	/** Max candidate ids considered for shaky / mood bucket sampling. */
-	candidateCap: number
-	/** Max lemmas in the frontier introduction queue (rank > assumed, no row). */
+	/**
+	 * Max lemmas in the active band window (column-major from first cell after conquered columns),
+	 * capped within the visible heatmap slice. Main “don’t race ahead” knob.
+	 */
 	frontierBandMax: number
-	/** Spread for session de-duplication when picking from ordered id lists. */
-	sessionExclusionSpread: number
-	/** Spread cap for new/shaky bucket picks near the head of the rank queue. */
-	newSpread: number
-	/** Questions 2..N use territory opening (active-first unverified pool). */
-	territoryOpening: number
-	/** After opening, every Nth question is a territory revisit. */
-	territoryRevisitEvery: number
-	/** Spread for territory revisit sampling near the head. */
-	territoryHeadSpread: number
-	/** Opening de-emphasizes words with at least this many misses (timesTested − timesCorrect). */
-	heavyMissThreshold: number
+	/** Target size of the working set (tested + non-confident); intro path is favored when actual count is below this. */
+	workingSetSize: number
+	/** Words with `confidence == null` or `confidence < confidenceCriterion` count as non-confident (0–1). */
+	confidenceCriterion: number
+	/** Random strategy: reinforce working set (0–100). Three percents must sum to 100. */
+	pReinforceWorkingSet: number
+	/** Random strategy: introduce unseen-in-practice (`timesTested === 0`) band lemmas (0–100). */
+	pIntroduce: number
+	/** Random strategy: walk / consolidate anywhere in the band except verified-known (0–100). */
+	pBandWalk: number
 }
 
 export const VOCAB_BUILD_SETTINGS_DEFAULTS: VocabBuildSettings = {
-	weightNew: 48,
-	weightShaky: 37,
-	moodMinStreakWrong: 2,
-	candidateCap: 45,
 	frontierBandMax: 50,
-	sessionExclusionSpread: 28,
-	newSpread: 6,
-	territoryOpening: 5,
-	territoryRevisitEvery: 4,
-	territoryHeadSpread: 5,
-	heavyMissThreshold: 8,
+	workingSetSize: 10,
+	confidenceCriterion: 0.85,
+	pReinforceWorkingSet: 40,
+	pIntroduce: 35,
+	pBandWalk: 25,
 }
 
 /** Allowed ranges for admin UI and server-side clamping. */
 export const VOCAB_BUILD_SETTINGS_LIMITS: {
 	[K in keyof VocabBuildSettings]: { min: number; max: number }
 } = {
-	weightNew: { min: 0, max: 100 },
-	weightShaky: { min: 0, max: 100 },
-	moodMinStreakWrong: { min: 1, max: 20 },
-	candidateCap: { min: 5, max: 200 },
 	frontierBandMax: { min: 5, max: 200 },
-	sessionExclusionSpread: { min: 3, max: 100 },
-	newSpread: { min: 1, max: 50 },
-	/** 0 disables territory opening; otherwise questions 2..N use it. */
-	territoryOpening: { min: 0, max: 50 },
-	/** 0 disables territory revisit cadence. */
-	territoryRevisitEvery: { min: 0, max: 30 },
-	territoryHeadSpread: { min: 1, max: 50 },
-	heavyMissThreshold: { min: 1, max: 50 },
+	workingSetSize: { min: 1, max: 80 },
+	confidenceCriterion: { min: 0.5, max: 0.99 },
+	pReinforceWorkingSet: { min: 0, max: 100 },
+	pIntroduce: { min: 0, max: 100 },
+	pBandWalk: { min: 0, max: 100 },
 }
 
 function clampKey<K extends keyof VocabBuildSettings>(key: K, v: number): number {
 	const { min, max } = VOCAB_BUILD_SETTINGS_LIMITS[key]
+	if (key === "confidenceCriterion") {
+		return Math.min(max, Math.max(min, Math.round(v * 1000) / 1000))
+	}
 	return Math.round(Math.min(max, Math.max(min, v)))
+}
+
+function normalizeStrategyPercents(out: VocabBuildSettings): void {
+	const r = Math.max(0, Math.min(100, Math.round(out.pReinforceWorkingSet)))
+	const i = Math.max(0, Math.min(100, Math.round(out.pIntroduce)))
+	const w = Math.max(0, Math.min(100, Math.round(out.pBandWalk)))
+	const sum = r + i + w
+	if (sum === 100) {
+		out.pReinforceWorkingSet = r
+		out.pIntroduce = i
+		out.pBandWalk = w
+		return
+	}
+	if (sum === 0) {
+		out.pReinforceWorkingSet = VOCAB_BUILD_SETTINGS_DEFAULTS.pReinforceWorkingSet
+		out.pIntroduce = VOCAB_BUILD_SETTINGS_DEFAULTS.pIntroduce
+		out.pBandWalk = VOCAB_BUILD_SETTINGS_DEFAULTS.pBandWalk
+		return
+	}
+	const nr = Math.round((r / sum) * 100)
+	const ni = Math.round((i / sum) * 100)
+	let nw = 100 - nr - ni
+	if (nw < 0) nw = 0
+	const drift = 100 - (nr + ni + nw)
+	nw += drift
+	out.pReinforceWorkingSet = nr
+	out.pIntroduce = ni
+	out.pBandWalk = nw
 }
 
 /** Merge stored JSON with defaults and clamp every field to safe ranges. */
@@ -76,6 +92,7 @@ export function mergeVocabBuildSettings(raw: unknown): VocabBuildSettings {
 		if (typeof v !== "number" || !Number.isFinite(v)) continue
 		out[key] = clampKey(key, v)
 	}
+	normalizeStrategyPercents(out)
 	return out
 }
 
@@ -88,9 +105,39 @@ export function applyVocabBuildSettingsPatch(
 	return mergeVocabBuildSettings(merged)
 }
 
-export function assertVocabBuildWeightsAllowMood(s: VocabBuildSettings): string | null {
-	if (s.weightNew + s.weightShaky > 100) {
-		return `weightNew (${s.weightNew}) + weightShaky (${s.weightShaky}) must be at most 100 so the mood bucket has a non-negative share when eligible.`
+export function assertVocabBuildStrategyPercents(s: VocabBuildSettings): string | null {
+	const sum = s.pReinforceWorkingSet + s.pIntroduce + s.pBandWalk
+	if (sum !== 100) {
+		return `Strategy percents must sum to 100 (got ${sum}: pReinforceWorkingSet=${s.pReinforceWorkingSet}, pIntroduce=${s.pIntroduce}, pBandWalk=${s.pBandWalk}).`
 	}
 	return null
+}
+
+export type BuildStrategyKind = "reinforce" | "introduce" | "band_walk"
+
+/**
+ * Roll which Build strategy runs this question. When the working set is smaller than configured,
+ * intro probability is boosted by shifting mass from reinforce + band-walk (floors at 5% each).
+ */
+export function rollBuildStrategy(
+	b: VocabBuildSettings,
+	workingSetThin: boolean,
+): BuildStrategyKind {
+	let r = b.pReinforceWorkingSet
+	let i = b.pIntroduce
+	let w = b.pBandWalk
+	if (workingSetThin) {
+		const boost = Math.min(30, Math.floor((r + w) * 0.35))
+		i += boost
+		const takeR = Math.min(Math.floor(boost / 2), Math.max(0, r - 5))
+		const takeW = boost - takeR
+		r = Math.max(5, r - takeR)
+		w = Math.max(5, w - takeW)
+	}
+	const s = r + i + w
+	if (s <= 0) return "band_walk"
+	const t = Math.random() * s
+	if (t < r) return "reinforce"
+	if (t < r + i) return "introduce"
+	return "band_walk"
 }

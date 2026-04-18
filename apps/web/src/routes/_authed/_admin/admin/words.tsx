@@ -1,5 +1,5 @@
 import { auth } from "@nwords/auth/server"
-import { prisma } from "@nwords/db"
+import { Prisma, prisma } from "@nwords/db"
 import type { CefrLevel, PartOfSpeech } from "@nwords/db"
 import { cefrLevelForFrequencyRank, collectFirstNUniqueEffectiveRanks } from "@nwords/shared"
 import { createFileRoute } from "@tanstack/react-router"
@@ -148,11 +148,25 @@ const searchWords = createServerFn({ method: "POST" })
 						? { endsWith: q }
 						: { contains: q }
 
-		const where = {
-			languageId,
-			lemma: { ...lemmaFilter, mode: "insensitive" as const },
-			...posWhere,
-		}
+		// id is @db.Uuid — PostgreSQL won't accept LIKE on UUID columns, so cast to text via raw SQL
+		const uuidLike = /^[0-9a-f-]+$/i.test(q)
+		const idMatchIds = uuidLike
+			? (
+					await prisma.$queryRaw<{ id: string }[]>(
+						Prisma.sql`SELECT id FROM "Word" WHERE "languageId" = ${languageId}::uuid AND id::text ILIKE ${q + "%"} LIMIT 100`,
+					)
+				).map((r) => r.id)
+			: []
+
+		const lemmaWhere = { lemma: { ...lemmaFilter, mode: "insensitive" as const } }
+		const where =
+			idMatchIds.length > 0
+				? {
+						languageId,
+						OR: [lemmaWhere, { id: { in: idMatchIds } }],
+						...posWhere,
+					}
+				: { languageId, ...lemmaWhere, ...posWhere }
 
 		const [total, rankedMatches] = await Promise.all([
 			prisma.word.count({ where }),
@@ -460,7 +474,8 @@ function AdminWordsPage() {
 						</div>
 					) : (
 						<div className="border border-border rounded-lg overflow-hidden">
-							<div className="grid grid-cols-[1fr_80px_56px_56px_56px_52px_52px_1fr] gap-2 sm:gap-3 text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] px-4 py-2.5 bg-muted/50 border-b border-border">
+							<div className="grid grid-cols-[1fr_1fr_80px_56px_56px_56px_52px_52px_1fr] gap-2 sm:gap-3 text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] px-4 py-2.5 bg-muted/50 border-b border-border">
+								<span title="Word ID (UUID)">ID</span>
 								<span>Lemma</span>
 								<span>POS</span>
 								<span className="text-right" title="Frequency-list rank (raw)">
@@ -480,12 +495,17 @@ function AdminWordsPage() {
 							</div>
 							<div className="divide-y divide-border max-h-[60vh] overflow-auto">
 								{results.words.map((word) => (
-									<button
-										type="button"
+									<div
 										key={word.id}
-										className="group grid grid-cols-[1fr_80px_56px_56px_56px_52px_52px_1fr] gap-2 sm:gap-3 items-center px-4 py-2 hover:bg-muted/30 transition-colors w-full text-left cursor-pointer"
+										className="group grid grid-cols-[1fr_1fr_80px_56px_56px_56px_52px_52px_1fr] gap-2 sm:gap-3 items-center px-4 py-2 hover:bg-muted/30 transition-colors w-full text-left cursor-pointer"
+										role="button"
+										tabIndex={0}
 										onClick={() => void openWordDetail(word)}
+										onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && void openWordDetail(word)}
 									>
+										<span className="text-[10px] font-mono text-muted-foreground/60 break-all">
+											{word.id}
+										</span>
 										<span className="text-sm font-medium font-mono group-hover:underline underline-offset-2 decoration-foreground/60 truncate text-left">
 											{word.lemma}
 										</span>
@@ -533,7 +553,7 @@ function AdminWordsPage() {
 												? word.definitions.slice(0, 3).join("; ")
 												: "—"}
 										</span>
-									</button>
+									</div>
 								))}
 							</div>
 						</div>

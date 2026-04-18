@@ -28,6 +28,7 @@ type VocabGraphAppearanceState = {
 	setHsva: (key: VocabGraphColorKey, next: VocabGraphHsva) => void
 	setWheelHs: (key: VocabGraphColorKey, h: number, s: number) => void
 	setBrightness: (key: VocabGraphColorKey, v: number) => void
+	setColors: (colors: VocabGraphColors) => void
 	resetForAppearance: (appearance: "light" | "dark") => void
 }
 
@@ -50,6 +51,7 @@ export const useVocabGraphAppearanceStore = create<VocabGraphAppearanceState>()(
 					colors: { ...get().colors, [key]: { ...cur, v: clamped } },
 				})
 			},
+			setColors: (colors) => set({ colors: structuredClone(colors) }),
 			resetForAppearance: (appearance) =>
 				set({ colors: structuredClone(VOCAB_GRAPH_THEME_DEFAULTS[appearance]) }),
 		}),

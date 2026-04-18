@@ -1,5 +1,6 @@
 import type { ColorResult } from "@uiw/color-convert"
 import Wheel from "@uiw/react-color-wheel"
+import { useRef } from "react"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { Label } from "~/components/ui/label"
@@ -8,6 +9,7 @@ import { cn } from "~/lib/utils"
 import { useThemeStore } from "~/stores/theme"
 import {
 	type VocabGraphColorKey,
+	type VocabGraphColors,
 	type VocabGraphHsva,
 	useVocabGraphAppearanceStore,
 } from "~/stores/vocab-graph-appearance"
@@ -36,6 +38,22 @@ const STOP_META: { key: VocabGraphColorKey; title: string; description: string }
 			"Open field behind the heatmap and grid gaps; untested cells blend slightly toward muted text.",
 	},
 ]
+
+function randomBright(onWheel: (c: ColorResult) => void, onBrightness: (v: number) => void) {
+	const h = Math.random() * 360
+	const s = 50 + Math.random() * 50
+	const v = 75 + Math.random() * 25
+	onWheel({ hsva: { h, s, v, a: 1 } } as ColorResult)
+	onBrightness(v)
+}
+
+function randomDark(onWheel: (c: ColorResult) => void, onBrightness: (v: number) => void) {
+	const h = Math.random() * 360
+	const s = 50 + Math.random() * 50
+	const v = 10 + Math.random() * 30
+	onWheel({ hsva: { h, s, v, a: 1 } } as ColorResult)
+	onBrightness(v)
+}
 
 function HsvaWheelBlock({
 	id,
@@ -93,6 +111,24 @@ function HsvaWheelBlock({
 						aria-valuemax={100}
 						aria-valuenow={Math.round(hsva.v)}
 					/>
+					<div className="flex gap-2 pt-1">
+						<Button
+							type="button"
+							variant="outline"
+							size="xs"
+							onClick={() => randomBright(onWheel, onBrightness)}
+						>
+							Random bright
+						</Button>
+						<Button
+							type="button"
+							variant="outline"
+							size="xs"
+							onClick={() => randomDark(onWheel, onBrightness)}
+						>
+							Random dark
+						</Button>
+					</div>
 				</div>
 			</div>
 		</div>
@@ -109,7 +145,9 @@ export function VocabGraphColorsSettingsCard({
 	const colors = useVocabGraphAppearanceStore((s) => s.colors)
 	const setWheelHs = useVocabGraphAppearanceStore((s) => s.setWheelHs)
 	const setBrightness = useVocabGraphAppearanceStore((s) => s.setBrightness)
+	const setColors = useVocabGraphAppearanceStore((s) => s.setColors)
 	const resetForAppearance = useVocabGraphAppearanceStore((s) => s.resetForAppearance)
+	const initialColors = useRef<VocabGraphColors>(structuredClone(colors))
 
 	return (
 		<Card>
@@ -157,6 +195,14 @@ export function VocabGraphColorsSettingsCard({
 						))}
 					</div>
 					<div className="flex flex-wrap items-center gap-3">
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							onClick={() => setColors(initialColors.current)}
+						>
+							Restore original
+						</Button>
 						<Button
 							type="button"
 							variant="outline"

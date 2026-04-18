@@ -32,7 +32,7 @@ type LanguageOption = { id: string; name: string; code: string }
 
 type VocabMode = "ASSESSMENT" | "BUILD" | "FRUSTRATION" | "NEWWORDS"
 
-type DevSelectionPanelTab = "territory" | "new" | "shaky" | "mood"
+type DevSelectionPanelTab = "band" | "intros" | "working"
 
 type DevSelection = {
 	vocabMode: VocabMode
@@ -41,6 +41,7 @@ type DevSelection = {
 	summary: string
 	primaryBucket?: "new" | "shaky" | "mood"
 	bucketOrder?: ("new" | "shaky" | "mood")[]
+	strategyOrder?: string[]
 }
 
 type NextQuestion = {
@@ -77,22 +78,23 @@ type DevNextPickPreview = {
 	kind: string
 	panelTab: DevSelectionPanelTab | null
 	summary: string
-	bucketWeights: { new: number; shaky: number; mood: number } | null
+	strategyPercents: { reinforce: number; introduce: number; bandWalk: number }
 }
 
 type UpcomingData = {
 	vocabMode?: VocabMode
 	questionNumber: number
-	territory: UpcomingWord[]
-	new: UpcomingWord[]
-	shaky: UpcomingWord[]
-	mood: UpcomingWord[]
+	activeBand: UpcomingWord[]
+	workingSet: UpcomingWord[]
+	intros: UpcomingWord[]
 	/** The word currently on screen, surfaced so the dev panel can always show it even if it doesn't match any list's filter. */
 	current: UpcomingWord | null
 	/** ISO timestamp when the server built this response — lets the refresh button show visible proof that data was refetched. */
 	generatedAt: string
-	consecutiveWrongStreak: number
-	eligibleMoodNow: boolean
+	bandLemmaCount: number
+	clozableInBand: number
+	workingSetCount: number
+	workingSetThin: boolean
 	devNextPickAfterSubmit: {
 		questionNumber: number
 		ifLastAnswerCorrect: DevNextPickPreview
@@ -201,7 +203,7 @@ function PracticePage() {
 	const [devHighlightWordId, setDevHighlightWordId] = useState<string | null>(null)
 	const [devUpcoming, setDevUpcoming] = useState<UpcomingData | null>(null)
 	const [devUpcomingLoading, setDevUpcomingLoading] = useState(false)
-	const [devTab, setDevTab] = useState<DevSelectionPanelTab>("territory")
+	const [devTab, setDevTab] = useState<DevSelectionPanelTab>("band")
 	const [devHoverWordId, setDevHoverWordId] = useState<string | null>(null)
 	const [newWordsIntroPayload, setNewWordsIntroPayload] =
 		useState<NewWordsColumnIntroPayload | null>(null)
@@ -251,7 +253,11 @@ function PracticePage() {
 	useEffect(() => {
 		if (!devMode) return
 		const tab = question?.devSelection?.panelTab
-		if (tab) setDevTab(tab)
+		if (!tab) return
+		if (tab === "band" || tab === "intros" || tab === "working") setDevTab(tab)
+		else if (tab === "new") setDevTab("intros")
+		else if (tab === "shaky") setDevTab("working")
+		else setDevTab("band")
 	}, [devMode, question?.devSelection?.panelTab])
 	/** Deploy-controlled via `/api/settings` (`AppSettings.showHints`). */
 	const [showInlineHints, setShowInlineHints] = useState(false)
@@ -303,6 +309,18 @@ function PracticePage() {
 	const isGuest = profile === null
 	const nativeLabel = languageOptions.find((l) => l.id === practiceNativeId)?.name
 	const targetLabel = languageOptions.find((l) => l.id === practiceTargetId)?.name
+
+	useEffect(() => {
+		if (!userMeLoaded || !isGuest || vocabMode !== "BUILD") return
+		void navigate({
+			to: "/practice",
+			search: (prev) => ({
+				...prev,
+				vocabMode: "ASSESSMENT",
+			}),
+			replace: true,
+		})
+	}, [userMeLoaded, isGuest, vocabMode, navigate])
 
 	const loadNext = useCallback(async (sid: string): Promise<boolean> => {
 		setStatus("loading")
@@ -527,24 +545,6 @@ function PracticePage() {
 						heatmap.vocabSize,
 					)
 					if (analysis) {
-						// #region agent log
-						fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-							method: "POST",
-							headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b66d9c" },
-							body: JSON.stringify({
-								sessionId: "b66d9c",
-								hypothesisId: "H1",
-								location: "practice.tsx:startSession:analysis",
-								message: "heatmap column analysis",
-								data: {
-									testedNotMasteredCount: analysis.testedNotMasteredCount,
-									columnWordIdsLen: analysis.payload.wordIds.length,
-									columnIndex: analysis.payload.columnIndex,
-								},
-								timestamp: Date.now(),
-							}),
-						}).catch(() => {})
-						// #endregion
 						// Filter to words that actually have test sentences (cloze-resolvable).
 						const testableSet = new Set(
 							heatmap.cells
@@ -563,40 +563,9 @@ function PracticePage() {
 								practiceWordIds: testableWordIds,
 							}
 							if (analysis.testedNotMasteredCount >= 1) {
-								// #region agent log
-								fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-									method: "POST",
-									headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b66d9c" },
-									body: JSON.stringify({
-										sessionId: "b66d9c",
-										hypothesisId: "H1",
-										location: "practice.tsx:startSession:autoColumn",
-										message: "auto attach column focus",
-										data: { wordIdsLen: introPayload.wordIds.length },
-										timestamp: Date.now(),
-									}),
-								}).catch(() => {})
-								// #endregion
 								await beginColumnFocusBuildPractice(introPayload.wordIds)
 								return
 							}
-							// #region agent log
-							fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-								method: "POST",
-								headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b66d9c" },
-								body: JSON.stringify({
-									sessionId: "b66d9c",
-									hypothesisId: "H1",
-									location: "practice.tsx:startSession:introOnly",
-									message: "show intro only — no auto column (testedNotMasteredCount < 1)",
-									data: {
-										testedNotMasteredCount: analysis.testedNotMasteredCount,
-										wordIdsLen: introPayload.wordIds.length,
-									},
-									timestamp: Date.now(),
-								}),
-							}).catch(() => {})
-							// #endregion
 							setStatus("idle")
 							setNewWordsIntroPayload(introPayload)
 							return
@@ -623,20 +592,6 @@ function PracticePage() {
 				nativeLanguageId: practiceNativeId,
 				targetLanguageId: practiceTargetId,
 			}
-			// #region agent log
-			fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-				method: "POST",
-				headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b66d9c" },
-				body: JSON.stringify({
-					sessionId: "b66d9c",
-					hypothesisId: "H1",
-					location: "practice.tsx:startSession:plainPost",
-					message: "POST session without columnFocus (default build path)",
-					data: { vocabMode, hasColumnFocusInBody: false },
-					timestamp: Date.now(),
-				}),
-			}).catch(() => {})
-			// #endregion
 
 			const res = await fetch("/api/test/sessions", {
 				method: "POST",
@@ -1115,6 +1070,15 @@ function PracticePage() {
 											autoComplete="off"
 											value={answer}
 											onChange={(e) => setAnswer(e.target.value)}
+											onKeyDown={(e) => {
+												if (e.key !== "Enter") return
+												e.preventDefault()
+												if (feedback) {
+													void loadNext(sessionId)
+												} else {
+													void submitAnswer()
+												}
+											}}
 											placeholder="Lemma / word"
 										/>
 									</div>
@@ -1244,7 +1208,7 @@ function ClozePrompt({
 	)
 }
 
-const DEV_TABS: DevSelectionPanelTab[] = ["territory", "new", "shaky", "mood"]
+const DEV_TABS: DevSelectionPanelTab[] = ["band", "intros", "working"]
 
 function DevUpcomingPanel({
 	data,
@@ -1269,9 +1233,11 @@ function DevUpcomingPanel({
 }) {
 	const baseWords: UpcomingWord[] = !data
 		? []
-		: activeTab === "mood"
-			? (data.mood ?? [])
-			: data[activeTab]
+		: activeTab === "band"
+			? data.activeBand
+			: activeTab === "intros"
+				? data.intros
+				: data.workingSet
 	// Surface the current card at the top of its own bucket even when the
 	// filter queries don't include it — otherwise the user can't see where
 	// the current pick sits in the list.
@@ -1297,6 +1263,14 @@ function DevUpcomingPanel({
 					<span className="text-foreground/90">{currentSelection.kind.replace(/_/g, " ")}</span>
 					{" — "}
 					{currentSelection.summary}
+					{currentSelection.strategyOrder != null && currentSelection.strategyOrder.length > 0 ? (
+						<>
+							{" "}
+							<span className="text-muted-foreground/70">
+								(fallback order {currentSelection.strategyOrder.join(" → ")})
+							</span>
+						</>
+					) : null}
 					{currentSelection.primaryBucket != null && currentSelection.bucketOrder != null ? (
 						<>
 							{" "}
@@ -1336,6 +1310,12 @@ function DevUpcomingPanel({
 							? `Correct: ${data.devNextPickAfterSubmit.ifLastAnswerCorrect.summary} — Wrong: ${data.devNextPickAfterSubmit.ifLastAnswerWrong.summary}`
 							: data.devNextPickAfterSubmit.ifLastAnswerCorrect.summary}
 					</p>
+					<p className="text-muted-foreground/60 text-[9px]">
+						Strategy display % (after thin boost if any): reinforce{" "}
+						{data.devNextPickAfterSubmit.ifLastAnswerCorrect.strategyPercents.reinforce}, introduce{" "}
+						{data.devNextPickAfterSubmit.ifLastAnswerCorrect.strategyPercents.introduce}, band{" "}
+						{data.devNextPickAfterSubmit.ifLastAnswerCorrect.strategyPercents.bandWalk}
+					</p>
 				</div>
 			) : data?.vocabMode && !["BUILD", "NEWWORDS"].includes(data.vocabMode) ? (
 				<p className="text-[10px] font-mono text-muted-foreground border-b border-brand/15 pb-2">
@@ -1345,10 +1325,10 @@ function DevUpcomingPanel({
 			<div className="flex items-center justify-between">
 				<span className="text-[10px] font-mono uppercase tracking-wider text-brand/70">
 					Dev: Upcoming words {data ? `(Q${data.questionNumber})` : ""}
-					{data?.eligibleMoodNow ? (
+					{data?.workingSetThin ? (
 						<span className="normal-case text-muted-foreground font-mono">
 							{" "}
-							· mood on · {data.consecutiveWrongStreak} wrong streak
+							· working set thin ({data.workingSetCount} clozable in band)
 						</span>
 					) : null}
 				</span>
@@ -1368,7 +1348,14 @@ function DevUpcomingPanel({
 			</div>
 			<div className="flex gap-1 flex-wrap">
 				{DEV_TABS.map((tab) => {
-					const n = !data ? 0 : tab === "mood" ? (data.mood?.length ?? 0) : data[tab].length
+					const n = !data
+						? 0
+						: tab === "band"
+							? data.activeBand.length
+							: tab === "intros"
+								? data.intros.length
+								: data.workingSet.length
+					const label = tab === "band" ? "band" : tab === "intros" ? "intros" : "working"
 					return (
 						<button
 							key={tab}
@@ -1380,7 +1367,7 @@ function DevUpcomingPanel({
 									: "text-muted-foreground hover:text-foreground hover:bg-muted"
 							}`}
 						>
-							{tab} ({n})
+							{label} ({n})
 						</button>
 					)
 				})}

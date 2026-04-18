@@ -1,5 +1,6 @@
+import { KNOWN_CONFIDENCE_THRESHOLD, KNOWN_MIN_TESTS } from "@nwords/shared"
 import { type Prisma, prisma } from "@nwords/db"
-import { linkedSentenceIdsForClozePool } from "./cloze-sentence-pool"
+import { linkedSentenceIdsForClozePool, prismaWhereWordHasResolvableClozeMaterial } from "./cloze-sentence-pool"
 
 /** Same rules as `sentence-link` tokenization (for gloss ↔ parallel alignment). */
 const SCORE_SPLIT = /[^\p{L}\p{N}]+/gu
@@ -279,7 +280,9 @@ async function loadClozeCandidates(
 ): Promise<ClozeCandidate[]> {
 	const curated = testSentenceIds
 	let pool =
-		curated.length > 0 ? [...curated] : await linkedSentenceIdsForClozePool(wordId, targetLanguageId)
+		curated.length > 0
+			? [...curated]
+			: await linkedSentenceIdsForClozePool(wordId, targetLanguageId)
 
 	let out = await materializeClozeCandidates(wordId, targetLanguageId, pool)
 	if (out.length === 0 && curated.length > 0) {
@@ -742,11 +745,7 @@ export async function resolveClozeWithHint(params: {
 
 	// Empty curated list is OK: `loadClozeCandidates` falls back to `SentenceWord`-linked sentences.
 
-	let candidates = await loadClozeCandidates(
-		word.id,
-		params.targetLanguageId,
-		sentenceIds,
-	)
+	let candidates = await loadClozeCandidates(word.id, params.targetLanguageId, sentenceIds)
 
 	const targetLangCode = word.language.code
 	if (!params.forceSentenceId) {
@@ -851,31 +850,72 @@ export async function resolveClozeWithHint(params: {
  * `excludeWordIds` soft-ignored if it would empty the pool.
  * `rankRange` constrains to words between `min` and `max` rank (inclusive);
  * falls back to unconstrained if the range has no eligible words.
+ * When `preferNoKnowledgeForUserId` is set, only lemmas with **no** `UserWordKnowledge` row for
+ * that user are eligible (introductions), while still respecting `restrictToWordIds` / rank.
+ * When `excludeVerifiedKnownForUserId` is set, lemmas that are verified known for that user are
+ * excluded (still allows unseen and shaky rows).
  */
 export async function pickRandomWordIdForCloze(
 	targetLanguageId: string,
 	excludeWordIds: string[],
 	rankRange?: { min: number; max: number },
-	options?: { restrictToWordIds?: string[] },
+	options?: {
+		restrictToWordIds?: string[]
+		preferNoKnowledgeForUserId?: string
+		excludeVerifiedKnownForUserId?: string
+	},
 ): Promise<string | null> {
 	const restrict = options?.restrictToWordIds
-	const baseWhere: Prisma.WordWhereInput = {
-		languageId: targetLanguageId,
-		isOffensive: false,
-		isAbbreviation: false,
-		isTestable: true,
-		testSentenceIds: { isEmpty: false },
-		...(rankRange ? { effectiveRank: { gte: rankRange.min, lte: rankRange.max } } : { effectiveRank: { gt: 0 } }),
-		...(restrict && restrict.length > 0 ? { id: { in: restrict } } : {}),
+	const preferNoKnowledgeForUserId = options?.preferNoKnowledgeForUserId
+	const excludeVerifiedKnownForUserId = options?.excludeVerifiedKnownForUserId
+
+	const knowledgePredicates: Prisma.WordWhereInput[] = []
+	if (preferNoKnowledgeForUserId) {
+		knowledgePredicates.push({
+			NOT: { userKnowledge: { some: { userId: preferNoKnowledgeForUserId } } },
+		})
+	}
+	if (excludeVerifiedKnownForUserId) {
+		knowledgePredicates.push({
+			NOT: {
+				userKnowledge: {
+					some: {
+						userId: excludeVerifiedKnownForUserId,
+						confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD },
+						timesTested: { gte: KNOWN_MIN_TESTS },
+					},
+				},
+			},
+		})
 	}
 
-	let where: Prisma.WordWhereInput = baseWhere
+	const common: Prisma.WordWhereInput = {
+		languageId: targetLanguageId,
+		...prismaWhereWordHasResolvableClozeMaterial(targetLanguageId),
+		...(rankRange
+			? { effectiveRank: { gte: rankRange.min, lte: rankRange.max } }
+			: { effectiveRank: { gt: 0 } }),
+		...(knowledgePredicates.length > 0 ? { AND: knowledgePredicates } : {}),
+	}
 
+	const idFilter = (applyExclude: boolean): Prisma.StringFilter | undefined => {
+		const hasR = restrict && restrict.length > 0
+		const ex = applyExclude ? excludeWordIds : []
+		const hasEx = ex.length > 0
+		if (hasR && hasEx) return { in: restrict, notIn: ex }
+		if (hasR) return { in: restrict }
+		if (hasEx) return { notIn: ex }
+		return undefined
+	}
+
+	const makeWhere = (applyExclude: boolean): Prisma.WordWhereInput => {
+		const id = idFilter(applyExclude)
+		return id ? { ...common, id } : { ...common }
+	}
+
+	let where: Prisma.WordWhereInput = makeWhere(false)
 	if (excludeWordIds.length > 0) {
-		const withExclude: Prisma.WordWhereInput = {
-			...baseWhere,
-			id: { notIn: excludeWordIds },
-		}
+		const withExclude = makeWhere(true)
 		const n = await prisma.word.count({ where: withExclude })
 		if (n > 0) where = withExclude
 	}
@@ -887,10 +927,7 @@ export async function pickRandomWordIdForCloze(
 	if (count === 0 && rankRange && !(restrict && restrict.length > 0)) {
 		const fallbackWhere: Prisma.WordWhereInput = {
 			languageId: targetLanguageId,
-			isOffensive: false,
-			isAbbreviation: false,
-			isTestable: true,
-			testSentenceIds: { isEmpty: false },
+			...prismaWhereWordHasResolvableClozeMaterial(targetLanguageId),
 			effectiveRank: { gt: 0 },
 		}
 		count = await prisma.word.count({ where: fallbackWhere })

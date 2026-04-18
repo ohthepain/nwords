@@ -90,7 +90,7 @@ Binary measurement: correct → `1.0`, wrong → `0.0`. Streak still updates (+1
 | `KNOWN_CONFIDENCE_THRESHOLD` | 0.95  | “Known” for size + build bucket boundaries |
 | `KNOWN_MIN_TESTS`            | 3     | Min tests for “known”                     |
 
-Build-only selection constants (e.g. `BUILD_FRONTIER_BAND_MAX` **50**, `BUILD_CANDIDATE_CAP` **45**, bucket weights) live in `apps/api/src/routes/test.ts`, not in `confidence.ts`. Defaults are defined in `@nwords/shared` as `VOCAB_BUILD_SETTINGS_DEFAULTS`; **Admin → Site settings** can override them (stored in `app_settings.vocab_build_settings` JSON, merged on read).
+Build-only selection tuning (`VocabBuildSettings`: band width, working-set target, confidence bar, strategy percentages) lives in `@nwords/shared` as `VOCAB_BUILD_SETTINGS_DEFAULTS`; **Admin → Site settings** can override them (stored in `app_settings.vocab_build_settings` JSON, merged on read). `handleBuildNext` in `apps/api/src/routes/test.ts` consumes the merged settings.
 
 ## Testing modes
 
@@ -104,31 +104,27 @@ Build-only selection constants (e.g. `BUILD_FRONTIER_BAND_MAX` **50**, `BUILD_CA
 
 ### Build mode (signed-in)
 
-**Purpose:** Expand vocabulary within the same **lemma band** as the vocab graph.
+**Purpose:** Expand vocabulary within the same **visible heatmap slice** as the vocab graph, using a single **active band** and simple **strategy rolls** (no mood bucket, no territory cadence, no separate “new vs shaky” bucket machinery).
 
-**Graph band:** Words with `rank` 1–10000, not offensive, not abbreviation, ordered by `rank`. The band is truncated to the first `n` lemmas where `n = min(totalInRange, ceil(baseline * 1.2))` and `baseline = max(assumedRank, vocabSize, 50)`. This matches `heatmapTargetCellCount` in `vocab-graph.tsx` (ordinal cap, not a raw rank cutoff).
+**Graph slice:** Same as before: words with `rank` 1–10000, not offensive, not abbreviation, ordered by `rank`, truncated to `n = min(totalInRange, ceil(baseline * 1.2))` with `baseline = max(assumedRank, vocabSize, 50)`. The slice is then padded to the heatmap’s `displayCount` using `computeHeatmapGridMetrics` (`@nwords/shared`), matching `vocab-graph.tsx`.
 
-**Two bands (Build):**
+**Active band:** Column-major cells starting at the **first column after conquered territory** (same geometry as the graph’s “new words” column), capped by **`frontierBandMax`**. Server helper: `computeBuildModeActiveBandRows` in `@nwords/shared` + `loadBuildActiveBandContext` in `test.ts` (loads knowledge, marks clozable lemmas).
 
-- **Frontier band (introductions):** In-band lemmas with `rank > assumedRank`, no `UserWordKnowledge` row yet, with test sentences. Only the first `BUILD_FRONTIER_BAND_MAX` (**50**) by ascending rank are eligible for the **new** bucket; the rest stay “behind” the queue until a frontier word gets a row (then it joins the active band as learning).
-- **Active band (in-flight learning):** In-band words that are **not** verified known but already have learning signal — primarily **shaky** (has a knowledge row, fails `KNOWN_*`), plus any other not-yet-known lemmas surfaced through territory preflight (see below).
+**Working set:** Clozable lemmas in the band with `timesTested > 0`, not verified-known, and with `confidence == null` or `confidence < confidenceCriterion`. Target size **`workingSetSize`**. When the count of such lemmas is **below** the target, `rollBuildStrategy` **boosts** the introduce share (same formula client and server use for dev previews).
 
-**Preflight selection (before weighted buckets):**
+**Strategies (one random draw per question, then ordered fallbacks):**
 
-1. **Territory opening:** For questions **2** through `BUILD_TERRITORY_OPENING` (**5**), sample from not-yet-verified-known words in the graph slice. Order **prefers active** (has a knowledge row) over **frontier-only** (no row yet), rank-ordered within each group. Words with `timesTested - timesCorrect >= BUILD_HEAVY_MISS_THRESHOLD` (**8**) are de-emphasized in this opening only (winnable pool when non-empty).
-2. **Territory revisit:** After the opening, every `BUILD_TERRITORY_REVISIT_EVERY` (**4**th) question revisits the same pool with the same active-first ordering (`BUILD_TERRITORY_HEAD_SPREAD` **5** for spread).
+- **Reinforce** — sample from the working set (rank-ordered head spread).
+- **Introduce** — `timesTested === 0`, clozable, in band.
+- **Band walk** — any clozable non-verified-known lemma in the band.
 
-There is **no** separate forced “global frontier” question every Nth card; introductions are handled by the frontier-capped **new** bucket and territory when it reaches frontier-only rows.
+Percentages **`pReinforceWorkingSet`**, **`pIntroduce`**, **`pBandWalk`** must sum to **100** (admin validated).
 
-**Buckets (weighted random when mood eligible):** `BUILD_WEIGHT_NEW` **48%** new, `BUILD_WEIGHT_SHAKY` **37%** shaky, remainder **~15%** mood. If not eligible for mood (see below), only new vs shaky are rolled, preserving the **48 : 37** ratio. Internal names remain `new` / `shaky`; **new** means frontier band only.
+**Column focus:** If `columnFocusWordIds` is set and the session has not yet answered every listed id once, **only** that ordered pass runs (per-word shuffle retries), same as before.
 
-- **New (frontier band):** As above; rank-ordered; sampling uses `BUILD_NEW_SPREAD` (**6**) and session exclusion spread `BUILD_SESSION_EXCLUSION_SPREAD` (**28**) inside the resolver (`sliceCap` matches `BUILD_FRONTIER_BAND_MAX`).
-- **Shaky:** In-band knowledge rows that are **not** verified known (`KNOWN_*` thresholds); ordered by word rank, then `lastTestedAt`, then `confidence`; capped at `BUILD_CANDIDATE_CAP` (**45**).
-- **Mood:** Verified-known words in-band; only if `eligibleMood`.
+**Fallback:** Random `pickRandomWordIdForCloze` restricted to clozable ids in the band (rank window from band min/max) if strategy passes exhaust retries.
 
-**Mood eligibility:** `tailConsecutiveWrongs(sessionAnswers) >= BUILD_MOOD_MIN_STREAK_WRONG` (**2**) — i.e. **last two answers in this session** are wrong, not the persisted `UserWordKnowledge.streak`.
-
-**Guests:** `handleBuildGuestNext` uses a widening random rank window (no profile / knowledge).
+**Guests:** Build mode **requires sign-in**. Guest session create with `vocabMode: "BUILD"` returns **403**; `/next` on a guest Build session returns **403**. The web app redirects guests away from `?vocabMode=BUILD` to Assessment.
 
 ### Frustration mode
 
@@ -138,7 +134,7 @@ There is **no** separate forced “global frontier” question every Nth card; i
 
 ### Spaced repetition (lightweight)
 
-No `nextReviewAt`. Lower confidence and staleness on wrong answers skew selection toward shaky items; Build territory cadence and the capped frontier band add structure on top.
+No `nextReviewAt`. Lower confidence and staleness on wrong answers skew selection toward non-confident items; Build’s active band, working-set target, and strategy percents add structure on top.
 
 ## UI: vocab graph
 

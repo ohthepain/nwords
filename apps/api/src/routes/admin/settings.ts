@@ -2,7 +2,7 @@ import { zValidator } from "@hono/zod-validator"
 import { prisma } from "@nwords/db"
 import {
 	applyVocabBuildSettingsPatch,
-	assertVocabBuildWeightsAllowMood,
+	assertVocabBuildStrategyPercents,
 	mergeVocabBuildSettings,
 } from "@nwords/shared"
 import { Hono } from "hono"
@@ -15,17 +15,12 @@ import { authMiddleware } from "../../middleware/auth"
 
 const vocabBuildPatchSchema = z
 	.object({
-		weightNew: z.number().int().min(0).max(100).optional(),
-		weightShaky: z.number().int().min(0).max(100).optional(),
-		moodMinStreakWrong: z.number().int().min(1).max(20).optional(),
-		candidateCap: z.number().int().min(5).max(200).optional(),
 		frontierBandMax: z.number().int().min(5).max(200).optional(),
-		sessionExclusionSpread: z.number().int().min(3).max(100).optional(),
-		newSpread: z.number().int().min(1).max(50).optional(),
-		territoryOpening: z.number().int().min(0).max(50).optional(),
-		territoryRevisitEvery: z.number().int().min(0).max(30).optional(),
-		territoryHeadSpread: z.number().int().min(1).max(50).optional(),
-		heavyMissThreshold: z.number().int().min(1).max(50).optional(),
+		workingSetSize: z.number().int().min(1).max(80).optional(),
+		confidenceCriterion: z.number().min(0.5).max(0.99).optional(),
+		pReinforceWorkingSet: z.number().int().min(0).max(100).optional(),
+		pIntroduce: z.number().int().min(0).max(100).optional(),
+		pBandWalk: z.number().int().min(0).max(100).optional(),
 	})
 	.strict()
 
@@ -64,9 +59,9 @@ export const adminSettingsRoute = new Hono()
 			const row = await prisma.appSettings.findUnique({ where: { id: APP_SETTINGS_ROW_ID } })
 			const base = mergeVocabBuildSettings(row?.vocabBuildSettings ?? null)
 			const next = applyVocabBuildSettingsPatch(base, body.vocabBuild)
-			const weightErr = assertVocabBuildWeightsAllowMood(next)
-			if (weightErr) {
-				return c.json({ error: weightErr }, 400)
+			const pctErr = assertVocabBuildStrategyPercents(next)
+			if (pctErr) {
+				return c.json({ error: pctErr }, 400)
 			}
 			data.vocabBuildSettings = next
 		}

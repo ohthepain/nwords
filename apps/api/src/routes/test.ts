@@ -1,17 +1,24 @@
 import { zValidator } from "@hono/zod-validator";
 import { Prisma, type TestSession, type VocabMode, prisma } from "@nwords/db";
-import type { VocabBuildSettings } from "@nwords/shared";
+import type { BuildModeActiveBandRow, BuildStrategyKind, VocabBuildSettings } from "@nwords/shared";
 import {
   FRUSTRATION_WORD_MIN_TESTS,
   KNOWN_CONFIDENCE_THRESHOLD,
   KNOWN_MIN_TESTS,
   checkFixedExpression,
   collectFirstNUniqueEffectiveRanks,
-  updateConfidence,
+  computeBuildModeActiveBandRows,
+  computeHeatmapGridMetrics,
+  isIntroCandidate,
+  isVerifiedKnownInBand,
+  isWorkingSetMember,
+  rollBuildStrategy,
+	updateConfidence,
 } from "@nwords/shared";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { computeSynonymFeedback } from "../lib/cloze-synonym-feedback";
+import { prismaWhereWordHasResolvableClozeMaterial } from "../lib/cloze-sentence-pool";
 import { pickRandomWordIdForCloze, pickWordNearRank, resolveClozeWithHint } from "../lib/parallel-hint";
 import { lookupUserAnswerPos } from "../lib/pos-lookup";
 import { resolveVocabBuildSettings } from "../lib/vocab-build-settings";
@@ -70,7 +77,7 @@ const ASSESSMENT_CONVERGE_THRESHOLD = 50;
 const ASSESSMENT_INITIAL_LOW = 1;
 const ASSESSMENT_INITIAL_HIGH = 10000;
 
-export type DevSelectionPanelTab = "territory" | "new" | "shaky" | "mood";
+export type DevSelectionPanelTab = "territory" | "new" | "shaky" | "mood" | "band" | "intros" | "working";
 
 export type DevSelection = {
   vocabMode: VocabMode;
@@ -87,13 +94,19 @@ export type DevSelection = {
     | "forced_sentence"
     | "assessment_binary_search"
     | "frustration"
-    | "new_words";
+    | "new_words"
+    | "reinforce"
+    | "introduce"
+    | "band_walk"
+    | "build_strategy";
   panelTab: DevSelectionPanelTab | null;
   summary: string;
   /** BUILD bucket pass only: which bucket was rolled first. */
   primaryBucket?: "new" | "shaky" | "mood";
   /** BUILD bucket pass only: order buckets are tried this question. */
   bucketOrder?: ("new" | "shaky" | "mood")[];
+  /** BUILD: rolled strategy order for this question (after primary). */
+  strategyOrder?: BuildStrategyKind[];
 };
 
 const COLUMN_FOCUS_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -151,78 +164,63 @@ function devSelection(vocabMode: VocabMode, kind: DevSelection["kind"], summary:
           : kind === "mood"
             ? "mood"
             : kind === "column_focus"
-              ? "new"
-              : null;
+              ? "intros"
+              : kind === "reinforce"
+                ? "working"
+                : kind === "introduce"
+                  ? "intros"
+                  : kind === "band_walk"
+                    ? "band"
+                    : null;
   return { vocabMode, kind, panelTab, summary };
 }
 
-/** Mirrors the deterministic branch order in `handleBuildNext` (before weighted buckets). */
+/** Dev panel: qualitative description; actual next card is a random strategy roll in `handleBuildNext`. */
 function buildNextPickPreview(args: {
   nextBuildQuestionNumber: number;
-  territoryCount: number;
-  eligibleMood: boolean;
   build: VocabBuildSettings;
-  /** When set, column-focus first pass overrides territory opening/revisit and bucket rolls. */
   columnFocusActive?: boolean;
+  workingSetThin: boolean;
 }): Pick<DevSelection, "kind" | "panelTab" | "summary"> & {
-  bucketWeights: { new: number; shaky: number; mood: number } | null;
+  strategyPercents: { reinforce: number; introduce: number; bandWalk: number };
 } {
-  const { nextBuildQuestionNumber: q, territoryCount, eligibleMood, build: b, columnFocusActive } = args;
-  const hasTerritory = territoryCount > 0;
-
+  const { nextBuildQuestionNumber: q, build: b, columnFocusActive, workingSetThin } = args;
   if (columnFocusActive) {
     const sel = devSelection(
       "BUILD",
       "column_focus",
-      `Q${q}: column focus — heatmap column list until each lemma is tested once this session (overrides territory & buckets)`,
+      `Q${q}: column focus — heatmap column list until each lemma is tested once this session (overrides strategy roll)`,
     );
-    return { kind: sel.kind, panelTab: sel.panelTab, summary: sel.summary, bucketWeights: null };
+    return {
+      kind: sel.kind,
+      panelTab: sel.panelTab,
+      summary: sel.summary,
+      strategyPercents: {
+        reinforce: b.pReinforceWorkingSet,
+        introduce: b.pIntroduce,
+        bandWalk: b.pBandWalk,
+      },
+    };
   }
-
-  if (b.territoryOpening > 0 && q > 1 && q <= b.territoryOpening && hasTerritory) {
-    const sel = devSelection(
-      "BUILD",
-      "territory_opening",
-      `Q${q}: territory opening (questions 2–${b.territoryOpening}; active before new)`,
-    );
-    return { kind: sel.kind, panelTab: sel.panelTab, summary: sel.summary, bucketWeights: null };
+  let r = b.pReinforceWorkingSet;
+  let i = b.pIntroduce;
+  let w = b.pBandWalk;
+  if (workingSetThin) {
+    const boost = Math.min(30, Math.floor((r + w) * 0.35));
+    i += boost;
+    const takeR = Math.min(Math.floor(boost / 2), Math.max(0, r - 5));
+    const takeW = boost - takeR;
+    r = Math.max(5, r - takeR);
+    w = Math.max(5, w - takeW);
   }
-
-  if (
-    b.territoryOpening > 0 &&
-    q > b.territoryOpening &&
-    hasTerritory &&
-    b.territoryRevisitEvery > 0 &&
-    q % b.territoryRevisitEvery === 0
-  ) {
-    const sel = devSelection(
-      "BUILD",
-      "territory_revisit",
-      `Q${q}: territory revisit (every ${b.territoryRevisitEvery} after Q${b.territoryOpening})`,
-    );
-    return { kind: sel.kind, panelTab: sel.panelTab, summary: sel.summary, bucketWeights: null };
-  }
-
-  const wMood = eligibleMood ? Math.max(0, 100 - b.weightNew - b.weightShaky) : 0;
-  const summary = eligibleMood
-    ? `Q${q}: weighted buckets — primary order rolls new ${b.weightNew}%, shaky ${b.weightShaky}%, mood ${wMood}%, then tries fallbacks in that order`
-    : `Q${q}: weighted buckets — rolls new vs shaky (${b.weightNew}% / ${b.weightShaky}%), then alternates`;
-
-  const den = b.weightNew + b.weightShaky;
-  const newPct = den > 0 ? Math.round((b.weightNew / den) * 100) : 50;
-  const shakyPct = den > 0 ? Math.round((b.weightShaky / den) * 100) : 50;
-
+  const thinNote = workingSetThin
+    ? " Working set below configured target — intro weighs more heavily on the next roll (same rule as `rollBuildStrategy`)."
+    : "";
   return {
-    kind: "weighted_buckets",
+    kind: "build_strategy",
     panelTab: null,
-    summary,
-    bucketWeights: eligibleMood
-      ? { new: b.weightNew, shaky: b.weightShaky, mood: wMood }
-      : {
-          new: newPct,
-          shaky: shakyPct,
-          mood: 0,
-        },
+    summary: `Q${q}: one random strategy then ordered fallbacks — reinforce working set ~${r}%, introduce ~${i}%, band walk ~${w}% (column-major active band).${thinNote}`,
+    strategyPercents: { reinforce: r, introduce: i, bandWalk: w },
   };
 }
 
@@ -236,11 +234,13 @@ function buildNextPickPreview(args: {
  *
  * Uses one word id per `effectiveRank` (same lemma can exist on multiple POS rows at the same rank).
  */
-async function buildModeGraphVisibleWordIds(
+type GraphVisibleRankRow = { id: string; effectiveRank: number };
+
+async function buildModeGraphVisibleRankRows(
   languageId: string,
   assumedRank: number,
   vocabSize: number,
-): Promise<string[]> {
+): Promise<GraphVisibleRankRow[]> {
   const baseline = Math.max(assumedRank, vocabSize, 50);
   const targetCellCount = Math.ceil(baseline * 1.2);
   const heatmapWhere = {
@@ -253,7 +253,7 @@ async function buildModeGraphVisibleWordIds(
   const total = await prisma.word.count({ where: heatmapWhere });
   const n = Math.min(total, targetCellCount);
   if (n <= 0) return [];
-  const rows = await collectFirstNUniqueEffectiveRanks(n, (skip, take) =>
+  return collectFirstNUniqueEffectiveRanks(n, (skip, take) =>
     prisma.word.findMany({
       where: heatmapWhere,
       orderBy: [{ effectiveRank: "asc" }, { id: "asc" }],
@@ -262,116 +262,74 @@ async function buildModeGraphVisibleWordIds(
       select: { id: true, effectiveRank: true },
     }),
   );
-  return rows.map((r) => r.id);
 }
 
-function rollBuildBucket(eligibleMood: boolean, b: VocabBuildSettings): "new" | "shaky" | "mood" {
-  const r = Math.random() * 100;
-  if (eligibleMood) {
-    if (r < b.weightNew) return "new";
-    if (r < b.weightNew + b.weightShaky) return "shaky";
-    return "mood";
-  }
-  const den = b.weightNew + b.weightShaky;
-  if (den <= 0) return "new";
-  const newCut = (b.weightNew / den) * 100;
-  return r < newCut ? "new" : "shaky";
-}
-
-function tailConsecutiveWrongs(answersOrderedChronological: { correct: boolean }[]): number {
-  let n = 0;
-  for (let i = answersOrderedChronological.length - 1; i >= 0; i--) {
-    if (!answersOrderedChronological[i].correct) n++;
-    else break;
-  }
-  return n;
-}
-
-function pickPreferFreshFromOrderedIds(
+function pickSpreadFromOrdered(
   orderedIds: string[],
   testedInSession: Set<string>,
   tried: Set<string>,
-  b: VocabBuildSettings,
-  options?: { spreadCap?: number; biasTowardHead?: boolean; sliceCap?: number },
+  spreadCap: number,
+  biasTowardHead: boolean,
 ): string | null {
-  const sliceCap = options?.sliceCap ?? b.candidateCap;
-  const slice = orderedIds.slice(0, sliceCap);
-  let pool = slice.filter((id) => !tried.has(id) && !testedInSession.has(id));
-  if (pool.length === 0) pool = slice.filter((id) => !tried.has(id));
+  let pool = orderedIds.filter((id) => !tried.has(id) && !testedInSession.has(id));
+  if (pool.length === 0) pool = orderedIds.filter((id) => !tried.has(id));
   if (pool.length === 0) return null;
-  const cap = options?.spreadCap ?? b.sessionExclusionSpread;
-  const spread = Math.min(cap, pool.length);
-  const idx = options?.biasTowardHead
+  const spread = Math.min(Math.max(1, spreadCap), pool.length);
+  const idx = biasTowardHead
     ? Math.min(spread - 1, Math.floor(Math.random() * Math.random() * spread))
     : Math.floor(Math.random() * spread);
   return pool[idx];
 }
 
-function territoryMisses(row: { userKnowledge: { timesTested: number; timesCorrect: number }[] }): number {
-  const k = row.userKnowledge[0];
-  if (!k) return 0;
-  return Math.max(0, k.timesTested - k.timesCorrect);
-}
-
-function sortBuildTerritoryRows<
-  T extends {
-    id: string;
-    effectiveRank: number;
-    userKnowledge: { timesTested: number; timesCorrect: number }[];
-  },
->(rows: T[]): T[] {
-  return [...rows].sort((a, b) => {
-    if (a.effectiveRank !== b.effectiveRank) return a.effectiveRank - b.effectiveRank;
-    return territoryMisses(a) - territoryMisses(b);
-  });
-}
-
-/**
- * Territory candidates: rank-ordered within “active” (has a knowledge row, not verified known) then
- * within “frontier-only” (no row yet), so consolidation is preferred over new introductions.
- */
-function territoryIdsPreferActive<
-  T extends {
-    id: string;
-    effectiveRank: number;
-    userKnowledge: { timesTested: number; timesCorrect: number }[];
-  },
->(territoryRowsSorted: T[], heavyMissThreshold: number): { orderedIds: string[]; winnableIds: string[] } {
-  const active = territoryRowsSorted.filter((r) => r.userKnowledge.length > 0);
-  const frontierOnly = territoryRowsSorted.filter((r) => r.userKnowledge.length === 0);
-  const merged = [...active, ...frontierOnly];
-  const orderedIds = merged.map((r) => r.id);
-  const winnable = merged.filter((r) => territoryMisses(r) < heavyMissThreshold).map((r) => r.id);
+async function loadBuildActiveBandContext(args: {
+  userId: string;
+  languageId: string;
+  assumedRank: number;
+  vocabSize: number;
+  graphRows: GraphVisibleRankRow[];
+  frontierBandMax: number;
+}): Promise<{
+  bandRows: BuildModeActiveBandRow[];
+  clozableWordIds: Set<string>;
+}> {
+  const { userId, languageId, assumedRank, vocabSize, graphRows, frontierBandMax } = args;
+  const met = computeHeatmapGridMetrics(graphRows.length, assumedRank, vocabSize);
+  const dc = met?.displayCount ?? 0;
+  const headIds = graphRows.slice(0, dc).map((r) => r.id);
+  const knowledgeRows =
+    headIds.length > 0
+      ? await prisma.userWordKnowledge.findMany({
+          where: { userId, wordId: { in: headIds } },
+          select: { wordId: true, confidence: true, timesTested: true },
+        })
+      : [];
+  const knowledgeByWordId = new Map(
+    knowledgeRows.map((k) => [k.wordId, { confidence: k.confidence, timesTested: k.timesTested }]),
+  );
+  const bandRows =
+    computeBuildModeActiveBandRows({
+      graphRows,
+      assumedRank,
+      vocabSize,
+      frontierBandMax,
+      knowledgeByWordId,
+    }) ?? [];
+  const bandIds = bandRows.map((r) => r.wordId);
+  const clozable =
+    bandIds.length > 0
+      ? await prisma.word.findMany({
+          where: {
+            languageId,
+            id: { in: bandIds },
+            ...prismaWhereWordHasResolvableClozeMaterial(languageId),
+          },
+          select: { id: true },
+        })
+      : [];
   return {
-    orderedIds,
-    winnableIds: winnable.length > 0 ? winnable : orderedIds,
+    bandRows,
+    clozableWordIds: new Set(clozable.map((w) => w.id)),
   };
-}
-
-/** Several attempts: territory list is rank-ordered but some lemmas may fail cloze resolution. */
-async function tryResolveBuildTerritoryPick(
-  orderedIds: string[],
-  testedInSession: Set<string>,
-  spreadCap: number,
-  langs: { nativeLanguageId: string; targetLanguageId: string },
-  b: VocabBuildSettings,
-) {
-  const localTried = new Set<string>();
-  for (let a = 0; a < 16; a++) {
-    const wordId = pickPreferFreshFromOrderedIds(orderedIds, testedInSession, localTried, b, {
-      spreadCap,
-      biasTowardHead: true,
-    });
-    if (!wordId) return null;
-    localTried.add(wordId);
-    const resolved = await resolveClozeWithHint({
-      wordId,
-      nativeLanguageId: langs.nativeLanguageId,
-      targetLanguageId: langs.targetLanguageId,
-    });
-    if (resolved.ok) return resolved;
-  }
-  return null;
 }
 
 async function handleAssessmentNext(
@@ -666,116 +624,10 @@ async function handleNewWordsNext(
 }
 
 /**
- * BUILD mode: fill gaps in the vocab graph band (first min(corpus, ≈1.2× baseline) lemmas by rank).
- * When `columnFocusWordIds` is set and some listed lemmas still have **no** answer this session, that
- * **column focus** pass runs first (heatmap column order), ahead of territory opening/revisit and weighted
- * buckets. Picks walk that order with per-word shuffle retries; while the first pass is incomplete,
- * **no** other Build branch runs (404 only if no listed word yields a cloze). Two bands: a **frontier** (no knowledge row yet, rank > assumedRank, capped) for introductions, and
- * an **active** band (in-flight learning: not verified known). Territory opening/revisit prefers
- * active rows over brand-new lemmas. Shaky picks are rank-ordered within the band. Guests keep the
- * legacy rank-window random walk (no profile / knowledge).
+ * BUILD mode (signed-in): heatmap-aligned **active band**, then random **strategy** among reinforce /
+ * introduce / band-walk. Column focus (if any) runs first until each listed lemma has one session
+ * answer.
  */
-async function handleBuildGuestNext(
-  // biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
-  c: Context<any>,
-  session: TestSession,
-  langs: { nativeLanguageId: string; targetLanguageId: string },
-  vocabMode: VocabMode,
-) {
-  const sessionAnswers = await prisma.testAnswer.findMany({
-    where: { testSessionId: session.id },
-    orderBy: { answeredAt: "asc" },
-    select: { wordId: true },
-  });
-  const testedInSession = new Set(sessionAnswers.map((a) => a.wordId));
-  const columnOrdered = parseColumnFocusWordIds(session.columnFocusWordIds);
-  if (columnFocusPendingFirstPass(columnOrdered, testedInSession)) {
-    const resolved = await tryPickColumnFocusOrderedWithRetries(columnOrdered, testedInSession, langs);
-    if (resolved) {
-      return c.json({
-        wordId: resolved.wordId,
-        lemma: resolved.lemma,
-        rank: resolved.rank,
-        targetSentenceId: resolved.targetSentenceId,
-        promptText: resolved.promptText,
-        targetSentenceText: resolved.targetSentenceText,
-        hintText: resolved.hintText,
-        hintSentenceId: resolved.hintSentenceId,
-        hintSource: resolved.hintSource,
-        inlineHint: resolved.inlineHint,
-        answerType: "TRANSLATION_TYPED" as const,
-        sessionMode: session.mode,
-        vocabMode,
-        devSelection: devSelection(
-          vocabMode,
-          "column_focus",
-          `Column focus (guest): ${columnOrdered.length}-word heatmap column order — each listed lemma at least once this session before random walk (ordered walk, per-word shuffle retries)`,
-        ),
-      });
-    }
-    return c.json(
-      {
-        error: "no_question_available",
-        message:
-          "Column practice is locked on this list until each word has been checked once. The next unseen word could not be built as a cloze yet — try “Next” again, or fix sentence/hint coverage for that lemma.",
-      },
-      404,
-    );
-  }
-
-  const tested = session.wordsTestedCount;
-  const rankMin = 1;
-  const rankMax = Math.min(100 + tested * 50, 10000);
-  const rankRange = { min: rankMin, max: rankMax };
-
-  const tried = new Set<string>();
-  const maxTries = 24;
-
-  for (let i = 0; i < maxTries; i++) {
-    const wordId = await pickRandomWordIdForCloze(langs.targetLanguageId, [...tried], rankRange);
-    if (!wordId) break;
-    tried.add(wordId);
-
-    const resolved = await resolveClozeWithHint({
-      wordId,
-      nativeLanguageId: langs.nativeLanguageId,
-      targetLanguageId: langs.targetLanguageId,
-    });
-
-    if (!resolved.ok) continue;
-
-    return c.json({
-      wordId: resolved.wordId,
-      lemma: resolved.lemma,
-      rank: resolved.rank,
-      targetSentenceId: resolved.targetSentenceId,
-      promptText: resolved.promptText,
-      targetSentenceText: resolved.targetSentenceText,
-      hintText: resolved.hintText,
-      hintSentenceId: resolved.hintSentenceId,
-      hintSource: resolved.hintSource,
-      inlineHint: resolved.inlineHint,
-      answerType: "TRANSLATION_TYPED" as const,
-      sessionMode: session.mode,
-      vocabMode,
-      devSelection: devSelection(
-        vocabMode,
-        "guest_random",
-        "Guest build: random cloze in expanding rank window (no profile buckets)",
-      ),
-    });
-  }
-
-  return c.json(
-    {
-      error: "no_question_available",
-      message:
-        "No cloze item with a hint could be built. Add parallel translations (Tatoeba links) or ensure words have dictionary glosses.",
-    },
-    404,
-  );
-}
-
 async function handleBuildNext(
   // biome-ignore lint/suspicious/noExplicitAny: Hono context type is complex and varies by route
   c: Context<any>,
@@ -784,14 +636,21 @@ async function handleBuildNext(
   vocabMode: VocabMode,
 ) {
   if (!session.userId) {
-    return handleBuildGuestNext(c, session, langs, vocabMode);
+    return c.json(
+      {
+        error: "build_requires_auth",
+        message: "Build vocabulary requires a signed-in account. Try Assessment mode, or sign in to use Build.",
+      },
+      403,
+    );
   }
+  const userId = session.userId;
 
   const [profile, sessionAnswers, knownVerifiedCount] = await Promise.all([
     prisma.userLanguageProfile.findUnique({
       where: {
         userId_languageId: {
-          userId: session.userId,
+          userId,
           languageId: langs.targetLanguageId,
         },
       },
@@ -803,7 +662,7 @@ async function handleBuildNext(
     }),
     prisma.userWordKnowledge.count({
       where: {
-        userId: session.userId,
+        userId,
         confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD },
         timesTested: { gte: KNOWN_MIN_TESTS },
         word: {
@@ -819,51 +678,9 @@ async function handleBuildNext(
   const testedInSession = new Set(sessionAnswers.map((a) => a.wordId));
   const columnOrdered = parseColumnFocusWordIds(session.columnFocusWordIds);
   const pendingCol = columnFocusPendingFirstPass(columnOrdered, testedInSession);
-  const firstUntestedCol = columnOrdered.find((id) => !testedInSession.has(id));
-  // #region agent log
-  fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b66d9c" },
-    body: JSON.stringify({
-      sessionId: "b66d9c",
-      runId: "post-fix",
-      hypothesisId: "H2-H4",
-      location: "test.ts:handleBuildNext:columnGate",
-      message: "build next column-focus gate",
-      data: {
-        testSessionId: session.id.slice(0, 8),
-        columnOrderedLen: columnOrdered.length,
-        gateUsesFullOrderedList: true,
-        testedInSessionLen: testedInSession.size,
-        pendingCol,
-        firstUntestedCol: firstUntestedCol?.slice(0, 8) ?? null,
-        columnOrderedHead: columnOrdered.slice(0, 3).map((id) => id.slice(0, 8)),
-      },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
   if (pendingCol) {
     const resolved = await tryPickColumnFocusOrderedWithRetries(columnOrdered, testedInSession, langs);
     if (resolved) {
-      // #region agent log
-      fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b66d9c" },
-        body: JSON.stringify({
-          sessionId: "b66d9c",
-          runId: "post-fix",
-          hypothesisId: "H3",
-          location: "test.ts:handleBuildNext:columnPick",
-          message: "column focus resolved",
-          data: {
-            wordId: resolved.wordId.slice(0, 8),
-            matchesFirstUntested: resolved.wordId === firstUntestedCol,
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
       return c.json({
         wordId: resolved.wordId,
         lemma: resolved.lemma,
@@ -881,25 +698,10 @@ async function handleBuildNext(
         devSelection: devSelection(
           vocabMode,
           "column_focus",
-          `Column focus: ${columnOrdered.length}-word heatmap column order — each listed lemma at least once this session before territory & buckets (ordered walk, per-word shuffle retries)`,
+          `Column focus: ${columnOrdered.length}-word heatmap column order — each listed lemma at least once this session before the active-band strategy roll (ordered walk, per-word shuffle retries)`,
         ),
       });
     }
-    // #region agent log
-    fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b66d9c" },
-      body: JSON.stringify({
-        sessionId: "b66d9c",
-        runId: "post-fix",
-        hypothesisId: "H3",
-        location: "test.ts:handleBuildNext:columnLock404",
-        message: "column pending but no cloze resolved",
-        data: { firstUntestedCol: firstUntestedCol?.slice(0, 8) ?? null },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion
     return c.json(
       {
         error: "no_question_available",
@@ -910,27 +712,8 @@ async function handleBuildNext(
     );
   }
 
-  // #region agent log
-  fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b66d9c" },
-    body: JSON.stringify({
-      sessionId: "b66d9c",
-      runId: "post-fix",
-      hypothesisId: "H1-H2",
-      location: "test.ts:handleBuildNext:fallbackBuckets",
-      message: "column gate skipped — entering graph/buckets path",
-      data: {
-        columnOrderedLen: columnOrdered.length,
-        pendingCol,
-      },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
-
-  const graphVisibleWordIds = await buildModeGraphVisibleWordIds(langs.targetLanguageId, assumedRank, vocabSize);
-  if (graphVisibleWordIds.length === 0) {
+  const graphVisibleRows = await buildModeGraphVisibleRankRows(langs.targetLanguageId, assumedRank, vocabSize);
+  if (graphVisibleRows.length === 0) {
     return c.json(
       {
         error: "no_question_available",
@@ -939,240 +722,84 @@ async function handleBuildNext(
       404,
     );
   }
-  const rankAboveFloor = Math.max(0, assumedRank);
   const build = await resolveVocabBuildSettings();
-
-  const eligibleMood = tailConsecutiveWrongs(sessionAnswers) >= build.moodMinStreakWrong;
-
-  const [newWords, shakyKnowledge, moodKnowledge, territoryRowsRaw] = await Promise.all([
-    prisma.word.findMany({
-      where: {
-        languageId: langs.targetLanguageId,
-        id: { in: graphVisibleWordIds },
-        effectiveRank: { gt: rankAboveFloor },
-        isOffensive: false,
-        isAbbreviation: false,
-        isTestable: true,
-        testSentenceIds: { isEmpty: false },
-        NOT: {
-          userKnowledge: {
-            some: { userId: session.userId },
-          },
-        },
+  const { bandRows, clozableWordIds } = await loadBuildActiveBandContext({
+    userId,
+    languageId: langs.targetLanguageId,
+    assumedRank,
+    vocabSize,
+    graphRows: graphVisibleRows,
+    frontierBandMax: build.frontierBandMax,
+  });
+  if (bandRows.length === 0) {
+    return c.json(
+      {
+        error: "no_question_available",
+        message:
+          "No active vocabulary band past your conquered heatmap columns. Complete more territory or try another mode.",
       },
-      orderBy: { effectiveRank: "asc" },
-      take: build.frontierBandMax,
-      select: { id: true },
-    }),
-    prisma.userWordKnowledge.findMany({
-      where: {
-        userId: session.userId,
-        NOT: {
-          AND: [{ confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD } }, { timesTested: { gte: KNOWN_MIN_TESTS } }],
-        },
-        word: {
-          is: {
-            languageId: langs.targetLanguageId,
-            id: { in: graphVisibleWordIds },
-            effectiveRank: { gte: 1 },
-            isOffensive: false,
-            isAbbreviation: false,
-            isTestable: true,
-            testSentenceIds: { isEmpty: false },
-          },
-        },
-      },
-      orderBy: [{ word: { effectiveRank: "asc" } }, { lastTestedAt: "asc" }, { confidence: "asc" }],
-      take: build.candidateCap,
-      select: { wordId: true },
-    }),
-    eligibleMood
-      ? prisma.userWordKnowledge.findMany({
-          where: {
-            userId: session.userId,
-            confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD },
-            timesTested: { gte: KNOWN_MIN_TESTS },
-            word: {
-              is: {
-                languageId: langs.targetLanguageId,
-                id: { in: graphVisibleWordIds },
-                effectiveRank: { gte: 1 },
-                isOffensive: false,
-                isAbbreviation: false,
-                isTestable: true,
-                testSentenceIds: { isEmpty: false },
-              },
-            },
-          },
-          take: build.candidateCap,
-          select: { wordId: true },
-        })
-      : Promise.resolve([] as { wordId: string }[]),
-    prisma.word.findMany({
-      where: {
-        languageId: langs.targetLanguageId,
-        id: { in: graphVisibleWordIds },
-        isOffensive: false,
-        isAbbreviation: false,
-        isTestable: true,
-        testSentenceIds: { isEmpty: false },
-        NOT: {
-          userKnowledge: {
-            some: {
-              userId: session.userId,
-              confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD },
-              timesTested: { gte: KNOWN_MIN_TESTS },
-            },
-          },
-        },
-      },
-      orderBy: { effectiveRank: "asc" },
-      take: Math.min(graphVisibleWordIds.length, 120),
-      select: {
-        id: true,
-        effectiveRank: true,
-        userKnowledge: {
-          where: { userId: session.userId },
-          select: { timesTested: true, timesCorrect: true },
-        },
-      },
-    }),
-  ]);
-
-  const newIds = newWords.map((w) => w.id);
-  const shakyIds = shakyKnowledge.map((k) => k.wordId);
-  const moodIds = moodKnowledge.map((k) => k.wordId);
-
-  const territoryRows = sortBuildTerritoryRows(territoryRowsRaw);
-  const { orderedIds: territoryPreferActiveIds, winnableIds: territoryPreferActiveWinnableIds } =
-    territoryIdsPreferActive(territoryRows, build.heavyMissThreshold);
-
-  const nextBuildQuestionNumber = sessionAnswers.length + 1;
-
-  if (
-    build.territoryOpening > 0 &&
-    nextBuildQuestionNumber > 1 &&
-    nextBuildQuestionNumber <= build.territoryOpening &&
-    territoryPreferActiveIds.length > 0
-  ) {
-    const resolved = await tryResolveBuildTerritoryPick(
-      territoryPreferActiveWinnableIds,
-      testedInSession,
-      3,
-      langs,
-      build,
+      404,
     );
-    if (resolved) {
-      return c.json({
-        wordId: resolved.wordId,
-        lemma: resolved.lemma,
-        rank: resolved.rank,
-        targetSentenceId: resolved.targetSentenceId,
-        promptText: resolved.promptText,
-        targetSentenceText: resolved.targetSentenceText,
-        hintText: resolved.hintText,
-        hintSentenceId: resolved.hintSentenceId,
-        hintSource: resolved.hintSource,
-        inlineHint: resolved.inlineHint,
-        answerType: "TRANSLATION_TYPED" as const,
-        sessionMode: session.mode,
-        vocabMode,
-        devSelection: devSelection(
-          vocabMode,
-          "territory_opening",
-          `Territory opening: Q${nextBuildQuestionNumber} of first ${build.territoryOpening} — active (in-flight) before new introductions`,
-        ),
-      });
-    }
   }
 
-  if (
-    build.territoryOpening > 0 &&
-    nextBuildQuestionNumber > build.territoryOpening &&
-    territoryPreferActiveIds.length > 0 &&
-    build.territoryRevisitEvery > 0 &&
-    nextBuildQuestionNumber % build.territoryRevisitEvery === 0
-  ) {
-    const resolved = await tryResolveBuildTerritoryPick(
-      territoryPreferActiveIds,
-      testedInSession,
-      build.territoryHeadSpread,
-      langs,
-      build,
-    );
-    if (resolved) {
-      return c.json({
-        wordId: resolved.wordId,
-        lemma: resolved.lemma,
-        rank: resolved.rank,
-        targetSentenceId: resolved.targetSentenceId,
-        promptText: resolved.promptText,
-        targetSentenceText: resolved.targetSentenceText,
-        hintText: resolved.hintText,
-        hintSentenceId: resolved.hintSentenceId,
-        hintSource: resolved.hintSource,
-        inlineHint: resolved.inlineHint,
-        answerType: "TRANSLATION_TYPED" as const,
-        sessionMode: session.mode,
-        vocabMode,
-        devSelection: devSelection(
-          vocabMode,
-          "territory_revisit",
-          `Territory revisit: every ${build.territoryRevisitEvery} questions after Q${build.territoryOpening} — active before new`,
-        ),
-      });
-    }
-  }
+  const byRank = (a: BuildModeActiveBandRow, b: BuildModeActiveBandRow) =>
+    a.effectiveRank !== b.effectiveRank ? a.effectiveRank - b.effectiveRank : a.wordId.localeCompare(b.wordId);
 
-  const primaryBucket = rollBuildBucket(eligibleMood, build);
-  const bucketOrder: ("new" | "shaky" | "mood")[] =
-    primaryBucket === "new"
-      ? ["new", "shaky", ...(eligibleMood ? (["mood"] as const) : [])]
-      : primaryBucket === "shaky"
-        ? ["shaky", "new", ...(eligibleMood ? (["mood"] as const) : [])]
-        : ["mood", "shaky", "new"];
+  const workingIds = bandRows
+    .filter(
+      (r) =>
+        clozableWordIds.has(r.wordId) && isWorkingSetMember(r, build.confidenceCriterion),
+    )
+    .sort(byRank)
+    .map((r) => r.wordId);
+
+  const introIds = bandRows
+    .filter((r) => clozableWordIds.has(r.wordId) && isIntroCandidate(r))
+    .sort(byRank)
+    .map((r) => r.wordId);
+
+  const bandWalkIds = bandRows
+    .filter((r) => clozableWordIds.has(r.wordId) && !isVerifiedKnownInBand(r.confidence, r.timesTested))
+    .sort(byRank)
+    .map((r) => r.wordId);
+
+  const workingSetThin = workingIds.length < build.workingSetSize;
+  const primary = rollBuildStrategy(build, workingSetThin);
+  const strategyOrder: BuildStrategyKind[] = [
+    primary,
+    ...(["reinforce", "introduce", "band_walk"] as const).filter((s) => s !== primary),
+  ];
+
+  const SPREAD_REINFORCE = 14;
+  const SPREAD_INTRO = 12;
+  const SPREAD_WALK = 22;
 
   const tried = new Set<string>();
-  const maxTries = 28;
+  const orderLabel = strategyOrder.join(" → ");
 
-  for (let i = 0; i < maxTries; i++) {
-    for (const bucket of bucketOrder) {
-      let wordId: string | null = null;
-      if (bucket === "new") {
-        wordId = pickPreferFreshFromOrderedIds(newIds, testedInSession, tried, build, {
-          spreadCap: build.newSpread,
-          biasTowardHead: true,
-          sliceCap: build.frontierBandMax,
-        });
-      } else if (bucket === "shaky") {
-        wordId = pickPreferFreshFromOrderedIds(shakyIds, testedInSession, tried, build, {
-          spreadCap: build.newSpread + 2,
-          biasTowardHead: true,
-        });
-      } else if (bucket === "mood" && eligibleMood) {
-        wordId = pickPreferFreshFromOrderedIds(moodIds, testedInSession, tried, build);
-      }
+  for (let pass = 0; pass < 40; pass++) {
+    for (const strat of strategyOrder) {
+      const ordered = strat === "reinforce" ? workingIds : strat === "introduce" ? introIds : bandWalkIds;
+      const spread = strat === "reinforce" ? SPREAD_REINFORCE : strat === "introduce" ? SPREAD_INTRO : SPREAD_WALK;
+      const biasHead = strat !== "band_walk";
+      const wordId = pickSpreadFromOrdered(ordered, testedInSession, tried, spread, biasHead);
       if (!wordId) continue;
       tried.add(wordId);
-
       const resolved = await resolveClozeWithHint({
         wordId,
         nativeLanguageId: langs.nativeLanguageId,
         targetLanguageId: langs.targetLanguageId,
       });
-
       if (!resolved.ok) continue;
 
-      const bucketKind = bucket;
-      const orderLabel = bucketOrder.join(" → ");
-      const bucketSummary =
-        bucket === "new"
-          ? `Frontier band (no knowledge row yet, rank > assumed, capped). Rolled primary: ${primaryBucket}. Try order: ${orderLabel}`
-          : bucket === "shaky"
-            ? `Shaky bucket (in band, not verified known). Rolled primary: ${primaryBucket}. Try order: ${orderLabel}`
-            : `Mood bucket (verified known; eligible after ${build.moodMinStreakWrong}+ consecutive wrong). Rolled primary: ${primaryBucket}. Try order: ${orderLabel}`;
+      const stratSummary =
+        strat === "reinforce"
+          ? `Reinforce working set: ${workingIds.length} clozable lemmas (tested, below confidence ${build.confidenceCriterion}, not verified-known). Rolled order: ${orderLabel}. Band size ${bandRows.length}.`
+          : strat === "introduce"
+            ? `Introduce: ${introIds.length} clozable lemmas with timesTested===0 in active band. Rolled order: ${orderLabel}.`
+            : `Band walk: ${bandWalkIds.length} clozable non-verified lemmas in active band. Rolled order: ${orderLabel}.`;
 
-      const baseSel = devSelection(vocabMode, bucketKind, bucketSummary);
+      const baseSel = devSelection(vocabMode, strat, stratSummary);
       return c.json({
         wordId: resolved.wordId,
         lemma: resolved.lemma,
@@ -1187,37 +814,32 @@ async function handleBuildNext(
         answerType: "TRANSLATION_TYPED" as const,
         sessionMode: session.mode,
         vocabMode,
-        devSelection: {
-          ...baseSel,
-          primaryBucket,
-          bucketOrder,
-        },
+        devSelection: { ...baseSel, strategyOrder },
       });
     }
   }
 
-  // Last resort: random cloze above assumed rank, still limited to the graph-visible lemma set.
-  const triedFallback = new Set(tried);
-  const low = rankAboveFloor + 1;
-  if (low <= 10_000) {
-    for (let i = 0; i < 20; i++) {
+  const clozableBandIds = bandRows.filter((r) => clozableWordIds.has(r.wordId)).map((r) => r.wordId);
+  const ranks = bandRows.filter((r) => clozableWordIds.has(r.wordId)).map((r) => r.effectiveRank);
+  if (clozableBandIds.length > 0 && ranks.length > 0) {
+    const low = Math.min(...ranks);
+    const high = Math.max(...ranks);
+    const triedFb = new Set(tried);
+    for (let i = 0; i < 24; i++) {
       const wordId = await pickRandomWordIdForCloze(
         langs.targetLanguageId,
-        [...triedFallback],
-        { min: low, max: 10_000 },
-        { restrictToWordIds: graphVisibleWordIds },
+        [...triedFb],
+        { min: low, max: high },
+        { restrictToWordIds: clozableBandIds, excludeVerifiedKnownForUserId: userId },
       );
       if (!wordId) break;
-      triedFallback.add(wordId);
-
+      triedFb.add(wordId);
       const resolved = await resolveClozeWithHint({
         wordId,
         nativeLanguageId: langs.nativeLanguageId,
         targetLanguageId: langs.targetLanguageId,
       });
-
       if (!resolved.ok) continue;
-
       return c.json({
         wordId: resolved.wordId,
         lemma: resolved.lemma,
@@ -1235,7 +857,7 @@ async function handleBuildNext(
         devSelection: devSelection(
           vocabMode,
           "fallback",
-          "Fallback: random in-band cloze above assumed rank after bucket attempts failed",
+          "Fallback: random clozable lemma in active band (rank window from band) after strategy passes failed",
         ),
       });
     }
@@ -1244,7 +866,8 @@ async function handleBuildNext(
   return c.json(
     {
       error: "no_question_available",
-      message: "No build-mode cloze available above your assumed rank. Try Frustration mode or complete an assessment.",
+      message:
+        "No build-mode cloze available in your active heatmap band. Add test sentences / hints for nearby lemmas, or try Frustration mode.",
     },
     404,
   );
@@ -1394,6 +1017,16 @@ export const testRoute = new Hono<OptionalAuthEnv>()
     }
     if (!targetLang?.enabled) {
       return c.json({ error: "Target language is not available" }, 400);
+    }
+
+    if (body.vocabMode === "BUILD") {
+      return c.json(
+        {
+          error: "build_requires_auth",
+          message: "Build vocabulary requires signing in. Choose Assessment or another mode, or create an account.",
+        },
+        403,
+      );
     }
 
     const session = await prisma.testSession.create({
@@ -1985,9 +1618,44 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 
     const assumedRank = profile?.assumedRank ?? 0;
     const vocabSize = assumedRank + knownVerifiedCount;
-    const graphVisibleWordIds = await buildModeGraphVisibleWordIds(langs.targetLanguageId, assumedRank, vocabSize);
-    const rankAboveFloor = Math.max(0, assumedRank);
+    const graphVisibleRows = await buildModeGraphVisibleRankRows(langs.targetLanguageId, assumedRank, vocabSize);
     const build = await resolveVocabBuildSettings();
+    const { bandRows, clozableWordIds } = await loadBuildActiveBandContext({
+      userId: sessionUserId,
+      languageId: langs.targetLanguageId,
+      assumedRank,
+      vocabSize,
+      graphRows: graphVisibleRows,
+      frontierBandMax: build.frontierBandMax,
+    });
+
+    const byRank = (a: BuildModeActiveBandRow, b: BuildModeActiveBandRow) =>
+      a.effectiveRank !== b.effectiveRank ? a.effectiveRank - b.effectiveRank : a.wordId.localeCompare(b.wordId);
+
+    const workingIds = bandRows
+      .filter((r) => clozableWordIds.has(r.wordId) && isWorkingSetMember(r, build.confidenceCriterion))
+      .sort(byRank)
+      .map((r) => r.wordId);
+
+    const introIds = bandRows
+      .filter((r) => clozableWordIds.has(r.wordId) && isIntroCandidate(r))
+      .sort(byRank)
+      .map((r) => r.wordId);
+
+    const bandWalkIds = bandRows
+      .filter((r) => clozableWordIds.has(r.wordId) && !isVerifiedKnownInBand(r.confidence, r.timesTested))
+      .sort(byRank)
+      .map((r) => r.wordId);
+
+    const workingSetThinPreview = workingIds.length < build.workingSetSize;
+
+    const wordSelect = {
+      id: true,
+      lemma: true,
+      effectiveRank: true,
+      testSentenceIds: true,
+    } as const;
+
     const testedInSession = new Set(sessionAnswers.map((a) => a.wordId));
     const peekWordIdRaw = c.req.query("peekWordId")?.trim();
     const peekWordId =
@@ -1997,202 +1665,53 @@ export const testRoute = new Hono<OptionalAuthEnv>()
     const testedForPanel = new Set(testedInSession);
     if (peekWordId) testedForPanel.add(peekWordId);
 
-    const answersChrono = sessionAnswers.map((a) => ({ correct: a.correct }));
-    const consecutiveWrongStreak = tailConsecutiveWrongs(answersChrono);
-    const eligibleMoodNow = consecutiveWrongStreak >= build.moodMinStreakWrong;
-
-    const wordSelect = {
-      id: true,
-      lemma: true,
-      effectiveRank: true,
-      testSentenceIds: true,
-    } as const;
-
-    const [newWords, shakyKnowledge, territoryRowsRaw, peekWordRow, moodKnowledge] = await Promise.all([
-      // "new" / frontier band: matches `handleBuildNext` (rank > assumedRank, no row, capped).
-      prisma.word.findMany({
-        where: {
-          languageId: langs.targetLanguageId,
-          id: { in: graphVisibleWordIds },
-          effectiveRank: { gt: rankAboveFloor },
-          isOffensive: false,
-          isAbbreviation: false,
-          isTestable: true,
-          testSentenceIds: { isEmpty: false },
-          NOT: {
-            userKnowledge: {
-              some: { userId: sessionUserId },
-            },
-          },
-        },
-        orderBy: { effectiveRank: "asc" },
-        take: build.frontierBandMax,
-        select: wordSelect,
-      }),
-      prisma.userWordKnowledge.findMany({
-        where: {
-          userId: sessionUserId,
-          NOT: {
-            AND: [{ confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD } }, { timesTested: { gte: KNOWN_MIN_TESTS } }],
-          },
-          word: {
-            is: {
-              languageId: langs.targetLanguageId,
-              id: { in: graphVisibleWordIds },
-              effectiveRank: { gte: 1 },
-              isOffensive: false,
-              isAbbreviation: false,
-              isTestable: true,
-              testSentenceIds: { isEmpty: false },
-            },
-          },
-        },
-        orderBy: [{ word: { effectiveRank: "asc" } }, { lastTestedAt: "asc" }, { confidence: "asc" }],
-        take: build.candidateCap,
-        select: {
-          wordId: true,
-          confidence: true,
-          timesTested: true,
-          word: { select: wordSelect },
-        },
-      }),
-      prisma.word.findMany({
-        where: {
-          languageId: langs.targetLanguageId,
-          id: { in: graphVisibleWordIds },
-          isOffensive: false,
-          isAbbreviation: false,
-          isTestable: true,
-          testSentenceIds: { isEmpty: false },
-          NOT: {
-            userKnowledge: {
-              some: {
-                userId: sessionUserId,
-                confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD },
-                timesTested: { gte: KNOWN_MIN_TESTS },
-              },
-            },
-          },
-        },
-        orderBy: { effectiveRank: "asc" },
-        take: Math.min(graphVisibleWordIds.length, 120),
-        select: {
-          ...wordSelect,
-          userKnowledge: {
-            where: { userId: sessionUserId },
-            select: { timesTested: true, timesCorrect: true },
-          },
-        },
-      }),
-      // Always resolve the current/peeked word so we can surface it in the dev panel
-      // when the filter queries above exclude it (e.g. cloze resolution edge cases).
-      peekWordId
-        ? prisma.word.findUnique({
-            where: { id: peekWordId },
-            select: wordSelect,
-          })
-        : Promise.resolve(null),
-      eligibleMoodNow
-        ? prisma.userWordKnowledge.findMany({
-            where: {
-              userId: sessionUserId,
-              confidence: { gte: KNOWN_CONFIDENCE_THRESHOLD },
-              timesTested: { gte: KNOWN_MIN_TESTS },
-              word: {
-                is: {
-                  languageId: langs.targetLanguageId,
-                  id: { in: graphVisibleWordIds },
-                  effectiveRank: { gte: 1 },
-                  isOffensive: false,
-                  isAbbreviation: false,
-                  isTestable: true,
-                  testSentenceIds: { isEmpty: false },
-                },
-              },
-            },
-            orderBy: [{ lastTestedAt: "asc" }, { confidence: "asc" }],
-            take: build.candidateCap,
-            select: {
-              wordId: true,
-              confidence: true,
-              timesTested: true,
-              word: { select: wordSelect },
-            },
-          })
-        : Promise.resolve(
-            [] as {
-              wordId: string;
-              confidence: number;
-              timesTested: number;
-              word: {
-                id: string;
-                lemma: string;
-                effectiveRank: number;
-                testSentenceIds: string[];
-              };
-            }[],
-          ),
-    ]);
-
-    // Deduplicate: raw territory overlaps "shaky" and frontier "new". Subtract those so each
-    // tab is distinct — remainder is usually not-yet-known with no row at rank ≤ assumedRank
-    // (outside the frontier band filter) or other edge cases.
-    const shakyWordIds = new Set(shakyKnowledge.map((k) => k.wordId));
-    const newWordIds = new Set(newWords.map((w) => w.id));
-    const territoryRows = sortBuildTerritoryRows(
-      territoryRowsRaw.filter((w) => !shakyWordIds.has(w.id) && !newWordIds.has(w.id)),
-    );
-    const territoryRowsSortedForPreview = sortBuildTerritoryRows(territoryRowsRaw);
-    const territoryCountForPreview = territoryIdsPreferActive(territoryRowsSortedForPreview, build.heavyMissThreshold)
-      .orderedIds.length;
     const nextQ = sessionAnswers.length + 1;
     const vocabMode = session.vocabMode ?? "BUILD";
 
     const columnOrderedUpcoming = parseColumnFocusWordIds(session.columnFocusWordIds);
     const testedForColumnPreview = new Set(testedInSession);
     if (peekWordId) testedForColumnPreview.add(peekWordId);
-    const columnFocusActiveAfterSubmit = columnFocusPendingFirstPass(
-      columnOrderedUpcoming,
-      testedForColumnPreview,
-    );
-
-    const eligibleMoodAfterCorrect =
-      tailConsecutiveWrongs([...answersChrono, { correct: true }]) >= build.moodMinStreakWrong;
-    const eligibleMoodAfterWrong =
-      tailConsecutiveWrongs([...answersChrono, { correct: false }]) >= build.moodMinStreakWrong;
+    const columnFocusActiveAfterSubmit = columnFocusPendingFirstPass(columnOrderedUpcoming, testedForColumnPreview);
 
     const nextQAfterSubmit = sessionAnswers.length + 2;
     const nextAfterCorrect =
       vocabMode === "BUILD"
         ? buildNextPickPreview({
             nextBuildQuestionNumber: nextQAfterSubmit,
-            territoryCount: territoryCountForPreview,
-            eligibleMood: eligibleMoodAfterCorrect,
             build,
             columnFocusActive: columnFocusActiveAfterSubmit,
+            workingSetThin: workingSetThinPreview,
           })
         : null;
     const nextAfterWrong =
       vocabMode === "BUILD"
         ? buildNextPickPreview({
             nextBuildQuestionNumber: nextQAfterSubmit,
-            territoryCount: territoryCountForPreview,
-            eligibleMood: eligibleMoodAfterWrong,
             build,
             columnFocusActive: columnFocusActiveAfterSubmit,
+            workingSetThin: workingSetThinPreview,
           })
         : null;
 
-    // Collect all candidate word IDs to batch-fetch knowledge
-    const allWordIds = [
-      ...new Set([
-        ...territoryRows.map((r) => r.id),
-        ...newWords.map((w) => w.id),
-        ...shakyKnowledge.map((k) => k.wordId),
-        ...moodKnowledge.map((k) => k.wordId),
-        ...(peekWordRow ? [peekWordRow.id] : []),
-      ]),
-    ];
+    const bandWordIds = [...new Set(bandRows.map((r) => r.wordId))];
+    const [wordsForBand, peekWordRow] = await Promise.all([
+      bandWordIds.length > 0
+        ? prisma.word.findMany({
+            where: { languageId: langs.targetLanguageId, id: { in: bandWordIds } },
+            select: wordSelect,
+          })
+        : Promise.resolve([] as Array<{ id: string; lemma: string; effectiveRank: number; testSentenceIds: string[] }>),
+      peekWordId
+        ? prisma.word.findUnique({
+            where: { id: peekWordId },
+            select: wordSelect,
+          })
+        : Promise.resolve(null),
+    ]);
+
+    const wordById = new Map(wordsForBand.map((w) => [w.id, w]));
+
+    const allWordIds = [...new Set([...bandWordIds, ...(peekWordRow ? [peekWordRow.id] : [])])];
 
     const knowledgeRows =
       allWordIds.length > 0
@@ -2229,30 +1748,49 @@ export const testRoute = new Hono<OptionalAuthEnv>()
       testSentenceIds: string[];
     }): UpcomingWord => {
       const k = knowledgeByWordId.get(w.id);
+      const conf = k?.confidence;
       return {
         wordId: w.id,
         lemma: w.lemma,
         rank: w.effectiveRank,
         testedInSession: testedForPanel.has(w.id),
         hasSentences: w.testSentenceIds.length > 0,
-        confidence: k?.confidence ?? 0,
+        confidence: typeof conf === "number" ? conf : 0,
         timesTested: k?.timesTested ?? 0,
         streak: k?.streak ?? 0,
         lastTestedAt: k?.lastTestedAt?.toISOString() ?? null,
       };
     };
 
+    const activeBandPreview = bandRows
+      .filter((r) => clozableWordIds.has(r.wordId))
+      .slice(0, 40)
+      .map((r) => wordById.get(r.wordId))
+      .filter((w): w is NonNullable<typeof w> => !!w)
+      .map(mapWord);
+
+    const mapIdsToWords = (ids: string[], cap: number): UpcomingWord[] => {
+      const out: UpcomingWord[] = [];
+      for (const id of ids) {
+        if (out.length >= cap) break;
+        const w = wordById.get(id);
+        if (w) out.push(mapWord(w));
+      }
+      return out;
+    };
+
     return c.json({
       vocabMode,
       questionNumber: nextQ,
-      territory: territoryRows.slice(0, 20).map(mapWord),
-      new: newWords.slice(0, 20).map(mapWord),
-      shaky: shakyKnowledge.slice(0, 20).map((k) => mapWord(k.word)),
-      mood: moodKnowledge.slice(0, 20).map((k) => mapWord(k.word)),
+      activeBand: activeBandPreview,
+      workingSet: mapIdsToWords(workingIds, 20),
+      intros: mapIdsToWords(introIds, 20),
       current: peekWordRow ? mapWord(peekWordRow) : null,
       generatedAt: new Date().toISOString(),
-      consecutiveWrongStreak,
-      eligibleMoodNow,
+      bandLemmaCount: bandRows.length,
+      clozableInBand: clozableWordIds.size,
+      workingSetCount: workingIds.length,
+      workingSetThin: workingSetThinPreview,
       devNextPickAfterSubmit:
         vocabMode === "BUILD" && nextAfterCorrect && nextAfterWrong
           ? {
