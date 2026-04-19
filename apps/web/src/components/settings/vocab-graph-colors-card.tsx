@@ -1,30 +1,27 @@
 import type { ColorResult } from "@uiw/color-convert"
 import Wheel from "@uiw/react-color-wheel"
-import { useRef } from "react"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { Label } from "~/components/ui/label"
 import { VocabGraph } from "~/components/vocab-graph"
 import { cn } from "~/lib/utils"
-import { useThemeStore } from "~/stores/theme"
 import {
 	type VocabGraphColorKey,
 	type VocabGraphColors,
 	type VocabGraphHsva,
-	useVocabGraphAppearanceStore,
+	VOCAB_GRAPH_THEME_DEFAULTS,
 } from "~/stores/vocab-graph-appearance"
 
 const STOP_META: { key: VocabGraphColorKey; title: string; description: string }[] = [
 	{
 		key: "before",
 		title: "Before",
-		description:
-			"Low confidence end of the scale (heatmap cells trending toward “still learning”).",
+		description: 'Low confidence end of the scale (heatmap cells trending toward \u201Cstill learning\u201D).',
 	},
 	{
 		key: "after",
 		title: "After",
-		description: "High confidence end of the scale (cells trending toward “well known”).",
+		description: 'High confidence end of the scale (cells trending toward \u201Cwell known\u201D).',
 	},
 	{
 		key: "conquered",
@@ -135,19 +132,29 @@ function HsvaWheelBlock({
 	)
 }
 
-export function VocabGraphColorsSettingsCard({
+export function VocabGraphColorsCard({
+	colors,
+	savedColors,
+	onColorsChange,
+	dark,
 	previewLanguageId,
 }: {
-	/** Target language id from settings (saved or current selection) for live heatmap preview. */
+	colors: VocabGraphColors
+	/** The last-saved colors — used for "Restore saved" button. */
+	savedColors: VocabGraphColors
+	onColorsChange: (colors: VocabGraphColors) => void
+	dark: boolean
 	previewLanguageId: string | null
 }) {
-	const dark = useThemeStore((s) => s.dark)
-	const colors = useVocabGraphAppearanceStore((s) => s.colors)
-	const setWheelHs = useVocabGraphAppearanceStore((s) => s.setWheelHs)
-	const setBrightness = useVocabGraphAppearanceStore((s) => s.setBrightness)
-	const setColors = useVocabGraphAppearanceStore((s) => s.setColors)
-	const resetForAppearance = useVocabGraphAppearanceStore((s) => s.resetForAppearance)
-	const initialColors = useRef<VocabGraphColors>(structuredClone(colors))
+	function setWheelHs(key: VocabGraphColorKey, h: number, s: number) {
+		const cur = colors[key]
+		onColorsChange({ ...colors, [key]: { h, s, v: cur.v, a: cur.a } })
+	}
+
+	function setBrightness(key: VocabGraphColorKey, v: number) {
+		const cur = colors[key]
+		onColorsChange({ ...colors, [key]: { ...cur, v: Math.max(0, Math.min(100, v)) } })
+	}
 
 	return (
 		<Card>
@@ -175,13 +182,13 @@ export function VocabGraphColorsSettingsCard({
 						</div>
 					) : (
 						<p className="text-sm text-muted-foreground rounded-lg border border-dashed border-border/80 bg-muted/10 px-3 py-6 text-center">
-							Choose a target language above to preview your vocabulary graph with these colors.
+							No preview available — open Practice to see colors live.
 						</p>
 					)}
 				</div>
 
 				<div className="space-y-6 min-w-0">
-					<div className="grid gap-4 sm:grid-cols-2">
+					<div className="grid gap-4 md:grid-cols-2">
 						{STOP_META.map(({ key, title, description }) => (
 							<HsvaWheelBlock
 								key={key}
@@ -199,15 +206,19 @@ export function VocabGraphColorsSettingsCard({
 							type="button"
 							variant="outline"
 							size="sm"
-							onClick={() => setColors(initialColors.current)}
+							onClick={() => onColorsChange(structuredClone(savedColors))}
 						>
-							Restore original
+							Restore saved
 						</Button>
 						<Button
 							type="button"
 							variant="outline"
 							size="sm"
-							onClick={() => resetForAppearance(dark ? "dark" : "light")}
+							onClick={() =>
+								onColorsChange(
+									structuredClone(VOCAB_GRAPH_THEME_DEFAULTS[dark ? "dark" : "light"]),
+								)
+							}
 						>
 							Reset to recommended ({dark ? "dark" : "light"})
 						</Button>

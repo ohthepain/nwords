@@ -1060,7 +1060,6 @@ function PracticePage() {
 				onNativeLanguageUpdated={(next) =>
 					setProfile((p) => (p && p !== null ? { ...p, nativeLanguage: next } : p))
 				}
-				signOutNavigateTo="/practice"
 				onAfterSignOut={resetPracticeUiAfterSignOut}
 			/>
 		)

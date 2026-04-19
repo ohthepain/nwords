@@ -535,6 +535,8 @@ model AppSettings {
   aiApiKey   String?  @map("ai_api_key")
   /// Build-mode tuning (merged with code defaults). See `VocabBuildSettings` in @nwords/shared.
   vocabBuildSettings Json? @map("vocab_build_settings")
+  /// Global heatmap color palette (VocabGraphColors). Null = code defaults apply.
+  vocabGraphColors Json? @map("vocab_graph_colors")
   updatedAt DateTime @updatedAt
 
   @@map("app_settings")

@@ -400,19 +400,6 @@ function AdminSiteSettingsPage() {
 			</Card>
 
 			<AiConfigCard settings={settings} onSaved={setSettings} />
-
-			<Card>
-				<CardHeader>
-					<CardTitle className="text-base">Vocabulary graph appearance</CardTitle>
-					<CardDescription>
-						Heatmap colors are stored per account. Admins configure them under their own{" "}
-						<Link to="/settings" className="text-foreground underline underline-offset-2">
-							Settings
-						</Link>{" "}
-						→ “Vocabulary graph colors” (hue wheel + brightness).
-					</CardDescription>
-				</CardHeader>
-			</Card>
 		</div>
 	)
 }

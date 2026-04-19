@@ -1,5 +1,4 @@
 import { create } from "zustand"
-import { persist } from "zustand/middleware"
 
 export type VocabGraphHsva = { h: number; s: number; v: number; a: number }
 
@@ -32,32 +31,24 @@ type VocabGraphAppearanceState = {
 	resetForAppearance: (appearance: "light" | "dark") => void
 }
 
-export const useVocabGraphAppearanceStore = create<VocabGraphAppearanceState>()(
-	persist(
-		(set, get) => ({
-			colors: VOCAB_GRAPH_THEME_DEFAULTS.light,
-			setHsva: (key, next) =>
-				set({ colors: { ...get().colors, [key]: { ...next, a: next.a ?? 1 } } }),
-			setWheelHs: (key, h, s) => {
-				const cur = get().colors[key]
-				set({
-					colors: { ...get().colors, [key]: { h, s, v: cur.v, a: cur.a } },
-				})
-			},
-			setBrightness: (key, v) => {
-				const cur = get().colors[key]
-				const clamped = Math.max(0, Math.min(100, v))
-				set({
-					colors: { ...get().colors, [key]: { ...cur, v: clamped } },
-				})
-			},
-			setColors: (colors) => set({ colors: structuredClone(colors) }),
-			resetForAppearance: (appearance) =>
-				set({ colors: structuredClone(VOCAB_GRAPH_THEME_DEFAULTS[appearance]) }),
-		}),
-		{
-			name: "nwords-vocab-graph-appearance",
-			partialize: (s) => ({ colors: s.colors }),
-		},
-	),
-)
+export const useVocabGraphAppearanceStore = create<VocabGraphAppearanceState>()((set, get) => ({
+	colors: VOCAB_GRAPH_THEME_DEFAULTS.light,
+	setHsva: (key, next) =>
+		set({ colors: { ...get().colors, [key]: { ...next, a: next.a ?? 1 } } }),
+	setWheelHs: (key, h, s) => {
+		const cur = get().colors[key]
+		set({
+			colors: { ...get().colors, [key]: { h, s, v: cur.v, a: cur.a } },
+		})
+	},
+	setBrightness: (key, v) => {
+		const cur = get().colors[key]
+		const clamped = Math.max(0, Math.min(100, v))
+		set({
+			colors: { ...get().colors, [key]: { ...cur, v: clamped } },
+		})
+	},
+	setColors: (colors) => set({ colors: structuredClone(colors) }),
+	resetForAppearance: (appearance) =>
+		set({ colors: structuredClone(VOCAB_GRAPH_THEME_DEFAULTS[appearance]) }),
+}))

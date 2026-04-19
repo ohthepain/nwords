@@ -167,6 +167,44 @@ export function VocabGraph({
 		[visibleCells, numCols, numRows],
 	)
 
+	// Measure available container width so we can clip conquered columns on narrow viewports.
+	const outerRef = useRef<HTMLDivElement>(null)
+	const [containerWidth, setContainerWidth] = useState<number | null>(null)
+	useEffect(() => {
+		const el = outerRef.current
+		if (!el) return
+		const w = el.getBoundingClientRect().width
+		if (w > 0) setContainerWidth(w)
+		const ro = new ResizeObserver(([entry]) => {
+			const cw = entry.contentRect.width
+			if (cw > 0) setContainerWidth(cw)
+		})
+		ro.observe(el)
+		return () => ro.disconnect()
+	}, [])
+
+	// How many columns fit in the measured container (all columns when not yet measured).
+	const fitCols =
+		containerWidth !== null ? Math.max(1, Math.floor((containerWidth + GAP_PX) / step)) : numCols
+
+	// Skip leading conquered columns so the frontier stays roughly centred in the viewport.
+	const skipCols = useMemo(() => {
+		if (fitCols >= numCols) return 0
+		const centerPos = Math.floor(fitCols / 2)
+		return Math.max(0, Math.min(completedColsFromLeft - centerPos, numCols - fitCols))
+	}, [fitCols, numCols, completedColsFromLeft])
+
+	const renderNumCols = numCols - skipCols
+	const renderSkipIdx = skipCols * numRows
+	const renderCells = useMemo(
+		() => visibleCells.slice(renderSkipIdx),
+		[visibleCells, renderSkipIdx],
+	)
+	const renderGraphW = renderNumCols * step - GAP_PX
+	const renderCompletedCols = Math.max(0, completedColsFromLeft - skipCols)
+	const renderTerritoryWidthPx =
+		renderCompletedCols > 0 ? renderCompletedCols * step - GAP_PX : 0
+
 	const heatmapEpochRef = useRef("")
 	const prevCompletedColsRef = useRef<number | null>(null)
 	const lastFiredCompletedColsRef = useRef<number | null>(null)
@@ -219,8 +257,6 @@ export function VocabGraph({
 		vocabSize,
 		onTerritoryColumnAdvanced,
 	])
-
-	const territoryWidthPx = completedColsFromLeft > 0 ? completedColsFromLeft * step - GAP_PX : 0
 
 	const conqueredWords = completedColsFromLeft * numRows
 
@@ -308,12 +344,13 @@ export function VocabGraph({
 			if (px < 0 || py < 0) return null
 			const col = Math.floor(px / step)
 			const rowFromTop = Math.floor(py / step)
-			if (col < 0 || col >= numCols || rowFromTop < 0 || rowFromTop >= numRows) return null
+			if (col < 0 || col >= renderNumCols || rowFromTop < 0 || rowFromTop >= numRows) return null
 			const rowFromBottom = numRows - 1 - rowFromTop
-			const idx = col * numRows + rowFromBottom
+			const idxInRender = col * numRows + rowFromBottom
+			const idx = renderSkipIdx + idxInRender
 			return idx >= 0 && idx < visibleCells.length ? idx : null
 		},
-		[numCols, numRows, step, visibleCells.length],
+		[renderNumCols, numRows, step, visibleCells.length, renderSkipIdx],
 	)
 
 	const [tooltipWordId, setTooltipWordId] = useState<string | null>(null)
@@ -468,7 +505,7 @@ export function VocabGraph({
 	}
 
 	return (
-		<div className="relative flex w-full min-w-0 flex-col space-y-2">
+		<div ref={outerRef} className="relative flex w-full min-w-0 flex-col space-y-2">
 			<div className="flex w-full justify-center">
 				<div className="flex max-w-full flex-wrap items-baseline justify-center gap-x-3 gap-y-1 text-center">
 					<p className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider shrink-0">
@@ -549,7 +586,7 @@ export function VocabGraph({
 						aria-label="Vocabulary confidence graph"
 						className="relative overflow-hidden rounded-md transition-colors duration-200"
 						style={{
-							width: graphW,
+							width: renderGraphW,
 							height: Number.isFinite(graphH) ? graphH : 8,
 							backgroundColor: "var(--vocab-graph-territory-open)",
 						}}
@@ -559,11 +596,11 @@ export function VocabGraph({
 						onPointerCancel={pointerProbe ? onPointerUp : undefined}
 						onPointerLeave={pointerProbe ? onPointerLeave : undefined}
 					>
-						{territoryWidthPx > 0 ? (
+						{renderTerritoryWidthPx > 0 ? (
 							<div
 								className="pointer-events-none absolute left-0 top-0 z-0 rounded-l-[3px]"
 								style={{
-									width: territoryWidthPx,
+									width: renderTerritoryWidthPx,
 									height: graphH,
 									backgroundColor: territorySlabFill(),
 								}}
@@ -574,14 +611,14 @@ export function VocabGraph({
 						<div
 							className="relative z-10 grid"
 							style={{
-								width: graphW,
+								width: renderGraphW,
 								height: graphH,
-								gridTemplateColumns: `repeat(${numCols}, ${square}px)`,
+								gridTemplateColumns: `repeat(${renderNumCols}, ${square}px)`,
 								gridAutoRows: `${square}px`,
 								gap: GAP_PX,
 							}}
 						>
-							{visibleCells.map((c, i) => {
+							{renderCells.map((c, i) => {
 								const col = Math.floor(i / numRows)
 								const rowFromBottom = i % numRows
 								const rowFromTop = numRows - 1 - rowFromBottom

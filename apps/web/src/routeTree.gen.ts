@@ -27,6 +27,7 @@ import { Route as AuthedAdminAdminSettingsRouteImport } from './routes/_authed/_
 import { Route as AuthedAdminAdminSentencesRouteImport } from './routes/_authed/_admin/admin/sentences'
 import { Route as AuthedAdminAdminLanguagesRouteImport } from './routes/_authed/_admin/admin/languages'
 import { Route as AuthedAdminAdminJobsRouteImport } from './routes/_authed/_admin/admin/jobs'
+import { Route as AuthedAdminAdminColorsRouteImport } from './routes/_authed/_admin/admin/colors'
 import { Route as AuthedAdminAdminClozeReportsRouteImport } from './routes/_authed/_admin/admin/cloze-reports'
 
 const PracticeRoute = PracticeRouteImport.update({
@@ -120,6 +121,11 @@ const AuthedAdminAdminJobsRoute = AuthedAdminAdminJobsRouteImport.update({
   path: '/admin/jobs',
   getParentRoute: () => AuthedAdminRoute,
 } as any)
+const AuthedAdminAdminColorsRoute = AuthedAdminAdminColorsRouteImport.update({
+  id: '/admin/colors',
+  path: '/admin/colors',
+  getParentRoute: () => AuthedAdminRoute,
+} as any)
 const AuthedAdminAdminClozeReportsRoute =
   AuthedAdminAdminClozeReportsRouteImport.update({
     id: '/admin/cloze-reports',
@@ -139,6 +145,7 @@ export interface FileRoutesByFullPath {
   '/auth/reset-password': typeof AuthResetPasswordRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/admin/cloze-reports': typeof AuthedAdminAdminClozeReportsRoute
+  '/admin/colors': typeof AuthedAdminAdminColorsRoute
   '/admin/jobs': typeof AuthedAdminAdminJobsRoute
   '/admin/languages': typeof AuthedAdminAdminLanguagesRoute
   '/admin/sentences': typeof AuthedAdminAdminSentencesRoute
@@ -158,6 +165,7 @@ export interface FileRoutesByTo {
   '/auth/reset-password': typeof AuthResetPasswordRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/admin/cloze-reports': typeof AuthedAdminAdminClozeReportsRoute
+  '/admin/colors': typeof AuthedAdminAdminColorsRoute
   '/admin/jobs': typeof AuthedAdminAdminJobsRoute
   '/admin/languages': typeof AuthedAdminAdminLanguagesRoute
   '/admin/sentences': typeof AuthedAdminAdminSentencesRoute
@@ -180,6 +188,7 @@ export interface FileRoutesById {
   '/auth/reset-password': typeof AuthResetPasswordRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/_authed/_admin/admin/cloze-reports': typeof AuthedAdminAdminClozeReportsRoute
+  '/_authed/_admin/admin/colors': typeof AuthedAdminAdminColorsRoute
   '/_authed/_admin/admin/jobs': typeof AuthedAdminAdminJobsRoute
   '/_authed/_admin/admin/languages': typeof AuthedAdminAdminLanguagesRoute
   '/_authed/_admin/admin/sentences': typeof AuthedAdminAdminSentencesRoute
@@ -201,6 +210,7 @@ export interface FileRouteTypes {
     | '/auth/reset-password'
     | '/api/auth/$'
     | '/admin/cloze-reports'
+    | '/admin/colors'
     | '/admin/jobs'
     | '/admin/languages'
     | '/admin/sentences'
@@ -220,6 +230,7 @@ export interface FileRouteTypes {
     | '/auth/reset-password'
     | '/api/auth/$'
     | '/admin/cloze-reports'
+    | '/admin/colors'
     | '/admin/jobs'
     | '/admin/languages'
     | '/admin/sentences'
@@ -241,6 +252,7 @@ export interface FileRouteTypes {
     | '/auth/reset-password'
     | '/api/auth/$'
     | '/_authed/_admin/admin/cloze-reports'
+    | '/_authed/_admin/admin/colors'
     | '/_authed/_admin/admin/jobs'
     | '/_authed/_admin/admin/languages'
     | '/_authed/_admin/admin/sentences'
@@ -388,6 +400,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedAdminAdminJobsRouteImport
       parentRoute: typeof AuthedAdminRoute
     }
+    '/_authed/_admin/admin/colors': {
+      id: '/_authed/_admin/admin/colors'
+      path: '/admin/colors'
+      fullPath: '/admin/colors'
+      preLoaderRoute: typeof AuthedAdminAdminColorsRouteImport
+      parentRoute: typeof AuthedAdminRoute
+    }
     '/_authed/_admin/admin/cloze-reports': {
       id: '/_authed/_admin/admin/cloze-reports'
       path: '/admin/cloze-reports'
@@ -400,6 +419,7 @@ declare module '@tanstack/react-router' {
 
 interface AuthedAdminRouteChildren {
   AuthedAdminAdminClozeReportsRoute: typeof AuthedAdminAdminClozeReportsRoute
+  AuthedAdminAdminColorsRoute: typeof AuthedAdminAdminColorsRoute
   AuthedAdminAdminJobsRoute: typeof AuthedAdminAdminJobsRoute
   AuthedAdminAdminLanguagesRoute: typeof AuthedAdminAdminLanguagesRoute
   AuthedAdminAdminSentencesRoute: typeof AuthedAdminAdminSentencesRoute
@@ -410,6 +430,7 @@ interface AuthedAdminRouteChildren {
 
 const AuthedAdminRouteChildren: AuthedAdminRouteChildren = {
   AuthedAdminAdminClozeReportsRoute: AuthedAdminAdminClozeReportsRoute,
+  AuthedAdminAdminColorsRoute: AuthedAdminAdminColorsRoute,
   AuthedAdminAdminJobsRoute: AuthedAdminAdminJobsRoute,
   AuthedAdminAdminLanguagesRoute: AuthedAdminAdminLanguagesRoute,
   AuthedAdminAdminSentencesRoute: AuthedAdminAdminSentencesRoute,

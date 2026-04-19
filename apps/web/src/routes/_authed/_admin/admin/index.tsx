@@ -5,6 +5,7 @@ import {
 	Languages,
 	ListTodo,
 	MessageSquareText,
+	Palette,
 	SlidersHorizontal,
 } from "lucide-react"
 import { Button } from "~/components/ui/button"
@@ -26,6 +27,17 @@ function AdminHomePage() {
 						</span>
 						<span className="text-sm font-normal text-muted-foreground">
 							Site-wide practice flags and deploy options
+						</span>
+					</Link>
+				</Button>
+				<Button variant="outline" className="h-auto py-5 px-5 justify-start" asChild>
+					<Link to="/admin/colors" className="flex flex-col items-start gap-1">
+						<span className="flex items-center gap-2 text-base font-semibold">
+							<Palette className="size-5 shrink-0 text-brand" />
+							Colors
+						</span>
+						<span className="text-sm font-normal text-muted-foreground">
+							Global vocabulary graph color palette
 						</span>
 					</Link>
 				</Button>

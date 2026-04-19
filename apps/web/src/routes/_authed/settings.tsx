@@ -1,221 +1,227 @@
-import { auth } from "@nwords/auth/server"
-import { prisma } from "@nwords/db"
-import { createFileRoute } from "@tanstack/react-router"
-import { createServerFn } from "@tanstack/react-start"
-import { getRequest } from "@tanstack/react-start/server"
-import { useState } from "react"
-import { VocabGraphColorsSettingsCard } from "~/components/settings/vocab-graph-colors-card"
-import { Button } from "~/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
-import { Label } from "~/components/ui/label"
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "~/components/ui/select"
-import { UI_STYLES, useThemeStore } from "~/stores/theme"
+import { auth } from "@nwords/auth/server";
+import { prisma } from "@nwords/db";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
+import { getRequest } from "@tanstack/react-start/server";
+import { ArrowRight } from "lucide-react";
+import { useState } from "react";
+import { Button } from "~/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card";
+import { Label } from "~/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
+import { languageCodeToFlagEmoji } from "~/lib/language-flag";
+import { UI_STYLES, useThemeStore } from "~/stores/theme";
 
 const getSettingsData = createServerFn({ method: "GET" }).handler(async () => {
-	const request = getRequest()
-	if (!request) return null
-	const session = await auth.api.getSession({ headers: request.headers })
-	if (!session?.user?.id) return null
+  const request = getRequest();
+  if (!request) return null;
+  const session = await auth.api.getSession({ headers: request.headers });
+  if (!session?.user?.id) return null;
 
-	const [user, languages] = await Promise.all([
-		prisma.user.findUnique({
-			where: { id: session.user.id },
-			select: {
-				nativeLanguageId: true,
-				targetLanguageId: true,
-			},
-		}),
-		prisma.language.findMany({
-			orderBy: { name: "asc" },
-			select: { id: true, code: true, name: true, enabled: true },
-		}),
-	])
+  const [user, languages] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: session.user.id },
+      select: {
+        nativeLanguageId: true,
+        targetLanguageId: true,
+        languageProfiles: { select: { languageId: true, assumedRank: true } },
+      },
+    }),
+    prisma.language.findMany({
+      orderBy: { name: "asc" },
+      select: { id: true, code: true, name: true, enabled: true },
+    }),
+  ]);
 
-	return {
-		nativeLanguageId: user?.nativeLanguageId ?? null,
-		targetLanguageId: user?.targetLanguageId ?? null,
-		languages,
-	}
-})
+  const targetLanguageId = user?.targetLanguageId ?? null;
+  const hasMeasured =
+    targetLanguageId != null &&
+    (user?.languageProfiles.find((p) => p.languageId === targetLanguageId)?.assumedRank ?? 0) > 0;
+
+  return {
+    nativeLanguageId: user?.nativeLanguageId ?? null,
+    targetLanguageId,
+    hasMeasured,
+    languages,
+  };
+});
 
 const updateLanguages = createServerFn({ method: "POST" })
-	.inputValidator((data: { nativeLanguageId: string; targetLanguageId: string }) => data)
-	.handler(async ({ data }) => {
-		const request = getRequest()
-		if (!request) return { success: false }
-		const session = await auth.api.getSession({ headers: request.headers })
-		if (!session?.user?.id) return { success: false }
+  .inputValidator((data: { nativeLanguageId: string; targetLanguageId: string }) => data)
+  .handler(async ({ data }) => {
+    const request = getRequest();
+    if (!request) return { success: false };
+    const session = await auth.api.getSession({ headers: request.headers });
+    if (!session?.user?.id) return { success: false };
 
-		if (data.nativeLanguageId === data.targetLanguageId) {
-			return { success: false, error: "Languages must be different" }
-		}
+    if (data.nativeLanguageId === data.targetLanguageId) {
+      return { success: false, error: "Languages must be different" };
+    }
 
-		await prisma.user.update({
-			where: { id: session.user.id },
-			data: {
-				nativeLanguageId: data.nativeLanguageId,
-				targetLanguageId: data.targetLanguageId,
-			},
-		})
+    await prisma.user.update({
+      where: { id: session.user.id },
+      data: {
+        nativeLanguageId: data.nativeLanguageId,
+        targetLanguageId: data.targetLanguageId,
+      },
+    });
 
-		return { success: true }
-	})
+    return { success: true };
+  });
 
 export const Route = createFileRoute("/_authed/settings")({
-	loader: () => getSettingsData(),
-	component: SettingsPage,
-})
+  loader: () => getSettingsData(),
+  component: SettingsPage,
+});
 
 function SettingsPage() {
-	const data = Route.useLoaderData()
-	const { uiStyle, setUiStyle } = useThemeStore()
+  const data = Route.useLoaderData();
+  const { uiStyle, setUiStyle } = useThemeStore();
 
-	const [nativeId, setNativeId] = useState(data?.nativeLanguageId ?? "")
-	const [targetId, setTargetId] = useState(data?.targetLanguageId ?? "")
-	const [saving, setSaving] = useState(false)
-	const [error, setError] = useState<string | null>(null)
-	const [saved, setSaved] = useState(false)
+  const [nativeId, setNativeId] = useState(data?.nativeLanguageId ?? "");
+  const [targetId, setTargetId] = useState(data?.targetLanguageId ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
 
-	if (!data) return null
+  if (!data) return null;
 
-	const allLanguages = data.languages
-	const enabledLanguages = data.languages.filter((l) => l.enabled)
+  const allLanguages = data.languages;
+  const enabledLanguages = data.languages.filter((l) => l.enabled);
 
-	async function handleSave() {
-		if (!nativeId || !targetId) {
-			setError("Please select both languages")
-			return
-		}
-		setSaving(true)
-		setError(null)
-		setSaved(false)
+  async function handleSave() {
+    if (!nativeId || !targetId) {
+      setError("Please select both languages");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    setSaved(false);
 
-		const result = await updateLanguages({
-			data: { nativeLanguageId: nativeId, targetLanguageId: targetId },
-		})
+    const result = await updateLanguages({
+      data: { nativeLanguageId: nativeId, targetLanguageId: targetId },
+    });
 
-		setSaving(false)
-		if (result.success) {
-			setSaved(true)
-			setTimeout(() => setSaved(false), 2000)
-		} else {
-			setError(result.error ?? "Failed to save")
-		}
-	}
+    setSaving(false);
+    if (result.success) {
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } else {
+      setError(result.error ?? "Failed to save");
+    }
+  }
 
-	return (
-		<div className="max-w-4xl mx-auto px-6 py-8 space-y-6">
-			<div>
-				<p className="text-sm text-muted-foreground mt-1">Configure your languages</p>
-			</div>
+  return (
+    <div className="max-w-4xl mx-auto px-6 py-8 space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Languages</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="space-y-2 flex-1 min-w-[160px]">
+              <Label className="text-xs font-mono text-muted-foreground uppercase tracking-wider">I speak</Label>
+              <Select value={nativeId} onValueChange={setNativeId}>
+                <SelectTrigger className="h-10">
+                  <SelectValue placeholder="Select language" />
+                </SelectTrigger>
+                <SelectContent>
+                  {allLanguages.map((lang) => (
+                    <SelectItem key={lang.id} value={lang.id}>
+                      <span aria-hidden className="text-base leading-none w-6 text-center select-none inline-block">
+                        {languageCodeToFlagEmoji(lang.code)}
+                      </span>
+                      {lang.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
 
-			<Card>
-				<CardHeader>
-					<CardTitle className="text-base">Languages</CardTitle>
-					<CardDescription>
-						Choose your native language and the language you want to study
-					</CardDescription>
-				</CardHeader>
-				<CardContent className="space-y-5">
-					<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-						<div className="space-y-2">
-							<Label className="text-xs font-mono text-muted-foreground uppercase tracking-wider">
-								I speak
-							</Label>
-							<Select value={nativeId} onValueChange={setNativeId}>
-								<SelectTrigger className="h-10">
-									<SelectValue placeholder="Select language" />
-								</SelectTrigger>
-								<SelectContent>
-									{allLanguages.map((lang) => (
-										<SelectItem key={lang.id} value={lang.id}>
-											{lang.name}
-										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
-						</div>
+            <ArrowRight className="size-4 text-muted-foreground/60 shrink-0 mb-3" aria-hidden />
 
-						<div className="space-y-2">
-							<Label className="text-xs font-mono text-muted-foreground uppercase tracking-wider">
-								I want to study
-							</Label>
-							<Select value={targetId} onValueChange={setTargetId}>
-								<SelectTrigger className="h-10">
-									<SelectValue placeholder="Select language" />
-								</SelectTrigger>
-								<SelectContent>
-									{enabledLanguages.length === 0 ? (
-										<SelectItem value="none" disabled>
-											No languages available yet
-										</SelectItem>
-									) : (
-										enabledLanguages.map((lang) => (
-											<SelectItem key={lang.id} value={lang.id}>
-												{lang.name}
-											</SelectItem>
-										))
-									)}
-								</SelectContent>
-							</Select>
-						</div>
-					</div>
+            <div className="space-y-2 flex-1 min-w-[160px]">
+              <Label className="text-xs font-mono text-muted-foreground uppercase tracking-wider">
+                I want to study
+              </Label>
+              <Select value={targetId} onValueChange={setTargetId}>
+                <SelectTrigger className="h-10">
+                  <SelectValue placeholder="Select language" />
+                </SelectTrigger>
+                <SelectContent>
+                  {enabledLanguages.length === 0 ? (
+                    <SelectItem value="none" disabled>
+                      No languages available yet
+                    </SelectItem>
+                  ) : (
+                    enabledLanguages.map((lang) => (
+                      <SelectItem key={lang.id} value={lang.id}>
+                        <span aria-hidden className="text-base leading-none w-6 text-center select-none inline-block">
+                          {languageCodeToFlagEmoji(lang.code)}
+                        </span>
+                        {lang.name}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
 
-					{enabledLanguages.length === 0 && (
-						<p className="text-xs text-muted-foreground bg-muted rounded-md px-3 py-2">
-							Languages are enabled by admins once vocabulary data has been imported.
-						</p>
-					)}
+          {enabledLanguages.length === 0 && (
+            <p className="text-xs text-muted-foreground bg-muted rounded-md px-3 py-2">
+              Languages are enabled by admins once vocabulary data has been imported.
+            </p>
+          )}
 
-					{error && (
-						<p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-3 py-2">
-							{error}
-						</p>
-					)}
+          {error && (
+            <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-3 py-2">
+              {error}
+            </p>
+          )}
 
-					<div className="flex items-center gap-3">
-						<Button onClick={handleSave} disabled={saving} className="h-9">
-							{saving ? "Saving..." : saved ? "Saved" : "Save languages"}
-						</Button>
-						{saved && (
-							<span className="text-xs text-known font-medium animate-count-up">Changes saved</span>
-						)}
-					</div>
-				</CardContent>
-			</Card>
+          <div className="flex items-center gap-3">
+            <Button onClick={handleSave} disabled={saving} className="h-9">
+              {saving ? "Saving..." : saved ? "Saved" : "Save languages"}
+            </Button>
+            {saved && <span className="text-xs text-known font-medium animate-count-up">Changes saved</span>}
+          </div>
 
-			<Card>
-				<CardHeader>
-					<CardTitle className="text-base">UI style</CardTitle>
-				</CardHeader>
-				<CardContent>
-					<div className="space-y-2">
-						<Label className="text-xs font-mono text-muted-foreground uppercase tracking-wider">
-							UI Style
-						</Label>
-						<Select value={uiStyle} onValueChange={(v) => setUiStyle(v as typeof uiStyle)}>
-							<SelectTrigger className="h-10 max-w-xs">
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								{UI_STYLES.map((style) => (
-									<SelectItem key={style} value={style}>
-										{style.charAt(0).toUpperCase() + style.slice(1)}
-									</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
-					</div>
-				</CardContent>
-			</Card>
+          {data.nativeLanguageId && data.targetLanguageId && (
+            <div className="pt-1 border-t border-border/50">
+              <Link to="/practice" search={{ vocabMode: data.hasMeasured ? "BUILD" : "ASSESSMENT" }}>
+                <Button variant="outline" className="h-9 gap-2">
+                  {data.hasMeasured ? "Start building vocabulary" : "Start measuring my vocabulary"}
+                  <ArrowRight className="size-4" />
+                </Button>
+              </Link>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
-			<VocabGraphColorsSettingsCard previewLanguageId={targetId || data.targetLanguageId || null} />
-		</div>
-	)
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">UI style</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-2">
+            <Label className="text-xs font-mono text-muted-foreground uppercase tracking-wider">UI Style</Label>
+            <Select value={uiStyle} onValueChange={(v) => setUiStyle(v as typeof uiStyle)}>
+              <SelectTrigger className="h-10 max-w-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {UI_STYLES.map((style) => (
+                  <SelectItem key={style} value={style}>
+                    {style.charAt(0).toUpperCase() + style.slice(1)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
 }

@@ -25,12 +25,27 @@ const vocabBuildPatchSchema = z
 	})
 	.strict()
 
+const hsvaSchema = z.object({
+	h: z.number().min(0).max(360),
+	s: z.number().min(0).max(100),
+	v: z.number().min(0).max(100),
+	a: z.number().min(0).max(1),
+})
+
+const vocabGraphColorsSchema = z.object({
+	before: hsvaSchema,
+	after: hsvaSchema,
+	conquered: hsvaSchema,
+	unconquered: hsvaSchema,
+})
+
 const patchSchema = z.object({
 	showHints: z.boolean().optional(),
 	aiProvider: z.string().optional(),
 	aiModel: z.string().optional(),
 	aiApiKey: z.string().optional(),
 	vocabBuild: vocabBuildPatchSchema.optional(),
+	vocabGraphColors: vocabGraphColorsSchema.optional(),
 })
 
 export const adminSettingsRoute = new Hono()
@@ -45,6 +60,7 @@ export const adminSettingsRoute = new Hono()
 			aiModel: s.aiModel,
 			aiApiKeySet: !!s.aiApiKey,
 			vocabBuild,
+			vocabGraphColors: s.vocabGraphColors ?? null,
 			updatedAt: s.updatedAt.toISOString(),
 		})
 	})
@@ -55,6 +71,7 @@ export const adminSettingsRoute = new Hono()
 		if (body.aiProvider !== undefined) data.aiProvider = body.aiProvider || null
 		if (body.aiModel !== undefined) data.aiModel = body.aiModel || null
 		if (body.aiApiKey !== undefined) data.aiApiKey = body.aiApiKey || null
+		if (body.vocabGraphColors !== undefined) data.vocabGraphColors = body.vocabGraphColors
 
 		if (body.vocabBuild !== undefined) {
 			const row = await prisma.appSettings.findUnique({ where: { id: APP_SETTINGS_ROW_ID } })
@@ -80,6 +97,7 @@ export const adminSettingsRoute = new Hono()
 			aiModel: updated.aiModel,
 			aiApiKeySet: !!updated.aiApiKey,
 			vocabBuild,
+			vocabGraphColors: updated.vocabGraphColors ?? null,
 			updatedAt: updated.updatedAt.toISOString(),
 		})
 	})
