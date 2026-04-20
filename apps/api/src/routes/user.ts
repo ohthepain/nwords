@@ -16,6 +16,7 @@ export const userRoute = new Hono()
 			include: {
 				nativeLanguage: { select: { id: true, code: true, name: true } },
 				targetLanguage: { select: { id: true, code: true, name: true } },
+				languageProfiles: { select: { languageId: true, assumedRank: true } },
 			},
 		})
 
@@ -28,8 +29,10 @@ export const userRoute = new Hono()
 			name: dbUser.name,
 			email: dbUser.email,
 			role: dbUser.role,
+			isAnonymous: dbUser.isAnonymous,
 			nativeLanguage: dbUser.nativeLanguage,
 			targetLanguage: dbUser.targetLanguage,
+			languageProfiles: dbUser.languageProfiles,
 		})
 	})
 
@@ -114,12 +117,14 @@ export const userRoute = new Hono()
 				include: {
 					nativeLanguage: { select: { id: true, code: true, name: true } },
 					targetLanguage: { select: { id: true, code: true, name: true } },
+					languageProfiles: { select: { languageId: true, assumedRank: true } },
 				},
 			})
 
 			return c.json({
 				nativeLanguage: updated.nativeLanguage,
 				targetLanguage: updated.targetLanguage,
+				languageProfiles: updated.languageProfiles,
 			})
 		},
 	)

@@ -15,7 +15,7 @@ export const Route = createFileRoute("/_authed")({
 })
 
 function AuthedLayout() {
-	const { user, isAdmin, nativeLanguage, targetLanguage } = Route.useRouteContext()
+	const { user, isAdmin, isAnonymous, nativeLanguage, targetLanguage } = Route.useRouteContext()
 
 	const matches = useMatches()
 	const leaf = matches.at(-1)
@@ -27,6 +27,7 @@ function AuthedLayout() {
 				pageTitle={pageTitle}
 				user={{ id: user.id, name: user.name, email: user.email }}
 				isAdmin={isAdmin}
+				isAnonymous={isAnonymous}
 				nativeLanguage={
 					nativeLanguage ? { id: nativeLanguage.id, code: nativeLanguage.code } : null
 				}

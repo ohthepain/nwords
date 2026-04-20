@@ -20,14 +20,18 @@ export const getAuthedLayoutData = createServerFn({ method: "GET" }).handler(asy
 		where: { id: session.user.id },
 		select: {
 			role: true,
+			isAnonymous: true,
 			nativeLanguage: { select: { id: true, code: true, name: true } },
 			targetLanguage: { select: { id: true, code: true, name: true } },
+			languageProfiles: { select: { languageId: true, assumedRank: true } },
 		},
 	})
 	return {
 		user: session.user,
 		isAdmin: dbUser?.role === "ADMIN",
+		isAnonymous: dbUser?.isAnonymous ?? false,
 		nativeLanguage: dbUser?.nativeLanguage ?? null,
 		targetLanguage: dbUser?.targetLanguage ?? null,
+		languageProfiles: dbUser?.languageProfiles ?? [],
 	}
 })

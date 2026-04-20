@@ -4,8 +4,8 @@ import { VocabGraphColorsCard } from "~/components/settings/vocab-graph-colors-c
 import { Button } from "~/components/ui/button"
 import { useThemeStore } from "~/stores/theme"
 import {
-	type VocabGraphColors,
 	VOCAB_GRAPH_THEME_DEFAULTS,
+	type VocabGraphColors,
 	useVocabGraphAppearanceStore,
 } from "~/stores/vocab-graph-appearance"
 

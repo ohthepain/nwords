@@ -62,15 +62,16 @@ export function computeHeatmapGridMetrics(
 
 /**
  * Whether a cell counts toward a fully “conquered” column.
- * Matches `apps/web` `cellQualifiesForTerritory`: every occupied cell needs measured confidence
- * ≥ threshold (null does not qualify). This keeps Build’s post-conquest window aligned with the
- * heatmap’s “current column” (first column that is not fully conquered).
+ * Words at or below `assumedRank` count as conquered (assessment / profile boundary) even when
+ * measured confidence is low (e.g. wrong answers during assessment). Otherwise require measured
+ * confidence ≥ threshold so practice progress still drives territory.
  */
 export function territoryCellQualifiesForConqueredColumn(
 	confidence: number | null,
-	_effectiveRank: number,
-	_assumedRank: number,
+	effectiveRank: number,
+	assumedRank: number,
 ): boolean {
+	if (assumedRank > 0 && effectiveRank <= assumedRank) return true
 	return confidence !== null && confidence >= TERRITORY_GRID_MIN_CONFIDENCE
 }
 

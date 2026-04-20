@@ -3,6 +3,7 @@ import { Link, createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { AuthedAppHeader } from "~/components/authed-app-header"
 import { AppHeaderBrand } from "~/components/header"
+import { LanguagePairSelectRow } from "~/components/language-pair-select-row"
 import { NewWordsIntroDialog } from "~/components/new-words-intro-dialog"
 import { ThemeToggleButton } from "~/components/theme-toggle-button"
 import { Button } from "~/components/ui/button"
@@ -11,12 +12,20 @@ import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
 import { type TerritoryColumnAdvancedPayload, VocabGraph } from "~/components/vocab-graph"
 import { WordDetailDialog } from "~/components/word-detail-dialog"
+import { authClient } from "~/lib/auth-client"
+import { isLocalDevEnvironment } from "~/lib/dev-mode-access"
 import {
 	type WordPanelKnowledge,
 	type WordPanelWord,
 	getWordPanelData,
 } from "~/lib/get-word-panel-data-server-fn"
 import { type WordSentence, getWordSentences } from "~/lib/get-word-sentences-server-fn"
+import {
+	clearStoredPracticeLanguagePair,
+	readStoredPracticeLanguagePair,
+	writeStoredPracticeLanguagePair,
+} from "~/lib/practice-language-pair-storage"
+import { cn } from "~/lib/utils"
 import {
 	MIN_TERRITORY_COLUMN_INTRO_LEMMAS,
 	analyzeBuildPracticeColumn,
@@ -27,8 +36,11 @@ type UserMe = {
 	name: string
 	email: string | null
 	role: string
+	/** True for Better Auth anonymous guest sessions (link on register). */
+	isAnonymous?: boolean
 	nativeLanguage: { id: string; name: string; code: string } | null
 	targetLanguage: { id: string; name: string; code: string } | null
+	languageProfiles?: { languageId: string; assumedRank: number }[]
 }
 
 type LanguageOption = { id: string; name: string; code: string }
@@ -111,6 +123,8 @@ type UpcomingData = {
 	workingSetThin: boolean
 	/** True when Build will attach `newWordsBandIntroOffer` / skip auto-intros (working set below target). */
 	introChunkGateActive: boolean
+	/** Dev-only: binary-search bounds when `vocabMode` is ASSESSMENT (BUILD heatmap lists are omitted). */
+	assessmentDev?: { low: number; high: number; targetRank: number }
 	devNextPickAfterSubmit: {
 		questionNumber: number
 		ifLastAnswerCorrect: DevNextPickPreview
@@ -194,6 +208,16 @@ function persistBandIntroDismissal(
 	}
 }
 
+function assumedRankForTargetLanguage(
+	profile: UserMe | null | undefined,
+	targetLanguageId: string,
+): number | null {
+	if (!profile?.languageProfiles?.length || !targetLanguageId) return null
+	const r =
+		profile.languageProfiles.find((p) => p.languageId === targetLanguageId)?.assumedRank ?? 0
+	return r > 0 ? r : null
+}
+
 /** Sentence-initial blank: no letters in the prompt before the cloze (allows quotes/space/punctuation). */
 function isBlankAtSentenceStart(beforeBlank: string): boolean {
 	return !/[\p{L}]/u.test(beforeBlank)
@@ -217,6 +241,10 @@ function PracticePage() {
 	/** `undefined` = loading; `null` = not signed in; object = signed-in profile */
 	const [profile, setProfile] = useState<UserMe | null | undefined>(undefined)
 	const [languageOptions, setLanguageOptions] = useState<LanguageOption[]>([])
+	/** All languages (native picker); target uses `languageOptions` (enabled only). */
+	const [allLanguageOptions, setAllLanguageOptions] = useState<LanguageOption[]>([])
+	const [languagePairSaveBusy, setLanguagePairSaveBusy] = useState(false)
+	const [languagePairSaveError, setLanguagePairSaveError] = useState<string | null>(null)
 	/** Practice pair (defaults from account when signed in; editable per session) */
 	const [practiceNativeId, setPracticeNativeId] = useState<string>("")
 	const [practiceTargetId, setPracticeTargetId] = useState<string>("")
@@ -267,24 +295,6 @@ function PracticePage() {
 				practiceWordIds: payload.practiceWordIds,
 				introKind: "territory_column",
 			})
-			// #region agent log
-			void fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-				method: "POST",
-				headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "27db5e" },
-				body: JSON.stringify({
-					sessionId: "27db5e",
-					location: "practice.tsx:onTerritoryColumnAdvanced",
-					message: "territory column intro shown",
-					data: {
-						columnIndex: payload.columnIndex,
-						lemmaCount: payload.practiceWordIds.length,
-						hypothesisId: "H1",
-					},
-					timestamp: Date.now(),
-					runId: "pre-fix",
-				}),
-			}).catch(() => {})
-			// #endregion
 		},
 		[sessionId, vocabMode, practiceTargetId],
 	)
@@ -335,11 +345,15 @@ function PracticePage() {
 	useEffect(() => {
 		let cancelled = false
 		void (async () => {
-			const [meRes, langRes, settingsRes] = await Promise.all([
-				fetch("/api/user/me", { credentials: "include" }),
+			const [langAllRes, langRes, settingsRes] = await Promise.all([
+				fetch("/api/languages"),
 				fetch("/api/languages?enabled=true"),
 				fetch("/api/settings"),
 			])
+			if (!cancelled && langAllRes.ok) {
+				const data = (await langAllRes.json()) as { languages: LanguageOption[] }
+				setAllLanguageOptions(data.languages)
+			}
 			if (!cancelled && langRes.ok) {
 				const data = (await langRes.json()) as { languages: LanguageOption[] }
 				setLanguageOptions(data.languages)
@@ -348,10 +362,19 @@ function PracticePage() {
 				const s = (await settingsRes.json()) as { showHints?: boolean }
 				setShowInlineHints(s.showHints === true)
 			}
-			if (!cancelled && meRes.ok) {
+
+			let meRes = await fetch("/api/user/me", { credentials: "include" })
+			if (!cancelled && meRes.status === 401) {
+				const anon = await authClient.signIn.anonymous()
+				if (!anon.error) {
+					meRes = await fetch("/api/user/me", { credentials: "include" })
+				}
+			}
+			if (cancelled) return
+			if (meRes.ok) {
 				const data = (await meRes.json()) as UserMe
 				setProfile(data)
-			} else if (!cancelled) {
+			} else {
 				setProfile(null)
 			}
 		})()
@@ -360,29 +383,45 @@ function PracticePage() {
 		}
 	}, [])
 
+	const practiceLangInitRef = useRef(false)
+
 	useEffect(() => {
-		if (profile?.nativeLanguage && profile?.targetLanguage) {
+		if (profile === undefined) return
+		if (practiceLangInitRef.current) return
+
+		const nativeOpts = allLanguageOptions.length > 0 ? allLanguageOptions : languageOptions
+		if (nativeOpts.length === 0) return
+
+		if (profile?.nativeLanguage?.id && profile?.targetLanguage?.id) {
 			setPracticeNativeId(profile.nativeLanguage.id)
 			setPracticeTargetId(profile.targetLanguage.id)
+			clearStoredPracticeLanguagePair()
+			practiceLangInitRef.current = true
+			return
 		}
-	}, [profile])
+
+		const stored = readStoredPracticeLanguagePair()
+		if (!stored) {
+			practiceLangInitRef.current = true
+			return
+		}
+
+		if (languageOptions.length === 0) return
+
+		const nativeOk = nativeOpts.some((l) => l.id === stored.nativeLanguageId)
+		const targetOk = languageOptions.some((l) => l.id === stored.targetLanguageId)
+		if (nativeOk && targetOk && stored.nativeLanguageId !== stored.targetLanguageId) {
+			setPracticeNativeId(stored.nativeLanguageId)
+			setPracticeTargetId(stored.targetLanguageId)
+			clearStoredPracticeLanguagePair()
+		}
+		practiceLangInitRef.current = true
+	}, [profile, allLanguageOptions, languageOptions])
 
 	const userMeLoaded = profile !== undefined
 	const isGuest = profile === null
 	const nativeLabel = languageOptions.find((l) => l.id === practiceNativeId)?.name
 	const targetLabel = languageOptions.find((l) => l.id === practiceTargetId)?.name
-
-	useEffect(() => {
-		if (!userMeLoaded || !isGuest || vocabMode !== "BUILD") return
-		void navigate({
-			to: "/practice",
-			search: (prev) => ({
-				...prev,
-				vocabMode: "ASSESSMENT",
-			}),
-			replace: true,
-		})
-	}, [userMeLoaded, isGuest, vocabMode, navigate])
 
 	const maybeOfferWorkingSetThinIntro = useCallback(
 		(
@@ -391,25 +430,6 @@ function PracticePage() {
 		) => {
 			if (vocabMode !== "BUILD" || !practiceTargetId) return
 			const offer = nextData.newWordsBandIntroOffer
-			// #region agent log
-			void fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-				method: "POST",
-				headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "27db5e" },
-				body: JSON.stringify({
-					sessionId: "27db5e",
-					location: "practice.tsx:maybeOfferWorkingSetThinIntro:entry",
-					message: "band intro offer evaluation",
-					data: {
-						hasOffer: Boolean(offer),
-						offerKind: offer?.kind,
-						practiceN: offer?.practiceWordIds?.length,
-						hypothesisId: "H1",
-					},
-					timestamp: Date.now(),
-					runId: "pre-fix",
-				}),
-			}).catch(() => {})
-			// #endregion
 			if (
 				!offer ||
 				(offer.kind !== "working_set_thin" && offer.kind !== "intro_backlog") ||
@@ -436,37 +456,9 @@ function PracticePage() {
 			} catch {
 				/* sessionStorage unavailable — still offer dialog */
 			}
-			// #region agent log
-			void fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-				method: "POST",
-				headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "27db5e" },
-				body: JSON.stringify({
-					sessionId: "27db5e",
-					location: "practice.tsx:maybeOfferWorkingSetThinIntro:dismiss",
-					message: "band intro sessionStorage gate",
-					data: { dismissed, fpLen: fp.length, dismissKey, hypothesisId: "H4" },
-					timestamp: Date.now(),
-					runId: "pre-fix",
-				}),
-			}).catch(() => {})
-			// #endregion
 			if (dismissed) return
 			setNewWordsIntroPayload((prev) => {
 				if (prev !== null) return prev
-				// #region agent log
-				void fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-					method: "POST",
-					headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "27db5e" },
-					body: JSON.stringify({
-						sessionId: "27db5e",
-						location: "practice.tsx:maybeOfferWorkingSetThinIntro:setPayload",
-						message: "showing band intro dialog",
-						data: { introKind: offer.kind, hadPrev: prev !== null, hypothesisId: "H1" },
-						timestamp: Date.now(),
-						runId: "pre-fix",
-					}),
-				}).catch(() => {})
-				// #endregion
 				if (gateSessionId) {
 					try {
 						sessionStorage.setItem(
@@ -524,26 +516,6 @@ function PracticePage() {
 				}
 
 				const q = data as NextQuestion
-				// #region agent log
-				void fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-					method: "POST",
-					headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "27db5e" },
-					body: JSON.stringify({
-						sessionId: "27db5e",
-						location: "practice.tsx:loadNext",
-						message: "next response before maybeOffer",
-						data: {
-							hasBandOffer: Boolean(q.newWordsBandIntroOffer),
-							offerKind: q.newWordsBandIntroOffer?.kind,
-							offerPracticeN: q.newWordsBandIntroOffer?.practiceWordIds?.length,
-							devStrat: q.devSelection?.kind,
-							hypothesisId: "H2",
-						},
-						timestamp: Date.now(),
-						runId: "pre-fix",
-					}),
-				}).catch(() => {})
-				// #endregion
 				setQuestion(q)
 				setAnswer("")
 				setStatus("idle")
@@ -1003,6 +975,53 @@ function PracticePage() {
 	const practiceLanguagesInvalid =
 		!practiceNativeId || !practiceTargetId || practiceNativeId === practiceTargetId
 	const canStartPractice = userMeLoaded && !practiceLanguagesInvalid
+	const nativeLanguageOptions = allLanguageOptions.length > 0 ? allLanguageOptions : languageOptions
+
+	const savePracticeLanguagePair = useCallback(async (): Promise<boolean> => {
+		if (!practiceNativeId || !practiceTargetId || practiceNativeId === practiceTargetId)
+			return false
+		setLanguagePairSaveError(null)
+		setLanguagePairSaveBusy(true)
+		try {
+			const res = await fetch("/api/user/me/languages", {
+				method: "PATCH",
+				credentials: "include",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					nativeLanguageId: practiceNativeId,
+					targetLanguageId: practiceTargetId,
+				}),
+			})
+			const body = (await res.json().catch(() => ({}))) as {
+				error?: string
+				nativeLanguage?: UserMe["nativeLanguage"]
+				targetLanguage?: UserMe["targetLanguage"]
+				languageProfiles?: UserMe["languageProfiles"]
+			}
+			if (!res.ok) {
+				setLanguagePairSaveError(body.error ?? "Could not save languages.")
+				return false
+			}
+			if (body.nativeLanguage && body.targetLanguage) {
+				setProfile((p) =>
+					p
+						? {
+								...p,
+								nativeLanguage: body.nativeLanguage ?? null,
+								targetLanguage: body.targetLanguage ?? null,
+								languageProfiles: body.languageProfiles ?? p.languageProfiles,
+							}
+						: p,
+				)
+			}
+			return true
+		} catch {
+			setLanguagePairSaveError("Could not save languages.")
+			return false
+		} finally {
+			setLanguagePairSaveBusy(false)
+		}
+	}, [practiceNativeId, practiceTargetId])
 	function resetPracticeUiAfterSignOut() {
 		setProfile(null)
 		setSessionId(null)
@@ -1047,6 +1066,7 @@ function PracticePage() {
 				pageTitle="Practice"
 				user={{ id: account.id, name: account.name, email: account.email }}
 				isAdmin={account.role === "ADMIN"}
+				isAnonymous={account.isAnonymous === true}
 				nativeLanguage={
 					account.nativeLanguage
 						? { id: account.nativeLanguage.id, code: account.nativeLanguage.code }
@@ -1085,43 +1105,11 @@ function PracticePage() {
 										newWordsIntroPayload.practiceWordIds,
 										sessionId,
 									)
-									// #region agent log
-									void fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-										method: "POST",
-										headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "27db5e" },
-										body: JSON.stringify({
-											sessionId: "27db5e",
-											location: "practice.tsx:NewWordsIntroDialog.onOpenChange",
-											message: "dismiss: band intro chunk",
-											data: { introKind: newWordsIntroPayload.introKind, hypothesisId: "H3" },
-											timestamp: Date.now(),
-											runId: "pre-fix",
-										}),
-									}).catch(() => {})
-									// #endregion
 								} else {
 									sessionStorage.setItem(
 										`dismissedColumnBatch:${practiceTargetId}:${newWordsIntroPayload.columnIndex}`,
 										"1",
 									)
-									// #region agent log
-									void fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-										method: "POST",
-										headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "27db5e" },
-										body: JSON.stringify({
-											sessionId: "27db5e",
-											location: "practice.tsx:NewWordsIntroDialog.onOpenChange",
-											message: "dismiss: column batch",
-											data: {
-												columnIndex: newWordsIntroPayload.columnIndex,
-												introKind: newWordsIntroPayload.introKind,
-												hypothesisId: "H3",
-											},
-											timestamp: Date.now(),
-											runId: "pre-fix",
-										}),
-									}).catch(() => {})
-									// #endregion
 								}
 							} catch {
 								/* ignore */
@@ -1149,7 +1137,6 @@ function PracticePage() {
 							newWordsIntroPayload.wordIds,
 							sessionId ? { existingSessionId: sessionId } : undefined,
 						)
-						// #region agent log
 						if (ok) {
 							if (
 								newWordsIntroPayload.introKind === "working_set_thin" ||
@@ -1161,25 +1148,8 @@ function PracticePage() {
 									sessionId,
 								)
 							}
-							void fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-								method: "POST",
-								headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "27db5e" },
-								body: JSON.stringify({
-									sessionId: "27db5e",
-									location: "practice.tsx:onBeginLetsPractice",
-									message: "begin practice OK; payload cleared without onOpenChange path",
-									data: {
-										introKind: newWordsIntroPayload.introKind,
-										wordCount: newWordsIntroPayload.wordIds.length,
-										hypothesisId: "H3",
-									},
-									timestamp: Date.now(),
-									runId: "pre-fix",
-								}),
-							}).catch(() => {})
+							setNewWordsIntroPayload(null)
 						}
-						// #endregion
-						if (ok) setNewWordsIntroPayload(null)
 					} finally {
 						setNewWordsIntroBusy(false)
 					}
@@ -1196,7 +1166,7 @@ function PracticePage() {
 								(sessionId && question ? question.wordId : null)
 							}
 							answerFlash={answerConfidenceFlash}
-							showDevGrid={account?.role === "ADMIN" && devMode}
+							showDevGrid={(account?.role === "ADMIN" || isLocalDevEnvironment()) && devMode}
 							onTerritoryColumnAdvanced={
 								sessionId && vocabMode === "BUILD" ? onTerritoryColumnAdvanced : undefined
 							}
@@ -1211,16 +1181,68 @@ function PracticePage() {
 						: "w-full max-w-xl mx-auto px-6 py-8 space-y-6 flex-1 shrink-0"
 				}
 			>
+				{userMeLoaded && practiceLanguagesInvalid ? (
+					<Card>
+						<CardContent className="space-y-4">
+							<LanguagePairSelectRow
+								nativeLabel="Your language"
+								targetLabel="Language you're learning"
+								nativeLanguages={nativeLanguageOptions}
+								targetLanguages={languageOptions}
+								nativeValue={practiceNativeId}
+								targetValue={practiceTargetId}
+								onNativeChange={setPracticeNativeId}
+								onTargetChange={setPracticeTargetId}
+								nativeSelectId="practice-native-lang"
+								targetSelectId="practice-target-lang"
+								measureBuild={{
+									assumedRankForSelectedTarget: assumedRankForTargetLanguage(
+										profile,
+										practiceTargetId,
+									),
+									knownCountForSelectedTarget: null,
+									actionBusy: languagePairSaveBusy,
+									actionBusyLabel: "Saving…",
+									onMeasureOrBuildClick: async () => {
+										if (
+											!practiceNativeId ||
+											!practiceTargetId ||
+											practiceNativeId === practiceTargetId
+										) {
+											return
+										}
+										const rank = assumedRankForTargetLanguage(profile, practiceTargetId)
+										const nextMode: VocabMode = rank != null && rank > 0 ? "BUILD" : "ASSESSMENT"
+										if (profile) {
+											const ok = await savePracticeLanguagePair()
+											if (!ok) return
+										} else {
+											writeStoredPracticeLanguagePair({
+												nativeLanguageId: practiceNativeId,
+												targetLanguageId: practiceTargetId,
+											})
+										}
+										navigate({
+											to: "/practice",
+											search: (prev) => ({ ...prev, vocabMode: nextMode }),
+											replace: true,
+										})
+									},
+								}}
+							/>
+							{profile !== null && languagePairSaveError ? (
+								<p className="text-sm text-destructive">{languagePairSaveError}</p>
+							) : null}
+						</CardContent>
+					</Card>
+				) : null}
 				{canStartPractice && (
 					<Card>
 						<CardHeader>
 							<CardTitle className="text-base">{VOCAB_MODE_LABELS[vocabMode]}</CardTitle>
 							<CardDescription>
 								{vocabMode === "ASSESSMENT" ? (
-									<>
-										We&apos;ll find your vocabulary level via binary search. Correct = you know it,
-										wrong = you don&apos;t.
-									</>
+									<>We&apos;ll find your vocabulary level via binary search.</>
 								) : vocabMode === "FRUSTRATION" ? (
 									<>Drill your stubbornest words. Short bursts, repeat throughout the day.</>
 								) : vocabMode === "NEWWORDS" ? (
@@ -1291,7 +1313,7 @@ function PracticePage() {
 									<div className="space-y-2">
 										<div className="flex items-center gap-2">
 											<Label className="text-xs font-mono text-muted-foreground uppercase tracking-wider">
-												Sentence
+												Word rank
 											</Label>
 											{question.rank > 0 && (
 												<span className="text-[10px] font-mono text-muted-foreground/60 tabular-nums">
@@ -1345,7 +1367,7 @@ function PracticePage() {
 									</div>
 									<div className="flex flex-wrap items-center gap-2 min-h-10">
 										<Button type="button" onClick={() => void submitAnswer()}>
-											Check{!isGuest ? " & save" : ""}
+											Check{profile !== null ? " & save" : ""}
 										</Button>
 										<Button
 											type="button"
@@ -1516,14 +1538,33 @@ function DevUpcomingPanel({
 			})
 		: null
 
+	const assessmentBoundsFromUpcoming = data?.assessmentDev
+	const isAssessmentCard =
+		currentSelection?.kind === "assessment_binary_search" && assessmentBoundsFromUpcoming != null
+
 	return (
 		<div className="border border-dashed border-brand/40 rounded-lg bg-brand/5 p-3 space-y-2">
 			{currentSelection ? (
 				<p className="text-[10px] font-mono text-brand/80 leading-snug border-b border-brand/15 pb-2">
 					<span className="text-muted-foreground/80">This card: </span>
 					<span className="text-foreground/90">{currentSelection.kind.replace(/_/g, " ")}</span>
-					{" — "}
-					{currentSelection.summary}
+					{isAssessmentCard ? (
+						<>
+							{" — "}
+							bounds {assessmentBoundsFromUpcoming.low.toLocaleString()}–
+							{assessmentBoundsFromUpcoming.high.toLocaleString()}, midpoint{" "}
+							{assessmentBoundsFromUpcoming.targetRank.toLocaleString()}.{" "}
+							<span className="text-muted-foreground/75">
+								BUILD band / working / intro pools are not loaded during measurement; the row below
+								is this question&apos;s cloze word.
+							</span>
+						</>
+					) : (
+						<>
+							{" — "}
+							{currentSelection.summary}
+						</>
+					)}
 					{currentSelection.strategyOrder != null && currentSelection.strategyOrder.length > 0 ? (
 						<>
 							{" "}
@@ -1578,14 +1619,17 @@ function DevUpcomingPanel({
 						{data.devNextPickAfterSubmit.ifLastAnswerCorrect.strategyPercents.bandWalk}
 					</p>
 				</div>
-			) : data?.vocabMode && !["BUILD", "NEWWORDS"].includes(data.vocabMode) ? (
+			) : data?.vocabMode &&
+				!["BUILD", "NEWWORDS"].includes(data.vocabMode) &&
+				!data?.assessmentDev ? (
 				<p className="text-[10px] font-mono text-muted-foreground border-b border-brand/15 pb-2">
 					Next-pick preview applies to BUILD mode only (session: {data.vocabMode}).
 				</p>
 			) : null}
 			<div className="flex items-center justify-between">
 				<span className="text-[10px] font-mono uppercase tracking-wider text-brand/70">
-					Dev: Upcoming words {data ? `(Q${data.questionNumber})` : ""}
+					{data?.assessmentDev ? "Dev: Current cloze word" : "Dev: Upcoming words"}{" "}
+					{data ? `(Q${data.questionNumber})` : ""}
 					{data?.workingSetThin ? (
 						<span className="normal-case text-muted-foreground font-mono">
 							{" "}
@@ -1700,6 +1744,10 @@ function DevUpcomingPanel({
 }
 
 function PracticeHeader({ authState }: { authState: "loading" | "guest" }) {
+	const devMode = useDevStore((s) => s.devMode)
+	const toggleDevMode = useDevStore((s) => s.toggleDevMode)
+	const localDev = isLocalDevEnvironment()
+
 	return (
 		<header className="shrink-0 border-b border-border/50 backdrop-blur-sm sticky top-0 z-10 bg-background/80">
 			<div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center gap-3 sm:gap-4">
@@ -1709,6 +1757,23 @@ function PracticeHeader({ authState }: { authState: "loading" | "guest" }) {
 				</h1>
 				<div className="flex items-center gap-1 sm:gap-2 shrink-0">
 					<ThemeToggleButton />
+					{localDev ? (
+						<Button
+							type="button"
+							variant={devMode ? "default" : "outline"}
+							size="xs"
+							className={cn(
+								"min-w-[2.75rem] rounded-sm px-2 font-mono text-[10px] font-semibold tracking-wide uppercase",
+								devMode && "shadow-xs",
+							)}
+							onClick={toggleDevMode}
+							aria-pressed={devMode}
+							aria-label={devMode ? "Disable dev mode" : "Enable dev mode"}
+							title="Toggle dev mode (available on this machine only)"
+						>
+							Dev
+						</Button>
+					) : null}
 					{authState === "loading" ? null : (
 						<Button type="button" variant="ghost" size="sm" asChild>
 							<Link to="/auth/login">Sign in</Link>

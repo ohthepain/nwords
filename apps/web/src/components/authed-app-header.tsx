@@ -1,6 +1,7 @@
-import { Link, useNavigate, useRouter } from "@tanstack/react-router"
-import { ArrowRight, BookOpen, Check, Globe, LogOut, UserRound } from "lucide-react"
+import { Link, useRouter } from "@tanstack/react-router"
+import { ArrowRight, Check, Globe } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
+import { AppHeaderProfileMenu } from "~/components/app-header-profile-menu"
 import { AppHeaderBrand } from "~/components/header"
 import { ThemeToggleButton } from "~/components/theme-toggle-button"
 import { Button } from "~/components/ui/button"
@@ -12,7 +13,7 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu"
-import { authClient } from "~/lib/auth-client"
+import { isLocalDevEnvironment } from "~/lib/dev-mode-access"
 import { languageCodeToFlagEmoji } from "~/lib/language-flag"
 import { cn } from "~/lib/utils"
 import { useDevStore } from "~/stores/dev"
@@ -37,6 +38,8 @@ type AuthedAppHeaderProps = {
 	pageTitle: string
 	user: AuthedAppHeaderUser
 	isAdmin: boolean
+	/** Better Auth anonymous guest — prompt to register to keep progress across devices. */
+	isAnonymous?: boolean
 	/** Summary of the user's native language for the flag control (null if unset). */
 	nativeLanguage: AuthedAppHeaderLanguage | null
 	/** Summary of the user's target language (null if unset). */
@@ -178,21 +181,16 @@ export function AuthedAppHeader({
 	pageTitle,
 	user,
 	isAdmin,
+	isAnonymous = false,
 	nativeLanguage,
 	targetLanguage,
 	onNativeLanguageUpdated,
 	onAfterSignOut,
 	signOutNavigateTo = "/",
 }: AuthedAppHeaderProps) {
-	const navigate = useNavigate()
 	const devMode = useDevStore((s) => s.devMode)
 	const toggleDevMode = useDevStore((s) => s.toggleDevMode)
-
-	async function handleSignOut() {
-		await authClient.signOut()
-		onAfterSignOut?.()
-		navigate({ to: signOutNavigateTo, replace: true })
-	}
+	const canToggleDevMode = isAdmin || isLocalDevEnvironment()
 
 	return (
 		<header className="shrink-0 border-b border-border/50 backdrop-blur-sm sticky top-0 z-10 bg-background/80">
@@ -221,7 +219,7 @@ export function AuthedAppHeader({
 						)}
 					</div>
 					<ThemeToggleButton />
-					{isAdmin && (
+					{canToggleDevMode && (
 						<Button
 							type="button"
 							variant={devMode ? "default" : "outline"}
@@ -233,61 +231,22 @@ export function AuthedAppHeader({
 							onClick={toggleDevMode}
 							aria-pressed={devMode}
 							aria-label={devMode ? "Disable dev mode" : "Enable dev mode"}
-							title="Toggle dev mode (admin)"
+							title={
+								isAdmin
+									? "Toggle dev mode (admin)"
+									: "Toggle dev mode (available on this machine only)"
+							}
 						>
 							Dev
 						</Button>
 					)}
-					<DropdownMenu>
-						<DropdownMenuTrigger asChild>
-							<Button
-								type="button"
-								variant="ghost"
-								size="icon"
-								className="text-muted-foreground"
-								aria-label="Account menu"
-							>
-								<UserRound className="size-[1.25rem]" />
-							</Button>
-						</DropdownMenuTrigger>
-						<DropdownMenuContent align="end" className="w-56">
-							<DropdownMenuLabel className="font-normal">
-								<div className="flex flex-col gap-0.5">
-									<span className="text-sm font-medium text-foreground">{user.name}</span>
-									{user.email && (
-										<span className="text-xs text-muted-foreground font-normal truncate">
-											{user.email}
-										</span>
-									)}
-									{devMode && isAdmin && (
-										<span className="text-[10px] font-mono text-muted-foreground/90 pt-1 break-all">
-											id: {user.id}
-										</span>
-									)}
-								</div>
-							</DropdownMenuLabel>
-							<DropdownMenuSeparator />
-							<DropdownMenuItem asChild>
-								<Link to="/vocab">
-									<BookOpen className="size-4 opacity-70" />
-									My Vocab
-								</Link>
-							</DropdownMenuItem>
-							<DropdownMenuItem asChild>
-								<Link to="/settings">Settings</Link>
-							</DropdownMenuItem>
-							{isAdmin && (
-								<DropdownMenuItem asChild>
-									<Link to="/admin">Admin</Link>
-								</DropdownMenuItem>
-							)}
-							<DropdownMenuSeparator />
-							<DropdownMenuItem variant="destructive" onSelect={() => void handleSignOut()}>
-								<LogOut className="size-4 opacity-70" />
-								Sign out
-							</DropdownMenuItem>
-						</DropdownMenuContent>
-					</DropdownMenu>
+					<AppHeaderProfileMenu
+						user={user}
+						isAdmin={isAdmin}
+						isAnonymous={isAnonymous}
+						onAfterSignOut={onAfterSignOut}
+						signOutNavigateTo={signOutNavigateTo}
+					/>
 				</div>
 			</div>
 		</header>

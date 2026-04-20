@@ -5,7 +5,7 @@ import {
 	GRAPH_MIN_WIDTH_PX,
 	MIN_TERRITORY_COLUMN_INTRO_LEMMAS,
 	TERRITORY_MIN_CONFIDENCE,
-	cellQualifiesForTerritory,
+	cellConqueredForTerritoryColumn,
 	columnWordSummaries,
 	completedColsFromLeft as countCompletedColsFromLeft,
 	graphWidthBasePx,
@@ -159,12 +159,12 @@ export function VocabGraph({
 	const visibleCells = useMemo(() => cells.slice(0, displayCount), [cells, displayCount])
 
 	/**
-	 * Leftmost columns where every occupied cell has measured confidence ≥ TERRITORY_MIN_CONFIDENCE.
-	 * (`status` can be “known” below assumed rank while confidence reflects real tests; we follow confidence.)
+	 * Leftmost columns where every cell is “territory conquered”: rank ≤ assumedRank, or measured
+	 * confidence ≥ TERRITORY_MIN_CONFIDENCE (matches Build frontier / new-words intro column index).
 	 */
 	const completedColsFromLeft = useMemo(
-		() => countCompletedColsFromLeft(visibleCells, numCols, numRows),
-		[visibleCells, numCols, numRows],
+		() => countCompletedColsFromLeft(visibleCells, numCols, numRows, assumedRank),
+		[visibleCells, numCols, numRows, assumedRank],
 	)
 
 	// Measure available container width so we can clip conquered columns on narrow viewports.
@@ -202,8 +202,7 @@ export function VocabGraph({
 	)
 	const renderGraphW = renderNumCols * step - GAP_PX
 	const renderCompletedCols = Math.max(0, completedColsFromLeft - skipCols)
-	const renderTerritoryWidthPx =
-		renderCompletedCols > 0 ? renderCompletedCols * step - GAP_PX : 0
+	const renderTerritoryWidthPx = renderCompletedCols > 0 ? renderCompletedCols * step - GAP_PX : 0
 
 	const heatmapEpochRef = useRef("")
 	const prevCompletedColsRef = useRef<number | null>(null)
@@ -228,9 +227,21 @@ export function VocabGraph({
 		if (c > prevCompletedColsRef.current && lastFiredCompletedColsRef.current !== c) {
 			const columnIndex = c
 			if (columnIndex < numCols) {
-				const wordIds = nonTerritoryWordIdsInColumn(visibleCells, numCols, numRows, columnIndex)
+				const wordIds = nonTerritoryWordIdsInColumn(
+					visibleCells,
+					numCols,
+					numRows,
+					columnIndex,
+					assumedRank,
+				)
 				if (wordIds.length > 0) {
-					const words = columnWordSummaries(visibleCells, numCols, numRows, columnIndex)
+					const words = columnWordSummaries(
+						visibleCells,
+						numCols,
+						numRows,
+						columnIndex,
+						assumedRank,
+					)
 					const testableSet = new Set(
 						visibleCells
 							.filter((cell) => (cell.testSentenceCount ?? 0) > 0)
@@ -279,7 +290,7 @@ export function VocabGraph({
 			for (let row = 0; row < numRows; row++) {
 				const idx = col * numRows + row
 				if (idx >= visibleCells.length) break
-				if (!cellQualifiesForTerritory(visibleCells[idx].confidence)) unlearnedInCol++
+				if (!cellConqueredForTerritoryColumn(visibleCells[idx], assumedRank)) unlearnedInCol++
 			}
 			cum += unlearnedInCol
 			const colsAdded = col - completedColsFromLeft + 1
@@ -292,7 +303,7 @@ export function VocabGraph({
 			})
 		}
 		return stats
-	}, [visibleCells, numCols, numRows, completedColsFromLeft])
+	}, [visibleCells, numCols, numRows, completedColsFromLeft, assumedRank])
 
 	/**
 	 * Suggested number of words for this session. Among the column-boundary
@@ -605,7 +616,7 @@ export function VocabGraph({
 									backgroundColor: territorySlabFill(),
 								}}
 								aria-hidden
-								title={`${completedColsFromLeft} column${completedColsFromLeft === 1 ? "" : "s"} ≥${Math.round(TERRITORY_MIN_CONFIDENCE * 100)}% confidence throughout`}
+								title={`${completedColsFromLeft} conquered column${completedColsFromLeft === 1 ? "" : "s"} (assumed band or ≥${Math.round(TERRITORY_MIN_CONFIDENCE * 100)}% confidence)`}
 							/>
 						) : null}
 						<div

@@ -33,8 +33,7 @@ type VocabGraphAppearanceState = {
 
 export const useVocabGraphAppearanceStore = create<VocabGraphAppearanceState>()((set, get) => ({
 	colors: VOCAB_GRAPH_THEME_DEFAULTS.light,
-	setHsva: (key, next) =>
-		set({ colors: { ...get().colors, [key]: { ...next, a: next.a ?? 1 } } }),
+	setHsva: (key, next) => set({ colors: { ...get().colors, [key]: { ...next, a: next.a ?? 1 } } }),
 	setWheelHs: (key, h, s) => {
 		const cur = get().colors[key]
 		set({

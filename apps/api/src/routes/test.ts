@@ -72,7 +72,12 @@ async function resolveClozeLanguageIds(
  *
  * The search range narrows each question. We look at previous answers in
  * this session to compute the current binary search bounds, then pick a
- * word near the midpoint.
+ * word near a **target rank** derived from those bounds.
+ *
+ * **Pick policy** (frequency ranks are noisy): first question targets ~`ASSESSMENT_START_RANK`.
+ * Later questions use the midpoint of `[low, high]` but **cap forward jumps** to at most
+ * `ASSESSMENT_MAX_FORWARD_RANK_STEP` above the last tested word's rank so we don't leap into
+ * unrealistically high ranks after a single correct answer.
  *
  * Stopping: when range < 50 ranks OR 30 questions answered.
  */
@@ -80,6 +85,10 @@ const ASSESSMENT_MAX_QUESTIONS = 30
 const ASSESSMENT_CONVERGE_THRESHOLD = 50
 const ASSESSMENT_INITIAL_LOW = 1
 const ASSESSMENT_INITIAL_HIGH = 10000
+/** First probe when there are no answers yet (avoid starting at mid 5000). */
+const ASSESSMENT_START_RANK = 300
+/** Max increase in target rank vs the last word tested (curbs oversized forward steps). */
+const ASSESSMENT_MAX_FORWARD_RANK_STEP = 200
 
 export type DevSelectionPanelTab =
 	| "territory"
@@ -187,8 +196,80 @@ function devSelection(
 									? "intros"
 									: kind === "band_walk"
 										? "band"
-										: null
+										: kind === "assessment_binary_search"
+											? "band"
+											: null
 	return { vocabMode, kind, panelTab, summary }
+}
+
+/** Replay assessment answers to recover binary-search bounds (same rules as `handleAssessmentNext`). */
+async function replayAssessmentLowHighForSession(
+	testSessionId: string,
+): Promise<{ low: number; high: number; answerCount: number }> {
+	const answers = await prisma.testAnswer.findMany({
+		where: { testSessionId },
+		orderBy: { answeredAt: "asc" },
+		select: { wordId: true, correct: true },
+	})
+	const answeredWordIds = answers.map((a) => a.wordId)
+	const answeredWords = await prisma.word.findMany({
+		where: { id: { in: answeredWordIds } },
+		select: { id: true, effectiveRank: true },
+	})
+	const rankMap = new Map(answeredWords.map((w) => [w.id, w.effectiveRank]))
+	let low = ASSESSMENT_INITIAL_LOW
+	let high = ASSESSMENT_INITIAL_HIGH
+	for (const ans of answers) {
+		const rank = rankMap.get(ans.wordId)
+		if (rank === undefined) continue
+		if (ans.correct) {
+			low = Math.max(low, rank + 1)
+		} else {
+			high = Math.min(high, rank - 1)
+		}
+	}
+	return { low, high, answerCount: answers.length }
+}
+
+function computeAssessmentPickTargetRank(
+	low: number,
+	high: number,
+	answerCount: number,
+	lastTestedEffectiveRank: number | null,
+): { targetRank: number; naiveMid: number } {
+	const naiveMid = Math.floor((low + high) / 2)
+	if (answerCount === 0) {
+		return {
+			naiveMid,
+			targetRank: Math.max(low, Math.min(high, ASSESSMENT_START_RANK)),
+		}
+	}
+	let targetRank = naiveMid
+	if (
+		lastTestedEffectiveRank != null &&
+		lastTestedEffectiveRank > 0 &&
+		naiveMid > lastTestedEffectiveRank + ASSESSMENT_MAX_FORWARD_RANK_STEP
+	) {
+		targetRank = lastTestedEffectiveRank + ASSESSMENT_MAX_FORWARD_RANK_STEP
+	}
+	targetRank = Math.max(low, Math.min(high, targetRank))
+	return { targetRank, naiveMid }
+}
+
+async function lastAnsweredEffectiveRank(testSessionId: string): Promise<number | null> {
+	const last = await prisma.testAnswer.findFirst({
+		where: { testSessionId },
+		orderBy: { answeredAt: "desc" },
+		select: { wordId: true },
+	})
+	if (!last) return null
+	const w = await prisma.word.findUnique({
+		where: { id: last.wordId },
+		select: { effectiveRank: true },
+	})
+	const r = w?.effectiveRank
+	if (typeof r !== "number" || r <= 0) return null
+	return r
 }
 
 /** Dev panel: qualitative description; actual next card is a random strategy roll in `handleBuildNext`. */
@@ -363,38 +444,7 @@ async function handleAssessmentNext(
 		})
 	}
 
-	// Reconstruct binary search bounds from session answers
-	const answers = await prisma.testAnswer.findMany({
-		where: { testSessionId: session.id },
-		orderBy: { answeredAt: "asc" },
-		include: {
-			// We need the word's rank
-		},
-	})
-
-	// Fetch ranks for answered words
-	const answeredWordIds = answers.map((a) => a.wordId)
-	const answeredWords = await prisma.word.findMany({
-		where: { id: { in: answeredWordIds } },
-		select: { id: true, effectiveRank: true },
-	})
-	const rankMap = new Map(answeredWords.map((w) => [w.id, w.effectiveRank]))
-
-	// Binary search: correct answers push low bound up, wrong answers push high bound down
-	let low = ASSESSMENT_INITIAL_LOW
-	let high = ASSESSMENT_INITIAL_HIGH
-
-	for (const ans of answers) {
-		const rank = rankMap.get(ans.wordId)
-		if (rank === undefined) continue
-		if (ans.correct) {
-			// User knows this rank — search higher
-			low = Math.max(low, rank + 1)
-		} else {
-			// User doesn't know this rank — search lower
-			high = Math.min(high, rank - 1)
-		}
-	}
+	const { low, high, answerCount } = await replayAssessmentLowHighForSession(session.id)
 
 	// Check convergence
 	if (high - low < ASSESSMENT_CONVERGE_THRESHOLD) {
@@ -406,9 +456,21 @@ async function handleAssessmentNext(
 		})
 	}
 
-	const targetRank = Math.floor((low + high) / 2)
+	const lastTestedRank = answerCount > 0 ? await lastAnsweredEffectiveRank(session.id) : null
+	const { targetRank, naiveMid } = computeAssessmentPickTargetRank(
+		low,
+		high,
+		answerCount,
+		lastTestedRank,
+	)
+	const assessmentDevSummary =
+		answerCount === 0
+			? `Assessment: first probe near rank ${targetRank} (bounds ${low}–${high})`
+			: targetRank !== naiveMid
+				? `Assessment: target rank ${targetRank}, max +${ASSESSMENT_MAX_FORWARD_RANK_STEP} from last tested (mid ${naiveMid}, bounds ${low}–${high})`
+				: `Assessment: target rank ${targetRank} (bounds ${low}–${high})`
 
-	// Try to find a word near the midpoint
+	// Try to find a word near the target rank
 	const tried = new Set<string>()
 	const maxTries = 12
 
@@ -445,11 +507,7 @@ async function handleAssessmentNext(
 				targetRank,
 				questionsRemaining: ASSESSMENT_MAX_QUESTIONS - session.wordsTestedCount,
 			},
-			devSelection: devSelection(
-				"ASSESSMENT",
-				"assessment_binary_search",
-				`Assessment: binary search midpoint rank ${targetRank} (bounds ${low}–${high})`,
-			),
+			devSelection: devSelection("ASSESSMENT", "assessment_binary_search", assessmentDevSummary),
 		})
 	}
 
@@ -749,24 +807,6 @@ async function handleBuildNext(
 			langs,
 		)
 		if (resolved) {
-			// #region agent log
-			void fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-				method: "POST",
-				headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "27db5e" },
-				body: JSON.stringify({
-					sessionId: "27db5e",
-					location: "test.ts:handleBuildNext:columnFocusReturn",
-					message: "next: column first-pass, no newWordsBandIntro in body",
-					data: {
-						colLen: columnOrdered.length,
-						hypothesisId: "H2",
-						pendingColumn: true,
-					},
-					timestamp: Date.now(),
-					runId: "pre-fix",
-				}),
-			}).catch(() => {})
-			// #endregion
 			return c.json({
 				wordId: resolved.wordId,
 				lemma: resolved.lemma,
@@ -874,29 +914,6 @@ async function handleBuildNext(
 				kind: "working_set_thin",
 			})
 		: null
-	// #region agent log
-	void fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-		method: "POST",
-		headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "27db5e" },
-		body: JSON.stringify({
-			sessionId: "27db5e",
-			location: "test.ts:handleBuildNext:bandIntroComputed",
-			message: "build next: band intro offer (after column not pending)",
-			data: {
-				hasOffer: Boolean(newWordsBandIntroOffer),
-				kind: newWordsBandIntroOffer?.kind,
-				offerPracticeN: newWordsBandIntroOffer?.practiceWordIds?.length,
-				introBacklogN: introIds.length,
-				introChunkSize: build.newWordsIntroChunkSize,
-				workingSetThin,
-				gateBandIntrosToChunk,
-				hypothesisId: "H5",
-			},
-			timestamp: Date.now(),
-			runId: "pre-fix",
-		}),
-	}).catch(() => {})
-	// #endregion
 	const maybeBandIntro = newWordsBandIntroOffer ? { newWordsBandIntroOffer } : {}
 	/** Only gate when the offer JSON built; otherwise Build can still pick intros (avoid no-question deadlock). */
 	const skipAutoIntro = Boolean(newWordsBandIntroOffer)
@@ -1769,6 +1786,63 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 		const langs = await resolveClozeLanguageIds(session)
 		if (!langs) {
 			return c.json({ error: "Missing language pair" }, 400)
+		}
+
+		const vocabModeEarly = session.vocabMode ?? "BUILD"
+		if (vocabModeEarly === "ASSESSMENT") {
+			const { low, high, answerCount } = await replayAssessmentLowHighForSession(session.id)
+			const lastTestedRank = answerCount > 0 ? await lastAnsweredEffectiveRank(session.id) : null
+			const { targetRank } = computeAssessmentPickTargetRank(low, high, answerCount, lastTestedRank)
+			const peekWordIdRaw = c.req.query("peekWordId")?.trim()
+			const peekWordId =
+				peekWordIdRaw &&
+				/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+					peekWordIdRaw,
+				)
+					? peekWordIdRaw
+					: undefined
+			const assessWordSelect = {
+				id: true,
+				lemma: true,
+				effectiveRank: true,
+				testSentenceIds: true,
+			} as const
+			const peekWordRow = peekWordId
+				? await prisma.word.findUnique({
+						where: { id: peekWordId, languageId: langs.targetLanguageId },
+						select: assessWordSelect,
+					})
+				: null
+			const current =
+				peekWordRow != null
+					? {
+							wordId: peekWordRow.id,
+							lemma: peekWordRow.lemma,
+							rank: peekWordRow.effectiveRank,
+							testedInSession: false,
+							hasSentences: peekWordRow.testSentenceIds.length > 0,
+							confidence: 0,
+							timesTested: 0,
+							streak: 0,
+							lastTestedAt: null as string | null,
+						}
+					: null
+			return c.json({
+				vocabMode: "ASSESSMENT" as const,
+				questionNumber: answerCount + 1,
+				activeBand: [],
+				workingSet: [],
+				intros: [],
+				current,
+				generatedAt: new Date().toISOString(),
+				bandLemmaCount: 0,
+				clozableInBand: 0,
+				workingSetCount: 0,
+				workingSetThin: false,
+				introChunkGateActive: false,
+				devNextPickAfterSubmit: null,
+				assessmentDev: { low, high, targetRank },
+			})
 		}
 
 		const [profile, sessionAnswers, knownVerifiedCount] = await Promise.all([

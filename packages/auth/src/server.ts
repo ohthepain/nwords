@@ -1,7 +1,9 @@
 import { prisma } from "@nwords/db"
 import { betterAuth } from "better-auth"
 import { prismaAdapter } from "better-auth/adapters/prisma"
+import { anonymous } from "better-auth/plugins"
 import { isSesConfigured, renderAuthEmailTemplate, sendAuthEmail } from "./auth-email"
+import { linkAnonymousLearnerData } from "./link-anonymous-learner-data"
 
 const baseURL = process.env.BETTER_AUTH_URL ?? "http://localhost:3000"
 
@@ -109,6 +111,21 @@ export const auth = betterAuth({
 				},
 			}
 		: {}),
+	plugins: [
+		anonymous({
+			generateRandomEmail: () => {
+				const id = crypto.randomUUID()
+				return `guest-${id}@anonymous.nwords.invalid`
+			},
+			generateName: () => "Guest",
+			onLinkAccount: async ({ anonymousUser, newUser }) => {
+				await linkAnonymousLearnerData({
+					anonymousUserId: anonymousUser.user.id,
+					newUserId: newUser.user.id,
+				})
+			},
+		}),
+	],
 })
 
 export type Auth = typeof auth

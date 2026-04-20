@@ -1,4 +1,4 @@
-import { isWordKnown } from "@nwords/shared"
+import { isWordKnown, territoryCellQualifiesForConqueredColumn } from "@nwords/shared"
 
 /** Same gap as `vocab-graph.tsx` between heatmap squares (px). */
 export const GAP_PX = 1
@@ -60,6 +60,14 @@ export function cellQualifiesForTerritory(confidence: number | null): boolean {
 	return confidence !== null && confidence >= TERRITORY_MIN_CONFIDENCE
 }
 
+/** Column “conquered” slab + Build frontier: assumed-rank band counts even with weak measured confidence. */
+export function cellConqueredForTerritoryColumn(
+	cell: Pick<VocabGraphColumnCell, "rank" | "confidence">,
+	assumedRank: number,
+): boolean {
+	return territoryCellQualifiesForConqueredColumn(cell.confidence, cell.rank, assumedRank)
+}
+
 /**
  * Count of full columns from the left where every occupied cell is territory-qualified.
  * Column-major index: `idx = col * numRows + row` with row 0 at the bottom row of the grid.
@@ -68,6 +76,7 @@ export function completedColsFromLeft(
 	visibleCells: VocabGraphColumnCell[],
 	numCols: number,
 	numRows: number,
+	assumedRank = 0,
 ): number {
 	let col = 0
 	for (; col < numCols; col++) {
@@ -75,7 +84,7 @@ export function completedColsFromLeft(
 		for (let row = 0; row < numRows; row++) {
 			const idx = col * numRows + row
 			if (idx >= visibleCells.length) break
-			if (!cellQualifiesForTerritory(visibleCells[idx].confidence)) {
+			if (!cellConqueredForTerritoryColumn(visibleCells[idx], assumedRank)) {
 				colOk = false
 				break
 			}
@@ -95,6 +104,7 @@ export function nonTerritoryWordIdsInColumn(
 	numCols: number,
 	numRows: number,
 	columnIndex: number,
+	assumedRank = 0,
 ): string[] {
 	if (columnIndex < 0 || columnIndex >= numCols) return []
 	const out: string[] = []
@@ -102,7 +112,7 @@ export function nonTerritoryWordIdsInColumn(
 		const idx = columnIndex * numRows + row
 		if (idx >= visibleCells.length) break
 		const cell = visibleCells[idx]
-		if (!cellQualifiesForTerritory(cell.confidence)) out.push(cell.wordId)
+		if (!cellConqueredForTerritoryColumn(cell, assumedRank)) out.push(cell.wordId)
 	}
 	return out
 }
@@ -112,6 +122,7 @@ export function columnWordSummaries(
 	numCols: number,
 	numRows: number,
 	columnIndex: number,
+	assumedRank = 0,
 ): { wordId: string; lemma: string; rank: number }[] {
 	if (columnIndex < 0 || columnIndex >= numCols) return []
 	const out: { wordId: string; lemma: string; rank: number }[] = []
@@ -119,7 +130,7 @@ export function columnWordSummaries(
 		const idx = columnIndex * numRows + row
 		if (idx >= visibleCells.length) break
 		const cell = visibleCells[idx]
-		if (!cellQualifiesForTerritory(cell.confidence)) {
+		if (!cellConqueredForTerritoryColumn(cell, assumedRank)) {
 			out.push({ wordId: cell.wordId, lemma: cell.lemma, rank: cell.rank })
 		}
 	}
@@ -152,7 +163,7 @@ export function computeHeatmapGridLayout<T extends VocabGraphColumnCell = VocabG
 	)
 	const numRows = Math.max(1, Math.ceil(displayCount / numCols))
 	const visibleCells = cells.slice(0, displayCount)
-	const completedCols = completedColsFromLeft(visibleCells, numCols, numRows)
+	const completedCols = completedColsFromLeft(visibleCells, numCols, numRows, assumedRank)
 	return { visibleCells, numCols, numRows, completedCols }
 }
 
@@ -165,6 +176,7 @@ export function countTestedNotMasteredInColumn(
 	numCols: number,
 	numRows: number,
 	columnIndex: number,
+	assumedRank = 0,
 ): number {
 	if (columnIndex < 0 || columnIndex >= numCols) return 0
 	let n = 0
@@ -172,7 +184,7 @@ export function countTestedNotMasteredInColumn(
 		const idx = columnIndex * numRows + row
 		if (idx >= visibleCells.length) break
 		const cell = visibleCells[idx]
-		if (cellQualifiesForTerritory(cell.confidence)) continue
+		if (cellConqueredForTerritoryColumn(cell, assumedRank)) continue
 		if (cell.timesTested < 1) continue
 		const conf = cell.confidence
 		if (conf !== null && isWordKnown(conf, cell.timesTested)) continue
@@ -200,14 +212,21 @@ export function analyzeBuildPracticeColumn(
 	const { visibleCells, numCols, numRows, completedCols } = layout
 	if (completedCols >= numCols) return null
 	const columnIndex = completedCols
-	const wordIds = nonTerritoryWordIdsInColumn(visibleCells, numCols, numRows, columnIndex)
+	const wordIds = nonTerritoryWordIdsInColumn(
+		visibleCells,
+		numCols,
+		numRows,
+		columnIndex,
+		assumedRank,
+	)
 	if (wordIds.length === 0) return null
-	const words = columnWordSummaries(visibleCells, numCols, numRows, columnIndex)
+	const words = columnWordSummaries(visibleCells, numCols, numRows, columnIndex, assumedRank)
 	const testedNotMasteredCount = countTestedNotMasteredInColumn(
 		visibleCells,
 		numCols,
 		numRows,
 		columnIndex,
+		assumedRank,
 	)
 	return {
 		payload: { columnIndex, wordIds, words },
@@ -229,8 +248,14 @@ export function computeFirstIncompleteColumnPayload(
 	const { visibleCells, numCols, numRows, completedCols } = layout
 	if (completedCols >= numCols) return null
 	const columnIndex = completedCols
-	const wordIds = nonTerritoryWordIdsInColumn(visibleCells, numCols, numRows, columnIndex)
+	const wordIds = nonTerritoryWordIdsInColumn(
+		visibleCells,
+		numCols,
+		numRows,
+		columnIndex,
+		assumedRank,
+	)
 	if (wordIds.length === 0) return null
-	const words = columnWordSummaries(visibleCells, numCols, numRows, columnIndex)
+	const words = columnWordSummaries(visibleCells, numCols, numRows, columnIndex, assumedRank)
 	return { columnIndex, wordIds, words }
 }

@@ -6,22 +6,23 @@ import { Label } from "~/components/ui/label"
 import { VocabGraph } from "~/components/vocab-graph"
 import { cn } from "~/lib/utils"
 import {
+	VOCAB_GRAPH_THEME_DEFAULTS,
 	type VocabGraphColorKey,
 	type VocabGraphColors,
 	type VocabGraphHsva,
-	VOCAB_GRAPH_THEME_DEFAULTS,
 } from "~/stores/vocab-graph-appearance"
 
 const STOP_META: { key: VocabGraphColorKey; title: string; description: string }[] = [
 	{
 		key: "before",
 		title: "Before",
-		description: 'Low confidence end of the scale (heatmap cells trending toward \u201Cstill learning\u201D).',
+		description:
+			"Low confidence end of the scale (heatmap cells trending toward \u201Cstill learning\u201D).",
 	},
 	{
 		key: "after",
 		title: "After",
-		description: 'High confidence end of the scale (cells trending toward \u201Cwell known\u201D).',
+		description: "High confidence end of the scale (cells trending toward \u201Cwell known\u201D).",
 	},
 	{
 		key: "conquered",
@@ -215,9 +216,7 @@ export function VocabGraphColorsCard({
 							variant="outline"
 							size="sm"
 							onClick={() =>
-								onColorsChange(
-									structuredClone(VOCAB_GRAPH_THEME_DEFAULTS[dark ? "dark" : "light"]),
-								)
+								onColorsChange(structuredClone(VOCAB_GRAPH_THEME_DEFAULTS[dark ? "dark" : "light"]))
 							}
 						>
 							Reset to recommended ({dark ? "dark" : "light"})
