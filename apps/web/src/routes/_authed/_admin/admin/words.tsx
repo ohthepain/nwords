@@ -592,6 +592,14 @@ function AdminWordsPage() {
 				sentences={sentences}
 				loadingSentences={loadingSentences}
 				onExcludeFromTests={selectedWord ? () => excludeWordFromTests(selectedWord.id) : undefined}
+				onUpdateClozeQuality={async (sentenceId, delta) => {
+					await fetch(`/api/admin/sentences/${sentenceId}/cloze-quality`, {
+						method: "PATCH",
+						headers: { "Content-Type": "application/json" },
+						credentials: "include",
+						body: JSON.stringify({ delta }),
+					})
+				}}
 			/>
 		</div>
 	)

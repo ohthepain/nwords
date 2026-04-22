@@ -256,7 +256,9 @@ function computeAssessmentPickTargetRank(
 	return { targetRank, naiveMid }
 }
 
-async function lastAnsweredEffectiveRank(testSessionId: string): Promise<number | null> {
+async function lastAnsweredEffectiveRank(
+	testSessionId: string,
+): Promise<{ rank: number; wordId: string } | null> {
 	const last = await prisma.testAnswer.findFirst({
 		where: { testSessionId },
 		orderBy: { answeredAt: "desc" },
@@ -269,7 +271,7 @@ async function lastAnsweredEffectiveRank(testSessionId: string): Promise<number 
 	})
 	const r = w?.effectiveRank
 	if (typeof r !== "number" || r <= 0) return null
-	return r
+	return { rank: r, wordId: last.wordId }
 }
 
 /** Dev panel: qualitative description; actual next card is a random strategy roll in `handleBuildNext`. */
@@ -456,12 +458,12 @@ async function handleAssessmentNext(
 		})
 	}
 
-	const lastTestedRank = answerCount > 0 ? await lastAnsweredEffectiveRank(session.id) : null
+	const lastAnswered = answerCount > 0 ? await lastAnsweredEffectiveRank(session.id) : null
 	const { targetRank, naiveMid } = computeAssessmentPickTargetRank(
 		low,
 		high,
 		answerCount,
-		lastTestedRank,
+		lastAnswered?.rank ?? null,
 	)
 	const assessmentDevSummary =
 		answerCount === 0
@@ -471,7 +473,7 @@ async function handleAssessmentNext(
 				: `Assessment: target rank ${targetRank} (bounds ${low}–${high})`
 
 	// Try to find a word near the target rank
-	const tried = new Set<string>()
+	const tried = new Set<string>(lastAnswered ? [lastAnswered.wordId] : [])
 	const maxTries = 12
 
 	for (let i = 0; i < maxTries; i++) {
@@ -566,13 +568,22 @@ async function handleFrustrationNext(
 	// Get already-tested words in this session to avoid immediate repeats
 	const sessionAnswers = await prisma.testAnswer.findMany({
 		where: { testSessionId: session.id },
+		orderBy: { answeredAt: "asc" },
 		select: { wordId: true },
 	})
 	const testedInSession = new Set(sessionAnswers.map((a) => a.wordId))
+	const lastAnsweredWordId = sessionAnswers.at(-1)?.wordId
 
-	// Prefer words not yet tested in this session
-	const candidates = frustrationWords.filter((w) => !testedInSession.has(w.wordId))
-	const pool = candidates.length > 0 ? candidates : frustrationWords
+	// Prefer words not yet tested in this session; avoid the immediately preceding word when possible
+	const candidates = frustrationWords.filter(
+		(w) => !testedInSession.has(w.wordId) && w.wordId !== lastAnsweredWordId,
+	)
+	const pool =
+		candidates.length > 0
+			? candidates
+			: frustrationWords.filter((w) => w.wordId !== lastAnsweredWordId).length > 0
+				? frustrationWords.filter((w) => w.wordId !== lastAnsweredWordId)
+				: frustrationWords
 
 	// Pick randomly from pool for variety
 	const pick = pool[Math.floor(Math.random() * Math.min(pool.length, 10))]
@@ -798,6 +809,7 @@ async function handleBuildNext(
 	const vocabSize = assumedRank + knownVerifiedCount
 
 	const testedInSession = new Set(sessionAnswers.map((a) => a.wordId))
+	const lastAnsweredWordId = sessionAnswers.at(-1)?.wordId
 	const columnOrdered = parseColumnFocusWordIds(session.columnFocusWordIds)
 	const pendingCol = columnFocusPendingFirstPass(columnOrdered, testedInSession)
 	if (pendingCol) {
@@ -931,7 +943,7 @@ async function handleBuildNext(
 	const SPREAD_INTRO = 12
 	const SPREAD_WALK = 22
 
-	const tried = new Set<string>()
+	const tried = new Set<string>(lastAnsweredWordId ? [lastAnsweredWordId] : [])
 	const orderLabel = strategyOrder.join(" → ")
 
 	for (let pass = 0; pass < 40; pass++) {
@@ -1791,8 +1803,8 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 		const vocabModeEarly = session.vocabMode ?? "BUILD"
 		if (vocabModeEarly === "ASSESSMENT") {
 			const { low, high, answerCount } = await replayAssessmentLowHighForSession(session.id)
-			const lastTestedRank = answerCount > 0 ? await lastAnsweredEffectiveRank(session.id) : null
-			const { targetRank } = computeAssessmentPickTargetRank(low, high, answerCount, lastTestedRank)
+			const lastAnsweredPeek = answerCount > 0 ? await lastAnsweredEffectiveRank(session.id) : null
+			const { targetRank } = computeAssessmentPickTargetRank(low, high, answerCount, lastAnsweredPeek?.rank ?? null)
 			const peekWordIdRaw = c.req.query("peekWordId")?.trim()
 			const peekWordId =
 				peekWordIdRaw &&

@@ -183,6 +183,29 @@ const generateFixedExpressions = createServerFn({ method: "POST" })
 		return { success: true, jobId: body.id ?? null }
 	})
 
+const assessClozeQuality = createServerFn({ method: "POST" })
+	.inputValidator((data: { id: string }) => data)
+	.handler(async ({ data }) => {
+		const request = getRequest()
+		if (!request) {
+			throw new Error("Missing request context")
+		}
+		const origin = new URL(request.url).origin
+		const json = JSON.stringify({ languageId: data.id })
+		const res = await app.fetch(
+			new Request(`${origin}/api/admin/jobs/cloze-quality-assessment`, {
+				method: "POST",
+				headers: forwardedAdminApiHeaders(request, { jsonBody: json }),
+				body: json,
+			}),
+		)
+		const body = (await res.json().catch(() => ({}))) as { error?: string; id?: string }
+		if (!res.ok) {
+			throw new Error(body.error ?? `Cloze quality assessment job failed (${res.status})`)
+		}
+		return { success: true, jobId: body.id ?? null }
+	})
+
 const clearLanguageSentenceLinks = createServerFn({ method: "POST" })
 	.inputValidator((data: { id: string }) => data)
 	.handler(async ({ data }) => {
@@ -224,6 +247,7 @@ function AdminLanguagesPage() {
 	const [toggling, setToggling] = useState<string | null>(null)
 	const [runningPipeline, setRunningPipeline] = useState<string | null>(null)
 	const [generatingFixedExpr, setGeneratingFixedExpr] = useState<string | null>(null)
+	const [assessingClozeQuality, setAssessingClozeQuality] = useState<string | null>(null)
 	const [clearingLinksId, setClearingLinksId] = useState<string | null>(null)
 	const [notice, setNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null)
 	const [jobActionError, setJobActionError] = useState<string | null>(null)
@@ -312,6 +336,28 @@ function AdminLanguagesPage() {
 			})
 		} finally {
 			setGeneratingFixedExpr(null)
+		}
+		await router.invalidate()
+	}
+
+	async function handleAssessClozeQuality(id: string) {
+		setNotice(null)
+		setAssessingClozeQuality(id)
+		try {
+			const out = await assessClozeQuality({ data: { id } })
+			setNotice({
+				kind: "ok",
+				text: out.jobId
+					? `Cloze quality assessment queued — ${out.jobId.slice(0, 8)}… Progress appears below and on Jobs.`
+					: "Cloze quality assessment queued.",
+			})
+		} catch (e) {
+			setNotice({
+				kind: "err",
+				text: e instanceof Error ? e.message : "Cloze quality assessment failed",
+			})
+		} finally {
+			setAssessingClozeQuality(null)
 		}
 		await router.invalidate()
 	}
@@ -602,17 +648,30 @@ function AdminLanguagesPage() {
 											<p className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em]">
 												Ingestion jobs (latest {JOBS_PER_LANGUAGE})
 											</p>
-											<Button
-												variant="outline"
-												size="sm"
-												className="h-6 text-[11px] px-2 font-mono"
-												disabled={generatingFixedExpr === lang.id}
-												onClick={() => handleGenerateFixedExpressions(lang.id)}
-											>
-												{generatingFixedExpr === lang.id
-													? "Generating…"
-													: "Generate fixed expressions"}
-											</Button>
+											<div className="flex items-center gap-2">
+												<Button
+													variant="outline"
+													size="sm"
+													className="h-6 text-[11px] px-2 font-mono"
+													disabled={generatingFixedExpr === lang.id}
+													onClick={() => handleGenerateFixedExpressions(lang.id)}
+												>
+													{generatingFixedExpr === lang.id
+														? "Generating…"
+														: "Generate fixed expressions"}
+												</Button>
+												<Button
+													variant="outline"
+													size="sm"
+													className="h-6 text-[11px] px-2 font-mono"
+													disabled={assessingClozeQuality === lang.id}
+													onClick={() => handleAssessClozeQuality(lang.id)}
+												>
+													{assessingClozeQuality === lang.id
+														? "Queuing…"
+														: "Assess cloze quality"}
+												</Button>
+											</div>
 										</div>
 										{langJobs.length === 0 ? (
 											<p className="text-xs text-muted-foreground">

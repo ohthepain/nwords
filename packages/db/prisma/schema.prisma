@@ -142,6 +142,8 @@ model Word {
   effectiveRank   Int          @default(0)
   /// Curated sentence UUIDs suitable for vocabulary tests (ranked by quality).
   testSentenceIds String[]     @default([])
+  /// AI-generated synonyms/alternative answers that work across the best assessed cloze sentences.
+  aiSynonyms      String[]     @default([])
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 
@@ -257,6 +259,8 @@ model Sentence {
   isTestCandidate  Boolean  @default(false)
   /// Flagged by admin via cloze issue report — excluded from cloze tests at runtime.
   markedForRemoval Boolean  @default(false)
+  /// Admin-set quality rating. ≥1 = approved for assessment mode. 0 = unrated. <0 = poor.
+  clozeQuality     Int      @default(0)
   createdAt  DateTime @default(now())
 
   translations  SentenceTranslation[] @relation("OriginalSentence")
@@ -287,6 +291,12 @@ model SentenceWord {
   sentence   Sentence @relation(fields: [sentenceId], references: [id], onDelete: Cascade)
   word       Word     @relation(fields: [wordId], references: [id], onDelete: Cascade)
   position   Int
+  /// AI-assessed: whether this cloze should be kept for testing.
+  aiKeep        Boolean?
+  /// AI-assessed usefulness as a cloze test item (0–5). Tests whether the target word is clearly required.
+  aiUsefulness  Int?
+  /// AI-assessed naturalness of the sentence (0–5).
+  aiNaturalness Int?
 
   @@unique([sentenceId, wordId])
   @@index([wordId])
@@ -481,6 +491,7 @@ enum IngestionType {
   WORD_FORMS
   AUDIO_FILES
   FIXED_EXPRESSIONS
+  CLOZE_QUALITY_ASSESSMENT
 }
 
 enum IngestionStatus {

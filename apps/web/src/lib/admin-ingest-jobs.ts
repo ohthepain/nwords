@@ -41,6 +41,7 @@ export const JOB_TYPE_LABELS: Record<string, string> = {
 	WORD_FORMS: "Word Forms",
 	AUDIO_FILES: "Audio Files",
 	FIXED_EXPRESSIONS: "Fixed Expressions",
+	CLOZE_QUALITY_ASSESSMENT: "Cloze Quality Assessment",
 }
 
 export const STATUS_STYLES: Record<string, string> = {

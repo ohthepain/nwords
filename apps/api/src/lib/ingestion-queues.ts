@@ -5,4 +5,5 @@ export const INGEST_QUEUE = {
 	TATOEBA: "ingest:tatoeba",
 	WORD_FORMS: "ingest:word-forms",
 	FIXED_EXPRESSIONS: "ingest:fixed-expressions",
+	CLOZE_QUALITY: "ingest:cloze-quality",
 } as const

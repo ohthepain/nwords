@@ -19,6 +19,7 @@ const TYPE_TO_QUEUE: Record<string, string> = {
 	TATOEBA_SENTENCES: INGEST_QUEUE.TATOEBA,
 	WORD_FORMS: INGEST_QUEUE.WORD_FORMS,
 	FIXED_EXPRESSIONS: INGEST_QUEUE.FIXED_EXPRESSIONS,
+	CLOZE_QUALITY_ASSESSMENT: INGEST_QUEUE.CLOZE_QUALITY,
 }
 
 type RetryPlan =
@@ -214,6 +215,13 @@ async function planRetryFromJob(job: {
 				payload: { languageId: job.languageId },
 			}
 		}
+		case "CLOZE_QUALITY_ASSESSMENT": {
+			return {
+				ok: true,
+				queue: INGEST_QUEUE.CLOZE_QUALITY,
+				payload: { languageId: job.languageId },
+			}
+		}
 		default:
 			return { ok: false, error: "This job type cannot be retried from the admin UI" }
 	}
@@ -338,6 +346,7 @@ export const adminJobsRoute = new Hono()
 						"WORD_FORMS",
 						"AUDIO_FILES",
 						"FIXED_EXPRESSIONS",
+						"CLOZE_QUALITY_ASSESSMENT",
 					])
 					.optional(),
 				limit: z.coerce.number().min(1).max(100).default(20),
@@ -541,6 +550,43 @@ export const adminJobsRoute = new Hono()
 			})
 
 			await sendIngestJob(INGEST_QUEUE.FIXED_EXPRESSIONS, {
+				jobId: job.id,
+				languageId,
+			})
+
+			return c.json(serializeJob(job), 201)
+		},
+	)
+
+	// Assess cloze quality for the top-1000 words of a language via LLM (no file upload needed)
+	.post(
+		"/cloze-quality-assessment",
+		zValidator(
+			"json",
+			z.object({
+				languageId: z.string().uuid(),
+			}),
+		),
+		async (c) => {
+			const { languageId } = c.req.valid("json")
+
+			const language = await prisma.language.findUnique({ where: { id: languageId } })
+			if (!language) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+
+			const job = await prisma.ingestionJob.create({
+				data: {
+					type: "CLOZE_QUALITY_ASSESSMENT",
+					languageId,
+					metadata: {
+						languageCode: language.code,
+						languageName: language.name,
+					},
+				},
+			})
+
+			await sendIngestJob(INGEST_QUEUE.CLOZE_QUALITY, {
 				jobId: job.id,
 				languageId,
 			})

@@ -5,6 +5,7 @@ export type WordSentence = {
 	id: string
 	text: string
 	translations: string[]
+	clozeQuality: number
 }
 
 export const getWordSentences = createServerFn({ method: "POST" })
@@ -34,6 +35,7 @@ export const getWordSentences = createServerFn({ method: "POST" })
 		const sentences: WordSentence[] = sentenceWords.map((sw) => ({
 			id: sw.sentence.id,
 			text: sw.sentence.text,
+			clozeQuality: sw.sentence.clozeQuality,
 			translations: nativeLanguageId
 				? sw.sentence.translations
 						.filter((t) => t.translatedSentence.languageId === nativeLanguageId)

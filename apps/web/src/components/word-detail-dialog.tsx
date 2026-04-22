@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react"
+import { type ReactNode, useState, useCallback } from "react"
 import { Button } from "~/components/ui/button"
 import {
 	Dialog,
@@ -55,6 +55,7 @@ type WordDetailDialogProps =
 			sentences: WordSentence[]
 			loadingSentences: boolean
 			onExcludeFromTests?: () => Promise<void>
+			onUpdateClozeQuality?: (sentenceId: string, delta: 1 | -1) => Promise<void>
 	  }
 	| {
 			open: boolean
@@ -70,6 +71,27 @@ export function WordDetailDialog(props: WordDetailDialogProps) {
 	const { open, onOpenChange, sentences, loadingSentences } = props
 	const [excludeBusy, setExcludeBusy] = useState(false)
 	const [excludeError, setExcludeError] = useState<string | null>(null)
+	const [qualityOverrides, setQualityOverrides] = useState<Record<string, number>>({})
+	const [qualityBusy, setQualityBusy] = useState<Record<string, boolean>>({})
+
+	const onUpdateClozeQuality =
+		props.variant === "admin" ? props.onUpdateClozeQuality : undefined
+
+	const handleQualityDelta = useCallback(
+		async (sentenceId: string, currentQuality: number, delta: 1 | -1) => {
+			if (!onUpdateClozeQuality) return
+			setQualityBusy((prev) => ({ ...prev, [sentenceId]: true }))
+			setQualityOverrides((prev) => ({ ...prev, [sentenceId]: currentQuality + delta }))
+			try {
+				await onUpdateClozeQuality(sentenceId, delta)
+			} catch {
+				setQualityOverrides((prev) => ({ ...prev, [sentenceId]: currentQuality }))
+			} finally {
+				setQualityBusy((prev) => ({ ...prev, [sentenceId]: false }))
+			}
+		},
+		[onUpdateClozeQuality],
+	)
 
 	function vocabBody(word: VocabWordDetail) {
 		return (
@@ -243,17 +265,51 @@ export function WordDetailDialog(props: WordDetailDialogProps) {
 							</p>
 						) : (
 							<div className="space-y-2 max-h-[40vh] overflow-y-auto">
-								{sentences.map((s) => (
-									<div
-										key={s.id}
-										className="rounded-md border border-border px-3 py-2 text-sm space-y-1"
-									>
-										<p>{s.text}</p>
-										{s.translations.length > 0 ? (
-											<p className="text-xs text-muted-foreground italic">{s.translations[0]}</p>
-										) : null}
-									</div>
-								))}
+								{sentences.map((s) => {
+									const quality =
+										qualityOverrides[s.id] !== undefined
+											? qualityOverrides[s.id]
+											: s.clozeQuality
+									const busy = qualityBusy[s.id] ?? false
+									return (
+										<div
+											key={s.id}
+											className="rounded-md border border-border px-3 py-2 text-sm space-y-1"
+										>
+											<p>{s.text}</p>
+											{s.translations.length > 0 ? (
+												<p className="text-xs text-muted-foreground italic">
+													{s.translations[0]}
+												</p>
+											) : null}
+											{onUpdateClozeQuality ? (
+												<div className="flex items-center gap-2 pt-1">
+													<button
+														type="button"
+														disabled={busy}
+														onClick={() => handleQualityDelta(s.id, quality, -1)}
+														className="text-xs px-1.5 py-0.5 rounded border border-border hover:bg-muted disabled:opacity-50"
+													>
+														−1
+													</button>
+													<span
+														className={`text-xs font-mono tabular-nums min-w-[1.5rem] text-center ${quality >= 1 ? "text-emerald-400" : quality < 0 ? "text-rose-400" : "text-muted-foreground"}`}
+													>
+														{quality}
+													</span>
+													<button
+														type="button"
+														disabled={busy}
+														onClick={() => handleQualityDelta(s.id, quality, 1)}
+														className="text-xs px-1.5 py-0.5 rounded border border-border hover:bg-muted disabled:opacity-50"
+													>
+														+1
+													</button>
+												</div>
+											) : null}
+										</div>
+									)
+								})}
 							</div>
 						)}
 					</div>
