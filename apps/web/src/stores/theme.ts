@@ -48,8 +48,7 @@ export const useThemeStore = create<ThemeState>()(
 			merge: (persisted, current) => {
 				const p = (persisted || {}) as LegacyPersisted & { dark?: boolean }
 				const colorScheme: ColorScheme =
-					p.colorScheme ??
-					(typeof p.dark === "boolean" ? (p.dark ? "dark" : "light") : "system")
+					p.colorScheme ?? (typeof p.dark === "boolean" ? (p.dark ? "dark" : "light") : "system")
 				return { ...current, colorScheme, uiStyle: p.uiStyle ?? current.uiStyle }
 			},
 			onRehydrateStorage: () => (state) => {

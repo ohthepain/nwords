@@ -59,8 +59,7 @@ function AdminColorsPage() {
 				} catch {
 					/* ignore */
 				}
-				const targetInEnabled =
-					targetLang !== null && enabled.some((l) => l.id === targetLang)
+				const targetInEnabled = targetLang !== null && enabled.some((l) => l.id === targetLang)
 				const chosenPreviewId = targetInEnabled && targetLang !== null ? targetLang : enabled[0].id
 				setPreviewLanguageId(chosenPreviewId)
 			}

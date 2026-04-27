@@ -191,7 +191,10 @@ const assessClozeQuality = createServerFn({ method: "POST" })
 			throw new Error("Missing request context")
 		}
 		const origin = new URL(request.url).origin
-		const json = JSON.stringify({ languageId: data.id, maxSentencesPerWord: data.maxSentencesPerWord })
+		const json = JSON.stringify({
+			languageId: data.id,
+			maxSentencesPerWord: data.maxSentencesPerWord,
+		})
 		const res = await app.fetch(
 			new Request(`${origin}/api/admin/jobs/cloze-quality-assessment`, {
 				method: "POST",
@@ -668,9 +671,7 @@ function AdminLanguagesPage() {
 													disabled={assessingClozeQuality === lang.id}
 													onClick={() => handleAssessClozeQuality(lang.id)}
 												>
-													{assessingClozeQuality === lang.id
-														? "Queuing…"
-														: "Assess cloze quality"}
+													{assessingClozeQuality === lang.id ? "Queuing…" : "Assess cloze quality"}
 												</Button>
 											</div>
 										</div>
@@ -690,13 +691,18 @@ function AdminLanguagesPage() {
 														max={500}
 														value={clozeMaxSentences}
 														onChange={(e) =>
-															setClozeMaxSentences(Math.max(1, Math.min(500, Number(e.target.value) || 30)))
+															setClozeMaxSentences(
+																Math.max(1, Math.min(500, Number(e.target.value) || 30)),
+															)
 														}
 														className="w-16 h-6 rounded border border-input bg-background px-2 text-xs font-mono text-center tabular-nums focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
 													/>
 												</div>
 												<p className="text-[11px] text-muted-foreground leading-relaxed">
-													Limits how many cloze sentences are sent to the AI per word. High-frequency words can have hundreds of sentences — capping this keeps costs predictable and avoids overloading the prompt. 30 is usually enough to find the best examples.
+													Limits how many cloze sentences are sent to the AI per word.
+													High-frequency words can have hundreds of sentences — capping this keeps
+													costs predictable and avoids overloading the prompt. 30 is usually enough
+													to find the best examples.
 												</p>
 											</div>
 										</div>

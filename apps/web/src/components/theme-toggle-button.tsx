@@ -14,12 +14,11 @@ export function ThemeToggleButton({ className }: { className?: string }) {
 	const setColorScheme = useThemeStore((s) => s.setColorScheme)
 
 	return (
-		<div
+		<fieldset
 			className={cn(
-				"inline-flex items-center rounded-md border border-border bg-muted/40 p-0.5 shadow-xs",
+				"m-0 min-w-0 border border-border p-0.5 inline-flex items-center rounded-md bg-muted/40 shadow-xs",
 				className,
 			)}
-			role="group"
 			aria-label="Color scheme"
 		>
 			{OPTIONS.map(({ scheme, label, icon: Icon }) => {
@@ -30,7 +29,10 @@ export function ThemeToggleButton({ className }: { className?: string }) {
 						type="button"
 						variant="ghost"
 						size="icon"
-						className={cn("size-8 rounded-sm shrink-0", selected && "bg-background text-foreground shadow-sm")}
+						className={cn(
+							"size-8 rounded-sm shrink-0",
+							selected && "bg-background text-foreground shadow-sm",
+						)}
 						aria-pressed={selected}
 						aria-label={label}
 						title={label}
@@ -40,6 +42,6 @@ export function ThemeToggleButton({ className }: { className?: string }) {
 					</Button>
 				)
 			})}
-		</div>
+		</fieldset>
 	)
 }

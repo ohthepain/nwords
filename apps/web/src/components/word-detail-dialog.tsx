@@ -1,4 +1,4 @@
-import { type ReactNode, useState, useCallback } from "react"
+import { type ReactNode, useCallback, useState } from "react"
 import { Button } from "~/components/ui/button"
 import {
 	Dialog,
@@ -74,8 +74,7 @@ export function WordDetailDialog(props: WordDetailDialogProps) {
 	const [qualityOverrides, setQualityOverrides] = useState<Record<string, number>>({})
 	const [qualityBusy, setQualityBusy] = useState<Record<string, boolean>>({})
 
-	const onUpdateClozeQuality =
-		props.variant === "admin" ? props.onUpdateClozeQuality : undefined
+	const onUpdateClozeQuality = props.variant === "admin" ? props.onUpdateClozeQuality : undefined
 
 	const handleQualityDelta = useCallback(
 		async (sentenceId: string, currentQuality: number, delta: 1 | -1) => {
@@ -267,9 +266,7 @@ export function WordDetailDialog(props: WordDetailDialogProps) {
 							<div className="space-y-2 max-h-[40vh] overflow-y-auto">
 								{sentences.map((s) => {
 									const quality =
-										qualityOverrides[s.id] !== undefined
-											? qualityOverrides[s.id]
-											: s.clozeQuality
+										qualityOverrides[s.id] !== undefined ? qualityOverrides[s.id] : s.clozeQuality
 									const busy = qualityBusy[s.id] ?? false
 									return (
 										<div
@@ -278,9 +275,7 @@ export function WordDetailDialog(props: WordDetailDialogProps) {
 										>
 											<p>{s.text}</p>
 											{s.translations.length > 0 ? (
-												<p className="text-xs text-muted-foreground italic">
-													{s.translations[0]}
-												</p>
+												<p className="text-xs text-muted-foreground italic">{s.translations[0]}</p>
 											) : null}
 											{onUpdateClozeQuality ? (
 												<div className="flex items-center gap-2 pt-1">

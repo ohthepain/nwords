@@ -1804,7 +1804,12 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 		if (vocabModeEarly === "ASSESSMENT") {
 			const { low, high, answerCount } = await replayAssessmentLowHighForSession(session.id)
 			const lastAnsweredPeek = answerCount > 0 ? await lastAnsweredEffectiveRank(session.id) : null
-			const { targetRank } = computeAssessmentPickTargetRank(low, high, answerCount, lastAnsweredPeek?.rank ?? null)
+			const { targetRank } = computeAssessmentPickTargetRank(
+				low,
+				high,
+				answerCount,
+				lastAnsweredPeek?.rank ?? null,
+			)
 			const peekWordIdRaw = c.req.query("peekWordId")?.trim()
 			const peekWordId =
 				peekWordIdRaw &&

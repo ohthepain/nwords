@@ -157,9 +157,7 @@ export async function processClozeQualityJob(job: PgBoss.Job<ClozeQualityJobData
 				clozeText: buildClozeText(sw.sentence.text, word.lemma),
 			}))
 
-			const numberedList = sentences
-				.map((s) => `${s.index}. ${s.clozeText}`)
-				.join("\n")
+			const numberedList = sentences.map((s) => `${s.index}. ${s.clozeText}`).join("\n")
 
 			try {
 				await appendJobLog(
@@ -247,11 +245,7 @@ Return JSON only.`,
 			await updateIngestionProgress(jobId, { processedItems: processed, errorCount: errors })
 		}
 
-		await appendJobLog(
-			jobId,
-			"out",
-			`Done: ${processed} words assessed, ${errors} errors`,
-		)
+		await appendJobLog(jobId, "out", `Done: ${processed} words assessed, ${errors} errors`)
 
 		await prisma.ingestionJob.update({
 			where: { id: jobId },
