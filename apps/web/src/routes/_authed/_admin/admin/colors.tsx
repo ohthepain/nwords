@@ -48,7 +48,22 @@ function AdminColorsPage() {
 			const langsData = (await langsRes.json()) as { languages: Language[] }
 			const enabled = langsData.languages.filter((l) => l.enabled)
 			setLanguages(enabled)
-			if (enabled.length > 0) setPreviewLanguageId(enabled[0].id)
+			if (enabled.length > 0) {
+				let targetLang: string | null = null
+				try {
+					const ks = await fetch("/api/progress/knowledge-summary", { credentials: "include" })
+					if (ks.ok) {
+						const j = (await ks.json()) as { targetLanguageId?: string }
+						targetLang = j.targetLanguageId ?? null
+					}
+				} catch {
+					/* ignore */
+				}
+				const targetInEnabled =
+					targetLang !== null && enabled.some((l) => l.id === targetLang)
+				const chosenPreviewId = targetInEnabled && targetLang !== null ? targetLang : enabled[0].id
+				setPreviewLanguageId(chosenPreviewId)
+			}
 		}
 	}, [dark])
 

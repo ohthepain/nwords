@@ -109,11 +109,12 @@ function HsvaWheelBlock({
 						aria-valuemax={100}
 						aria-valuenow={Math.round(hsva.v)}
 					/>
-					<div className="flex gap-2 pt-1">
+					<div className="flex flex-col gap-2 pt-1">
 						<Button
 							type="button"
 							variant="outline"
 							size="xs"
+							className="w-full"
 							onClick={() => randomBright(onWheel, onBrightness)}
 						>
 							Random bright
@@ -122,6 +123,7 @@ function HsvaWheelBlock({
 							type="button"
 							variant="outline"
 							size="xs"
+							className="w-full"
 							onClick={() => randomDark(onWheel, onBrightness)}
 						>
 							Random dark
