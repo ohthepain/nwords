@@ -1,4 +1,5 @@
 import { colord } from "colord"
+import type { CSSProperties } from "react"
 
 import type { VocabGraphColors, VocabGraphHsva } from "~/stores/vocab-graph-appearance"
 
@@ -20,13 +21,8 @@ function readResolvedCssColor(varName: string): string {
 	return rgb || "#737373"
 }
 
-export function applyVocabGraphCssVars(colors: VocabGraphColors): void {
-	if (typeof document === "undefined") return
-	const root = document.documentElement
-	root.style.setProperty("--vocab-graph-confidence-low", hsvaToHex(colors.before))
-	root.style.setProperty("--vocab-graph-confidence-high", hsvaToHex(colors.after))
-	root.style.setProperty("--vocab-graph-territory-conquered", hsvaToHex(colors.conquered))
-	root.style.setProperty("--vocab-graph-territory-open", hsvaToHex(colors.unconquered))
+/** Same values as `applyVocabGraphCssVars`, for scoping to a subtree (e.g. admin color preview). */
+export function vocabGraphColorsToStyle(colors: VocabGraphColors): CSSProperties {
 	const muted = colord(readResolvedCssColor("--color-muted-foreground")).toRgb()
 	const open = colord(hsvaToHex(colors.unconquered)).toRgb()
 	const t = 0.28
@@ -35,5 +31,20 @@ export function applyVocabGraphCssVars(colors: VocabGraphColors): void {
 		g: Math.round(open.g * (1 - t) + muted.g * t),
 		b: Math.round(open.b * (1 - t) + muted.b * t),
 	}).toHex()
-	root.style.setProperty("--vocab-graph-untested", untested)
+	return {
+		"--vocab-graph-confidence-low": hsvaToHex(colors.before),
+		"--vocab-graph-confidence-high": hsvaToHex(colors.after),
+		"--vocab-graph-territory-conquered": hsvaToHex(colors.conquered),
+		"--vocab-graph-territory-open": hsvaToHex(colors.unconquered),
+		"--vocab-graph-untested": untested,
+	} as CSSProperties
+}
+
+export function applyVocabGraphCssVars(colors: VocabGraphColors): void {
+	if (typeof document === "undefined") return
+	const root = document.documentElement
+	const style = vocabGraphColorsToStyle(colors)
+	for (const [k, v] of Object.entries(style)) {
+		if (typeof v === "string") root.style.setProperty(k, v)
+	}
 }

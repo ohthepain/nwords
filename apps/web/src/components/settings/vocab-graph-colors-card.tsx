@@ -4,6 +4,7 @@ import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { Label } from "~/components/ui/label"
 import { VocabGraph } from "~/components/vocab-graph"
+import { vocabGraphColorsToStyle } from "~/lib/vocab-graph-appearance-css"
 import { cn } from "~/lib/utils"
 import {
 	VOCAB_GRAPH_THEME_DEFAULTS,
@@ -174,7 +175,10 @@ export function VocabGraphColorsCard({
 						Live preview
 					</p>
 					{previewLanguageId ? (
-						<div className="rounded-xl border border-border/70 bg-muted/15 p-3 overflow-x-auto">
+						<div
+							className="rounded-xl border border-border/70 bg-muted/15 p-3 overflow-x-auto"
+							style={vocabGraphColorsToStyle(colors)}
+						>
 							<VocabGraph
 								languageId={previewLanguageId}
 								activeWordId={null}
