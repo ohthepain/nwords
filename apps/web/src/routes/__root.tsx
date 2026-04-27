@@ -3,7 +3,7 @@ import type { ReactNode } from "react"
 import { useEffect, useLayoutEffect } from "react"
 import { VocabGraphThemeSync } from "~/components/vocab-graph-theme-sync"
 import { initPostHog } from "~/lib/posthog"
-import { useThemeStore } from "~/stores/theme"
+import { useEffectiveDark, useThemeStore } from "~/stores/theme"
 import "~/styles.css"
 
 export const Route = createRootRoute({
@@ -54,7 +54,7 @@ function RootDocument({ children }: { children: ReactNode }) {
 }
 
 function RootComponent() {
-	const dark = useThemeStore((s) => s.dark)
+	const dark = useEffectiveDark()
 	const uiStyle = useThemeStore((s) => s.uiStyle)
 
 	useEffect(() => {

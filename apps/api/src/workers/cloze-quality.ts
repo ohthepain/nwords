@@ -12,7 +12,10 @@ import { updateIngestionProgress } from "../lib/job-progress"
 export interface ClozeQualityJobData {
 	jobId: string
 	languageId: string
+	maxSentencesPerWord?: number
 }
+
+export const DEFAULT_MAX_SENTENCES_PER_WORD = 30
 
 const sentenceAssessmentSchema = z.object({
 	keep: z.boolean().describe("Whether this sentence is suitable as a cloze test item"),
@@ -49,7 +52,7 @@ function buildClozeText(sentenceText: string, lemma: string): string {
 }
 
 export async function processClozeQualityJob(job: PgBoss.Job<ClozeQualityJobData>) {
-	const { jobId, languageId } = job.data
+	const { jobId, languageId, maxSentencesPerWord = DEFAULT_MAX_SENTENCES_PER_WORD } = job.data
 
 	const started = await tryMarkIngestionJobRunning(jobId)
 	if (!started) {
@@ -122,7 +125,7 @@ export async function processClozeQualityJob(job: PgBoss.Job<ClozeQualityJobData
 		await appendJobLog(
 			jobId,
 			"out",
-			`Found ${totalWords} distinct lemmas. Assessing cloze quality…`,
+			`Found ${totalWords} distinct lemmas. Assessing cloze quality (max ${maxSentencesPerWord} sentences per word)…`,
 		)
 
 		let processed = 0
@@ -139,11 +142,13 @@ export async function processClozeQualityJob(job: PgBoss.Job<ClozeQualityJobData
 
 			// Deduplicate sentences by sentenceId (the same sentence may appear via multiple POS rows)
 			const seenSentenceIds = new Set<string>()
-			const uniqueSentenceWords = allSentenceWords.filter((sw) => {
-				if (seenSentenceIds.has(sw.sentenceId)) return false
-				seenSentenceIds.add(sw.sentenceId)
-				return true
-			})
+			const uniqueSentenceWords = allSentenceWords
+				.filter((sw) => {
+					if (seenSentenceIds.has(sw.sentenceId)) return false
+					seenSentenceIds.add(sw.sentenceId)
+					return true
+				})
+				.slice(0, maxSentencesPerWord)
 
 			const sentences = uniqueSentenceWords.map((sw, i) => ({
 				index: i + 1,

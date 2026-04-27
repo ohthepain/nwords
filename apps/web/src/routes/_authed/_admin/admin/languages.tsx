@@ -184,14 +184,14 @@ const generateFixedExpressions = createServerFn({ method: "POST" })
 	})
 
 const assessClozeQuality = createServerFn({ method: "POST" })
-	.inputValidator((data: { id: string }) => data)
+	.inputValidator((data: { id: string; maxSentencesPerWord: number }) => data)
 	.handler(async ({ data }) => {
 		const request = getRequest()
 		if (!request) {
 			throw new Error("Missing request context")
 		}
 		const origin = new URL(request.url).origin
-		const json = JSON.stringify({ languageId: data.id })
+		const json = JSON.stringify({ languageId: data.id, maxSentencesPerWord: data.maxSentencesPerWord })
 		const res = await app.fetch(
 			new Request(`${origin}/api/admin/jobs/cloze-quality-assessment`, {
 				method: "POST",
@@ -248,6 +248,7 @@ function AdminLanguagesPage() {
 	const [runningPipeline, setRunningPipeline] = useState<string | null>(null)
 	const [generatingFixedExpr, setGeneratingFixedExpr] = useState<string | null>(null)
 	const [assessingClozeQuality, setAssessingClozeQuality] = useState<string | null>(null)
+	const [clozeMaxSentences, setClozeMaxSentences] = useState(30)
 	const [clearingLinksId, setClearingLinksId] = useState<string | null>(null)
 	const [notice, setNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null)
 	const [jobActionError, setJobActionError] = useState<string | null>(null)
@@ -344,7 +345,7 @@ function AdminLanguagesPage() {
 		setNotice(null)
 		setAssessingClozeQuality(id)
 		try {
-			const out = await assessClozeQuality({ data: { id } })
+			const out = await assessClozeQuality({ data: { id, maxSentencesPerWord: clozeMaxSentences } })
 			setNotice({
 				kind: "ok",
 				text: out.jobId
@@ -671,6 +672,32 @@ function AdminLanguagesPage() {
 														? "Queuing…"
 														: "Assess cloze quality"}
 												</Button>
+											</div>
+										</div>
+										<div className="px-4 pb-3 bg-muted/20 border-t border-border/40">
+											<div className="flex items-start gap-3 pt-3">
+												<div className="flex items-center gap-1.5 shrink-0">
+													<label
+														htmlFor={`cloze-max-${lang.id}`}
+														className="text-[11px] font-mono text-muted-foreground whitespace-nowrap"
+													>
+														Max sentences/word
+													</label>
+													<input
+														id={`cloze-max-${lang.id}`}
+														type="number"
+														min={1}
+														max={500}
+														value={clozeMaxSentences}
+														onChange={(e) =>
+															setClozeMaxSentences(Math.max(1, Math.min(500, Number(e.target.value) || 30)))
+														}
+														className="w-16 h-6 rounded border border-input bg-background px-2 text-xs font-mono text-center tabular-nums focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+													/>
+												</div>
+												<p className="text-[11px] text-muted-foreground leading-relaxed">
+													Limits how many cloze sentences are sent to the AI per word. High-frequency words can have hundreds of sentences — capping this keeps costs predictable and avoids overloading the prompt. 30 is usually enough to find the best examples.
+												</p>
 											</div>
 										</div>
 										{langJobs.length === 0 ? (

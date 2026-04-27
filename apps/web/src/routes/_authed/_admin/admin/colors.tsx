@@ -2,7 +2,7 @@ import { Link, createFileRoute } from "@tanstack/react-router"
 import { useCallback, useEffect, useState } from "react"
 import { VocabGraphColorsCard } from "~/components/settings/vocab-graph-colors-card"
 import { Button } from "~/components/ui/button"
-import { useThemeStore } from "~/stores/theme"
+import { useEffectiveDark } from "~/stores/theme"
 import {
 	VOCAB_GRAPH_THEME_DEFAULTS,
 	type VocabGraphColors,
@@ -17,7 +17,7 @@ type AppSettingsColors = { vocabGraphColors: VocabGraphColors | null }
 type Language = { id: string; name: string; enabled: boolean }
 
 function AdminColorsPage() {
-	const dark = useThemeStore((s) => s.dark)
+	const dark = useEffectiveDark()
 	const setGlobalColors = useVocabGraphAppearanceStore((s) => s.setColors)
 
 	const [savedColors, setSavedColors] = useState<VocabGraphColors>(VOCAB_GRAPH_THEME_DEFAULTS.light)

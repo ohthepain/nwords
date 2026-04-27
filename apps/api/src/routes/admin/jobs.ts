@@ -565,10 +565,11 @@ export const adminJobsRoute = new Hono()
 			"json",
 			z.object({
 				languageId: z.string().uuid(),
+				maxSentencesPerWord: z.number().int().min(1).max(500).optional(),
 			}),
 		),
 		async (c) => {
-			const { languageId } = c.req.valid("json")
+			const { languageId, maxSentencesPerWord } = c.req.valid("json")
 
 			const language = await prisma.language.findUnique({ where: { id: languageId } })
 			if (!language) {
@@ -582,6 +583,7 @@ export const adminJobsRoute = new Hono()
 					metadata: {
 						languageCode: language.code,
 						languageName: language.name,
+						...(maxSentencesPerWord !== undefined ? { maxSentencesPerWord } : {}),
 					},
 				},
 			})
@@ -589,6 +591,7 @@ export const adminJobsRoute = new Hono()
 			await sendIngestJob(INGEST_QUEUE.CLOZE_QUALITY, {
 				jobId: job.id,
 				languageId,
+				...(maxSentencesPerWord !== undefined ? { maxSentencesPerWord } : {}),
 			})
 
 			return c.json(serializeJob(job), 201)
