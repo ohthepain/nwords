@@ -1,5 +1,5 @@
 import { zValidator } from "@hono/zod-validator"
-import { prisma } from "@nwords/db"
+import { prisma, Prisma } from "@nwords/db"
 import { Hono } from "hono"
 import { z } from "zod"
 import { setWordPositionAdjust } from "../../lib/resolve-word-order"
@@ -16,8 +16,60 @@ import {
 import { adminMiddleware } from "../../middleware/admin"
 import { authMiddleware } from "../../middleware/auth"
 
+const PROMPT_WORDLIST_MAX = 5000
+
 export const adminWordsRoute = new Hono()
 	.use("*", authMiddleware, adminMiddleware)
+
+	/**
+	 * Compact ranked lemma list for LLM prompts (reorder / curriculum tasks).
+	 * `w` is unique lemmas: for each lemma we keep the lowest effectiveRank among POS rows, then
+	 * order globally by that rank; index i ⇒ rank i+1 in this slice.
+	 */
+	.get("/prompt-wordlist.json", async (c) => {
+		const languageId = c.req.query("languageId")?.trim()
+		if (!languageId) {
+			return c.json({ error: "languageId is required" }, 400)
+		}
+		const limitRaw = c.req.query("limit")
+		const limitParsed = limitRaw ? Number.parseInt(limitRaw, 10) : PROMPT_WORDLIST_MAX
+		const limit = Number.isFinite(limitParsed)
+			? Math.min(PROMPT_WORDLIST_MAX, Math.max(1, limitParsed))
+			: PROMPT_WORDLIST_MAX
+
+		const lang = await prisma.language.findFirst({
+			where: { id: languageId },
+			select: { code: true },
+		})
+		if (!lang) {
+			return c.json({ error: "Language not found" }, 404)
+		}
+
+		const rows = await prisma.$queryRaw<{ lemma: string }[]>(
+			Prisma.sql`
+				WITH best AS (
+					SELECT DISTINCT ON ("lemma") "lemma", "effectiveRank" AS er
+					FROM "word"
+					WHERE "languageId" = ${languageId}::uuid AND "effectiveRank" > 0
+					ORDER BY "lemma", "effectiveRank" ASC, "id" ASC
+				)
+				SELECT "lemma" FROM best
+				ORDER BY er ASC, "lemma" ASC
+				LIMIT ${limit}
+			`,
+		)
+
+		c.header(
+			"Content-Disposition",
+			`attachment; filename="nwords-prompt-wordlist-${lang.code}.json"`,
+		)
+		return c.json({
+			v: 1,
+			lc: lang.code,
+			n: rows.length,
+			w: rows.map((r) => r.lemma),
+		})
+	})
 
 	.get("/synonyms/export", async (c) => {
 		const languageIdRaw = c.req.query("languageId")?.trim()

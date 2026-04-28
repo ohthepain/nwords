@@ -294,6 +294,8 @@ function AdminWordsPage() {
   const [positionAdjustIoMessage, setPositionAdjustIoMessage] = useState<string | null>(null);
   const positionAdjustImportInputRef = useRef<HTMLInputElement>(null);
 
+  const [promptWordlistMessage, setPromptWordlistMessage] = useState<string | null>(null);
+
   async function exportSynonyms() {
     setSynonymIoMessage(null);
     try {
@@ -384,6 +386,36 @@ function AdminWordsPage() {
       URL.revokeObjectURL(url);
     } catch (e) {
       setPositionAdjustIoMessage(e instanceof Error ? e.message : "Export failed");
+    }
+  }
+
+  async function exportPromptWordlist() {
+    setPromptWordlistMessage(null);
+    if (!languageId) {
+      setPromptWordlistMessage("Select a language to download.");
+      return;
+    }
+    try {
+      const qs = `?languageId=${encodeURIComponent(languageId)}`;
+      const res = await fetch(`/api/admin/words/prompt-wordlist.json${qs}`, {
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? "Download failed");
+      }
+      const blob = await res.blob();
+      const cd = res.headers.get("Content-Disposition");
+      const match = cd?.match(/filename="([^"]+)"/);
+      const filename = match?.[1] ?? "nwords-prompt-wordlist.json";
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setPromptWordlistMessage(e instanceof Error ? e.message : "Download failed");
     }
   }
 
@@ -661,6 +693,30 @@ function AdminWordsPage() {
           </div>
         </div>
       </form>
+
+      <div className="flex flex-wrap items-center gap-2 border border-border rounded-lg px-3 py-2.5 bg-muted/20">
+        <strong className="text-foreground/90">Prompt wordlist</strong>
+        <p className="text-xs text-muted-foreground flex-1 min-w-[12rem]">
+          First 5000 <strong className="text-foreground/90 font-medium">unique</strong> lemmas (one per lemma:
+          best <code className="text-[10px]">effectiveRank</code> when split across POS rows) as compact JSON (
+          <code className="text-[10px]">w</code> array). Uses the Language field above.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          disabled={!languageId}
+          onClick={() => void exportPromptWordlist()}
+        >
+          Download JSON
+        </Button>
+      </div>
+      {promptWordlistMessage ? (
+        <output className="text-xs text-muted-foreground block" aria-live="polite">
+          {promptWordlistMessage}
+        </output>
+      ) : null}
 
       {/* Results */}
       {results !== null && (
