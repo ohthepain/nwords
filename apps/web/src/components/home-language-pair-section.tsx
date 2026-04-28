@@ -15,6 +15,9 @@ export type HomeLanguagePairSectionProps = {
 	/** When set, language changes are saved to the account before starting practice. */
 	account?: { user: { id: string } } | null
 	languageProfiles?: { languageId: string; assumedRank: number }[]
+	/** Logged-in user's saved pair from the server (shown first when both are set). */
+	accountNativeLanguageId?: string
+	accountTargetLanguageId?: string
 }
 
 function assumedRankForTarget(
@@ -29,6 +32,8 @@ function assumedRankForTarget(
 export function HomeLanguagePairSection({
 	account = null,
 	languageProfiles = [],
+	accountNativeLanguageId,
+	accountTargetLanguageId,
 }: HomeLanguagePairSectionProps) {
 	const navigate = useNavigate()
 	const [allLanguageOptions, setAllLanguageOptions] = useState<LanguageOption[]>([])
@@ -45,25 +50,57 @@ export function HomeLanguagePairSection({
 				fetch("/api/languages"),
 				fetch("/api/languages?enabled=true"),
 			])
-			if (!cancelled && langAllRes.ok) {
+			let allLangs: LanguageOption[] = []
+			let enabledLangs: LanguageOption[] = []
+			if (langAllRes.ok) {
 				const data = (await langAllRes.json()) as { languages: LanguageOption[] }
-				setAllLanguageOptions(data.languages)
+				allLangs = data.languages
+				if (!cancelled) setAllLanguageOptions(data.languages)
 			}
-			if (!cancelled && langRes.ok) {
+			if (langRes.ok) {
 				const data = (await langRes.json()) as { languages: LanguageOption[] }
-				setLanguageOptions(data.languages)
+				enabledLangs = data.languages
+				if (!cancelled) setLanguageOptions(data.languages)
 			}
 			if (cancelled) return
+
+			const nativeOpts = allLangs.length > 0 ? allLangs : enabledLangs
+
+			function pairExistsInLists(native: string, target: string): boolean {
+				if (!native || !target || native === target) return false
+				const nativeOk = nativeOpts.some((l) => l.id === native)
+				const targetOk = enabledLangs.some((l) => l.id === target)
+				return nativeOk && targetOk
+			}
+
+			const fromAccount =
+				accountNativeLanguageId &&
+				accountTargetLanguageId &&
+				accountNativeLanguageId !== accountTargetLanguageId &&
+				pairExistsInLists(accountNativeLanguageId, accountTargetLanguageId)
+					? {
+							nativeLanguageId: accountNativeLanguageId,
+							targetLanguageId: accountTargetLanguageId,
+						}
+					: null
+
 			const stored = readStoredPracticeLanguagePair()
-			if (stored) {
-				setNativeId(stored.nativeLanguageId)
-				setTargetId(stored.targetLanguageId)
+			const fromStored =
+				stored &&
+				pairExistsInLists(stored.nativeLanguageId, stored.targetLanguageId)
+					? stored
+					: null
+
+			const initial = fromAccount ?? fromStored
+			if (initial) {
+				setNativeId(initial.nativeLanguageId)
+				setTargetId(initial.targetLanguageId)
 			}
 		})()
 		return () => {
 			cancelled = true
 		}
-	}, [])
+	}, [accountNativeLanguageId, accountTargetLanguageId])
 
 	const nativeLanguageOptions = allLanguageOptions.length > 0 ? allLanguageOptions : languageOptions
 

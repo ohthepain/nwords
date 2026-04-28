@@ -3,11 +3,95 @@ import { prisma } from "@nwords/db"
 import { Hono } from "hono"
 import { z } from "zod"
 import { setWordPositionAdjust } from "../../lib/resolve-word-order"
+import {
+	buildSynonymPairsExport,
+	importSynonymPairsMerge,
+	synonymPairsImportSchema,
+} from "../../lib/synonym-pair-import-export"
+import {
+	buildPositionAdjustExport,
+	importPositionAdjustMerge,
+	positionAdjustImportSchema,
+} from "../../lib/word-position-adjust-import-export"
 import { adminMiddleware } from "../../middleware/admin"
 import { authMiddleware } from "../../middleware/auth"
 
 export const adminWordsRoute = new Hono()
 	.use("*", authMiddleware, adminMiddleware)
+
+	.get("/synonyms/export", async (c) => {
+		const languageIdRaw = c.req.query("languageId")?.trim()
+		const languageId = languageIdRaw && languageIdRaw.length > 0 ? languageIdRaw : undefined
+		if (languageId) {
+			const lang = await prisma.language.findFirst({
+				where: { id: languageId },
+				select: { code: true },
+			})
+			if (!lang) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+			c.header("Content-Disposition", `attachment; filename="nwords-synonyms-${lang.code}.json"`)
+		} else {
+			c.header("Content-Disposition", `attachment; filename="nwords-synonyms-all.json"`)
+		}
+		const payload = await buildSynonymPairsExport({ languageId })
+		return c.json(payload)
+	})
+
+	.post("/synonyms/import", async (c) => {
+		let body: unknown
+		try {
+			body = await c.req.json()
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400)
+		}
+		const parsed = synonymPairsImportSchema.safeParse(body)
+		if (!parsed.success) {
+			return c.json({ error: "Invalid synonym export file", issues: parsed.error.issues }, 400)
+		}
+		const stats = await importSynonymPairsMerge(parsed.data)
+		return c.json({ ok: true, ...stats })
+	})
+
+	.get("/position-adjustments/export", async (c) => {
+		const languageIdRaw = c.req.query("languageId")?.trim()
+		const languageId = languageIdRaw && languageIdRaw.length > 0 ? languageIdRaw : undefined
+		if (languageId) {
+			const lang = await prisma.language.findFirst({
+				where: { id: languageId },
+				select: { code: true },
+			})
+			if (!lang) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+			c.header(
+				"Content-Disposition",
+				`attachment; filename="nwords-position-adjustments-${lang.code}.json"`,
+			)
+		} else {
+			c.header("Content-Disposition", `attachment; filename="nwords-position-adjustments-all.json"`)
+		}
+		const payload = await buildPositionAdjustExport({ languageId })
+		return c.json(payload)
+	})
+
+	.post("/position-adjustments/import", async (c) => {
+		let body: unknown
+		try {
+			body = await c.req.json()
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400)
+		}
+		const parsed = positionAdjustImportSchema.safeParse(body)
+		if (!parsed.success) {
+			return c.json(
+				{ error: "Invalid position-adjustments export file", issues: parsed.error.issues },
+				400,
+			)
+		}
+		const stats = await importPositionAdjustMerge(parsed.data)
+		return c.json({ ok: true, ...stats })
+	})
 
 	.post("/:id/exclude-from-tests", async (c) => {
 		const { id } = c.req.param()

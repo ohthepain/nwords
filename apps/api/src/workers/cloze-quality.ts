@@ -5,6 +5,7 @@ import type PgBoss from "pg-boss"
 import { z } from "zod"
 import { createModel } from "../lib/ai"
 import { getAiConfig } from "../lib/app-settings"
+import { computeAiClozePriority } from "../lib/cloze-compositionality"
 import { isIngestionJobCancelled, tryMarkIngestionJobRunning } from "../lib/ingestion-job-cancel"
 import { appendJobLog } from "../lib/job-logs"
 import { updateIngestionProgress } from "../lib/job-progress"
@@ -16,6 +17,17 @@ export interface ClozeQualityJobData {
 }
 
 export const DEFAULT_MAX_SENTENCES_PER_WORD = 30
+
+/** All POS rows for this lemma in the language — aligns heatmap / cloze pools with stored flags. */
+async function markLemmaNonTestable(languageId: string, lemma: string): Promise<number> {
+	const result = await prisma.word.updateMany({
+		where: { languageId, lemma },
+		data: { isTestable: false },
+	})
+	return result.count
+}
+
+const compositionalityTierEnum = z.enum(["A", "B", "C", "D"])
 
 const sentenceAssessmentSchema = z.object({
 	keep: z.boolean().describe("Whether this sentence is suitable as a cloze test item"),
@@ -31,6 +43,9 @@ const sentenceAssessmentSchema = z.object({
 		.min(0)
 		.max(5)
 		.describe("How natural and realistic the sentence sounds (0=unnatural, 5=very natural)"),
+	compositionalityTier: compositionalityTierEnum.describe(
+		"A=fully compositional; B=mild collocate; C=semi-fixed pattern; D=fixed expression (target does not generalize from this phrase)",
+	),
 	reason: z.string().describe("Short explanation, especially if keep=false"),
 })
 
@@ -90,6 +105,7 @@ export async function processClozeQualityJob(job: PgBoss.Job<ClozeQualityJobData
 				id: true,
 				lemma: true,
 				rank: true,
+				testSentenceIds: true,
 				sentenceWords: {
 					select: {
 						id: true,
@@ -104,7 +120,11 @@ export async function processClozeQualityJob(job: PgBoss.Job<ClozeQualityJobData
 		type RawWord = (typeof rawWords)[number]
 		const lemmaMap = new Map<
 			string,
-			{ canonical: RawWord; allSentenceWords: RawWord["sentenceWords"] }
+			{
+				canonical: RawWord
+				allSentenceWords: RawWord["sentenceWords"]
+				curatedSentenceIds: Set<string>
+			}
 		>()
 		for (const word of rawWords) {
 			const existing = lemmaMap.get(word.lemma)
@@ -112,10 +132,12 @@ export async function processClozeQualityJob(job: PgBoss.Job<ClozeQualityJobData
 				lemmaMap.set(word.lemma, {
 					canonical: word,
 					allSentenceWords: [...word.sentenceWords],
+					curatedSentenceIds: new Set(word.testSentenceIds),
 				})
 			} else {
 				// Merge sentences; canonical is already the lowest rank (list is sorted asc)
 				existing.allSentenceWords.push(...word.sentenceWords)
+				for (const sid of word.testSentenceIds) existing.curatedSentenceIds.add(sid)
 			}
 		}
 		const words = Array.from(lemmaMap.values())
@@ -131,10 +153,27 @@ export async function processClozeQualityJob(job: PgBoss.Job<ClozeQualityJobData
 		let processed = 0
 		let errors = 0
 
-		for (const { canonical: word, allSentenceWords } of words) {
+		for (const { canonical: word, allSentenceWords, curatedSentenceIds } of words) {
 			if (await isIngestionJobCancelled(jobId)) return
 
+			if (allSentenceWords.length === 0 && curatedSentenceIds.size === 0) {
+				const n = await markLemmaNonTestable(languageId, word.lemma)
+				await appendJobLog(
+					jobId,
+					"out",
+					`"${word.lemma}": no SentenceWord links and no curated test sentences — marked ${n} word row(s) non-testable.`,
+				)
+				processed++
+				await updateIngestionProgress(jobId, { processedItems: processed, errorCount: errors })
+				continue
+			}
+
 			if (allSentenceWords.length === 0) {
+				await appendJobLog(
+					jobId,
+					"out",
+					`Skipping "${word.lemma}": ${curatedSentenceIds.size} curated sentence id(s) but no SentenceWord links — assess linked sentences only.`,
+				)
 				processed++
 				await updateIngestionProgress(jobId, { processedItems: processed, errorCount: errors })
 				continue
@@ -174,6 +213,13 @@ export async function processClozeQualityJob(job: PgBoss.Job<ClozeQualityJobData
 Your goal is NOT to judge general sentence quality.
 Your goal is to detect whether each sentence is a clean and reliable test of the target word.
 
+Compositionality tiers (for each sentence):
+
+- Tier A — Fully compositional: the word contributes its dictionary meaning directly (e.g. color, action, concrete noun alone).
+- Tier B — Mildly bound: usual collocation, but the word is still meaningful outside the phrase.
+- Tier C — Strong pattern / semi-fixed: meaning is partly tied to the surrounding pattern (preposition frame, light-verb chunk, etc.).
+- Tier D — Fixed expression / idiom chunk: knowing the lemma in isolation is not enough; it does not generalize from this usage (heavy penalty to selection priority).
+
 Evaluation criteria:
 
 A GOOD test sentence:
@@ -202,9 +248,10 @@ Tasks:
 - "keep": true/false
 - "usefulness": 0–5 (how well it tests knowledge of the word)
 - "naturalness": 0–5
+- "compositionalityTier": A, B, C, or D (see system message)
 - "reason": short explanation (especially if rejected)
 
-2. Given only the sentences where keep=true (up to the best 3 by usefulness):
+2. Given only the sentences where keep=true (up to the best 3 by usefulness, preferring tier A and B over C and D when usefulness is similar):
 List up to 3 alternative answers (synonyms) that work naturally in ALL of them.
 - Be strict: only include answers that clearly fit every kept sentence
 - Prefer 0–2 if unsure
@@ -217,12 +264,20 @@ Return JSON only.`,
 				for (let i = 0; i < sentences.length; i++) {
 					const assessment = object.sentences[i]
 					if (!assessment) continue
+					const tier = assessment.compositionalityTier
+					const aiClozePriority = computeAiClozePriority(
+						assessment.usefulness,
+						assessment.naturalness,
+						tier,
+					)
 					await prisma.sentenceWord.update({
 						where: { id: sentences[i].sentenceWordId },
 						data: {
 							aiKeep: assessment.keep,
 							aiUsefulness: assessment.usefulness,
 							aiNaturalness: assessment.naturalness,
+							aiCompositionalityTier: tier,
+							aiClozePriority,
 						},
 					})
 				}
@@ -232,6 +287,16 @@ Return JSON only.`,
 					where: { id: word.id },
 					data: { aiSynonyms: object.synonyms },
 				})
+
+				const keptCount = object.sentences.filter((s) => s.keep).length
+				if (sentences.length > 0 && keptCount === 0) {
+					const n = await markLemmaNonTestable(languageId, word.lemma)
+					await appendJobLog(
+						jobId,
+						"out",
+						`"${word.lemma}": LLM rejected every assessed sentence — marked ${n} word row(s) non-testable.`,
+					)
+				}
 			} catch (err) {
 				errors++
 				await appendJobLog(

@@ -297,6 +297,10 @@ model SentenceWord {
   aiUsefulness  Int?
   /// AI-assessed naturalness of the sentence (0–5).
   aiNaturalness Int?
+  /// A–D: compositional (A) vs fixed-expression (D); set by cloze-quality job.
+  aiCompositionalityTier String?
+  /// 0–100: usefulness × naturalness × tier multiplier; higher = prefer for cloze. Null = not assessed.
+  aiClozePriority        Int?
 
   @@unique([sentenceId, wordId])
   @@index([wordId])

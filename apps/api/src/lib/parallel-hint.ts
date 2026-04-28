@@ -230,10 +230,30 @@ function firstDefinitionHint(definitions: unknown): string | null {
 	return typeof first === "string" && first.trim().length > 0 ? first.trim() : null
 }
 
+/** When the cloze-quality job has not run, pick weight uses this (between typical B-tier and A-tier items). */
+const CLOZE_UNASSESSED_PICK_WEIGHT = 75
+
 type ClozeCandidate = {
 	targetSentenceId: string
 	targetSentenceText: string
 	position: number
+	/** 0–100 from cloze-quality job; null = not assessed */
+	aiClozePriority: number | null
+}
+
+function clozePickWeight(c: ClozeCandidate): number {
+	return c.aiClozePriority ?? CLOZE_UNASSESSED_PICK_WEIGHT
+}
+
+/** Random permutation biased toward higher weight first (Gumbel trick). */
+function weightedShuffleClozeCandidates<T extends ClozeCandidate>(candidates: T[]): T[] {
+	if (candidates.length <= 1) return [...candidates]
+	const scored = candidates.map((c) => ({
+		c,
+		key: -Math.log(Math.random() + 1e-12) / Math.max(clozePickWeight(c), 1e-3),
+	}))
+	scored.sort((a, b) => a.key - b.key)
+	return scored.map((s) => s.c)
 }
 
 async function materializeClozeCandidates(
@@ -246,7 +266,7 @@ async function materializeClozeCandidates(
 	const [sentenceWords, sentences] = await Promise.all([
 		prisma.sentenceWord.findMany({
 			where: { wordId, sentenceId: { in: sentenceIds } },
-			select: { sentenceId: true, position: true },
+			select: { sentenceId: true, position: true, aiClozePriority: true },
 		}),
 		prisma.sentence.findMany({
 			where: {
@@ -258,15 +278,25 @@ async function materializeClozeCandidates(
 		}),
 	])
 
-	const posBySid = new Map(sentenceWords.map((sw) => [sw.sentenceId, sw.position]))
+	const posBySid = new Map(
+		sentenceWords.map((sw) => [
+			sw.sentenceId,
+			{ position: sw.position, aiClozePriority: sw.aiClozePriority },
+		]),
+	)
 	const textBySid = new Map(sentences.map((s) => [s.id, s.text]))
 
 	const out: ClozeCandidate[] = []
 	for (const sid of sentenceIds) {
-		const position = posBySid.get(sid)
+		const meta = posBySid.get(sid)
 		const text = textBySid.get(sid)
-		if (position === undefined || text === undefined) continue
-		out.push({ targetSentenceId: sid, targetSentenceText: text, position })
+		if (meta === undefined || text === undefined) continue
+		out.push({
+			targetSentenceId: sid,
+			targetSentenceText: text,
+			position: meta.position,
+			aiClozePriority: meta.aiClozePriority,
+		})
 	}
 
 	return out
@@ -771,11 +801,8 @@ export async function resolveClozeWithHint(params: {
 		candidates.length = 0
 		candidates.push(...forced)
 	} else {
-		// Shuffle candidates so we don't always use the same sentence for a word
-		for (let i = candidates.length - 1; i > 0; i--) {
-			const j = Math.floor(Math.random() * (i + 1))
-			;[candidates[i], candidates[j]] = [candidates[j], candidates[i]]
-		}
+		// Prefer higher cloze-quality priority (compositionality tier × usefulness × naturalness)
+		candidates = weightedShuffleClozeCandidates(candidates)
 	}
 
 	const glossPivotHint = (): Promise<string | null> =>

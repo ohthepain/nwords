@@ -48,7 +48,10 @@ export async function linkedSentenceIdsForClozePool(
 				markedForRemoval: false,
 			},
 		},
-		orderBy: { sentence: { testQualityScore: { sort: "desc", nulls: "last" } } },
+		orderBy: [
+			{ aiClozePriority: { sort: "desc", nulls: "last" } },
+			{ sentence: { testQualityScore: { sort: "desc", nulls: "last" } } },
+		],
 		select: { sentenceId: true },
 		take,
 	})

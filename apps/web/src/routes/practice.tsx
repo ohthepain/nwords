@@ -889,7 +889,6 @@ function PracticePage() {
 		if (!correct) {
 			const expectedLine = `Not quite — expected “${question.lemma}”.`
 			if (data.synonymFeedback?.kind === "good") {
-				setClozeRevealed(true)
 				setFeedback(data.synonymFeedback.message)
 			} else if (data.synonymFeedback?.kind === "bad") {
 				setFeedback(`${expectedLine} ${data.synonymFeedback.message}`)
