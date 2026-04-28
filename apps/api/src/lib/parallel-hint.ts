@@ -1,5 +1,6 @@
 import { type Prisma, prisma } from "@nwords/db"
 import { KNOWN_CONFIDENCE_THRESHOLD, KNOWN_MIN_TESTS } from "@nwords/shared"
+import { clozeLengthMultiplier, countClozeWordRuns } from "./cloze-compositionality"
 import {
 	linkedSentenceIdsForClozePool,
 	prismaWhereWordHasResolvableClozeMaterial,
@@ -242,7 +243,9 @@ type ClozeCandidate = {
 }
 
 function clozePickWeight(c: ClozeCandidate): number {
-	return c.aiClozePriority ?? CLOZE_UNASSESSED_PICK_WEIGHT
+	if (c.aiClozePriority != null) return c.aiClozePriority
+	const len = clozeLengthMultiplier(countClozeWordRuns(c.targetSentenceText))
+	return CLOZE_UNASSESSED_PICK_WEIGHT * len
 }
 
 /** Random permutation biased toward higher weight first (Gumbel trick). */

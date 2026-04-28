@@ -193,6 +193,7 @@ export async function processClozeQualityJob(job: PgBoss.Job<ClozeQualityJobData
 				index: i + 1,
 				sentenceWordId: sw.id,
 				sentenceId: sw.sentenceId,
+				sentenceText: sw.sentence.text,
 				clozeText: buildClozeText(sw.sentence.text, word.lemma),
 			}))
 
@@ -225,6 +226,7 @@ Evaluation criteria:
 A GOOD test sentence:
 - Clearly requires knowing the target word (cannot be guessed easily)
 - Has exactly one natural answer in context
+- Is relatively short — fewer words is better for cloze (all else equal)
 - Is not too long or cognitively complex
 - Does not rely on idioms or strong collocations that give away the answer
 - Does not contain the target word elsewhere
@@ -269,6 +271,7 @@ Return JSON only.`,
 						assessment.usefulness,
 						assessment.naturalness,
 						tier,
+						sentences[i].sentenceText,
 					)
 					await prisma.sentenceWord.update({
 						where: { id: sentences[i].sentenceWordId },

@@ -206,6 +206,11 @@ export const progressRoute = new Hono()
 				sentenceLinkCounts.map((r) => [r.wordId, r._count as number]),
 			)
 
+			/** Omit frequency slots with no joinable cloze (stale `isTestable` or wrong POS row vs admin). */
+			const wordsWithJoinableClozes = words.filter(
+				(w) => (linkCountByWordId.get(w.id) ?? 0) > 0,
+			)
+
 			const knowledgeMap = new Map(knowledge.map((k) => [k.wordId, k]))
 
 			// Get assumed rank to mark words below it as "assumed known"
@@ -230,7 +235,7 @@ export const progressRoute = new Hono()
 			const assumedRank = profile?.assumedRank ?? 0
 			const vocabSize = assumedRank + knownWordsInLanguage
 
-			const cells = words.map((w) => {
+			const cells = wordsWithJoinableClozes.map((w) => {
 				const k = knowledgeMap.get(w.id)
 				const isKnown = k && k.confidence >= 0.95 && k.timesTested >= 3
 				const isAssumedKnown = w.effectiveRank <= assumedRank

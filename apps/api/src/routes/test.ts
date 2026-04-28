@@ -6,7 +6,6 @@ import {
 	KNOWN_CONFIDENCE_THRESHOLD,
 	KNOWN_MIN_TESTS,
 	checkFixedExpression,
-	collectFirstNUniqueEffectiveRanks,
 	computeBuildModeActiveBandRows,
 	computeHeatmapGridMetrics,
 	isIntroCandidate,
@@ -331,7 +330,7 @@ function buildNextPickPreview(args: {
  * Build mode must use this ordinal cap, not `rank <= ceil(baseline × 1.2)` alone; sparse rank
  * numbering can put higher numeric ranks outside the heatmap slice while still below that bound.
  *
- * Uses one word id per `effectiveRank` (same lemma can exist on multiple POS rows at the same rank).
+ * Uses one word id per `effectiveRank` that has ≥1 joinable cloze sentence (same semantics as GET /progress/heatmap).
  */
 type GraphVisibleRankRow = { id: string; effectiveRank: number }
 
@@ -349,18 +348,41 @@ async function buildModeGraphVisibleRankRows(
 		isAbbreviation: false,
 		isTestable: true,
 	}
-	const total = await prisma.word.count({ where: heatmapWhere })
-	const n = Math.min(total, targetCellCount)
-	if (n <= 0) return []
-	return collectFirstNUniqueEffectiveRanks(n, (skip, take) =>
-		prisma.word.findMany({
+	const seenRanks = new Set<number>()
+	const out: GraphVisibleRankRow[] = []
+	let skip = 0
+	const batchSize = 300
+	while (out.length < targetCellCount) {
+		const batch = await prisma.word.findMany({
 			where: heatmapWhere,
 			orderBy: [{ effectiveRank: "asc" }, { id: "asc" }],
 			skip,
-			take,
+			take: batchSize,
 			select: { id: true, effectiveRank: true },
-		}),
-	)
+		})
+		if (batch.length === 0) break
+		const sentenceLinkCounts = await prisma.sentenceWord.groupBy({
+			by: ["wordId"],
+			where: {
+				wordId: { in: batch.map((b) => b.id) },
+				sentence: { languageId, markedForRemoval: false },
+			},
+			_count: true,
+		})
+		const linkCountByWordId = new Map(
+			sentenceLinkCounts.map((r) => [r.wordId, r._count as number]),
+		)
+		for (const row of batch) {
+			if (seenRanks.has(row.effectiveRank)) continue
+			if ((linkCountByWordId.get(row.id) ?? 0) < 1) continue
+			seenRanks.add(row.effectiveRank)
+			out.push(row)
+			if (out.length >= targetCellCount) break
+		}
+		skip += batch.length
+		if (batch.length < batchSize) break
+	}
+	return out
 }
 
 function pickSpreadFromOrdered(

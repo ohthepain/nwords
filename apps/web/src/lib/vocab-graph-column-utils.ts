@@ -137,6 +137,51 @@ export function columnWordSummaries(
 	return out
 }
 
+/** Heatmap cell fields for “new territory” intro: cloze availability and whether the user was ever tested. */
+export type VocabGraphColumnCellForTerritoryIntro = VocabGraphColumnCellWithTests & {
+	testSentenceCount?: number
+}
+
+/**
+ * The first incomplete column often holds measured stragglers while lemmas at higher columns are still
+ * “new” (untested). Pick the leftmost column ≥ `firstIncompleteColumnIndex` with at least
+ * `minUntestedLemmas` non-territory, cloze-ready lemmas that have never been tested.
+ */
+export function findUntestedTerritoryIntroColumnPayload(
+	visibleCells: VocabGraphColumnCellForTerritoryIntro[],
+	numCols: number,
+	numRows: number,
+	firstIncompleteColumnIndex: number,
+	assumedRank: number,
+	minUntestedLemmas: number,
+): BuildColumnFocusPayload & { practiceWordIds: string[] } | null {
+	for (let col = firstIncompleteColumnIndex; col < numCols; col++) {
+		const colWordIds = nonTerritoryWordIdsInColumn(
+			visibleCells,
+			numCols,
+			numRows,
+			col,
+			assumedRank,
+		)
+		if (colWordIds.length === 0) continue
+		const byId = new Map(visibleCells.map((cell) => [cell.wordId, cell] as const))
+		const testable = colWordIds.filter((id) => (byId.get(id)?.testSentenceCount ?? 0) > 0)
+		const untested = testable.filter((id) => (byId.get(id)?.timesTested ?? 0) < 1)
+		if (untested.length < minUntestedLemmas) continue
+		const words = untested.map((wordId) => {
+			const cell = byId.get(wordId)!
+			return { wordId, lemma: cell.lemma, rank: cell.rank }
+		})
+		return {
+			columnIndex: col,
+			wordIds: untested,
+			words,
+			practiceWordIds: untested,
+		}
+	}
+	return null
+}
+
 export type HeatmapGridLayout<T extends VocabGraphColumnCell = VocabGraphColumnCell> = {
 	visibleCells: T[]
 	numCols: number

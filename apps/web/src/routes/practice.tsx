@@ -280,13 +280,58 @@ function PracticePage() {
 	const [newWordsIntroPayload, setNewWordsIntroPayload] =
 		useState<NewWordsColumnIntroPayload | null>(null)
 	const [newWordsIntroBusy, setNewWordsIntroBusy] = useState(false)
+	/** Build mode: heatmap graph fetch state — gate Start until not loading. */
+	const [buildVocabGraphLoadState, setBuildVocabGraphLoadState] = useState<
+		"idle" | "loading" | "error"
+	>("idle")
+
+	const onBuildVocabGraphLoadState = useCallback((s: "idle" | "loading" | "error") => {
+		setBuildVocabGraphLoadState(s)
+	}, [])
+
+	useEffect(() => {
+		if (vocabMode !== "BUILD") {
+			setBuildVocabGraphLoadState("idle")
+			return
+		}
+		const showGraph =
+			(vocabMode === "BUILD" || vocabMode === "NEWWORDS") &&
+			profile !== null &&
+			profile !== undefined &&
+			!!practiceTargetId
+		if (!showGraph) {
+			setBuildVocabGraphLoadState("idle")
+		}
+	}, [vocabMode, profile, practiceTargetId])
 
 	const onTerritoryColumnAdvanced = useCallback(
 		(payload: TerritoryColumnAdvancedPayload) => {
 			if (!sessionId || vocabMode !== "BUILD" || !practiceTargetId) return
 			try {
 				const k = `dismissedColumnBatch:${practiceTargetId}:${payload.columnIndex}`
-				if (sessionStorage.getItem(k)) return
+				const dismissed = !!sessionStorage.getItem(k)
+				// #region agent log
+				fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
+					method: "POST",
+					headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "30fe32" },
+					body: JSON.stringify({
+						sessionId: "30fe32",
+						runId: "pre-fix",
+						hypothesisId: "H3",
+						location: "practice.tsx:onTerritoryColumnAdvanced",
+						message: dismissed ? "skipped: session dismissed" : "setting newWordsIntroPayload",
+						data: {
+							columnIndex: payload.columnIndex,
+							practiceWordIdsLen: payload.practiceWordIds.length,
+							wordIdsLen: payload.wordIds.length,
+							dismissed,
+							storageKey: k,
+						},
+						timestamp: Date.now(),
+					}),
+				}).catch(() => {})
+				// #endregion
+				if (dismissed) return
 			} catch {
 				/* sessionStorage unavailable */
 			}
@@ -971,11 +1016,6 @@ function PracticePage() {
 		}
 	}, [question, practiceNativeId, practiceTargetId, reportBusy, reportIdByQuestionKey, answer])
 
-	const practiceLanguagesInvalid =
-		!practiceNativeId || !practiceTargetId || practiceNativeId === practiceTargetId
-	const canStartPractice = userMeLoaded && !practiceLanguagesInvalid
-	const nativeLanguageOptions = allLanguageOptions.length > 0 ? allLanguageOptions : languageOptions
-
 	const savePracticeLanguagePair = useCallback(async (): Promise<boolean> => {
 		if (!practiceNativeId || !practiceTargetId || practiceNativeId === practiceTargetId)
 			return false
@@ -1035,6 +1075,7 @@ function PracticePage() {
 		setClozeRevealed(false)
 		setPracticeWordPanel({ word: null, knowledge: null })
 		setPracticeWordSentences([])
+		setBuildVocabGraphLoadState("idle")
 	}
 
 	const reportKeyForQuestion = question ? clozeQuestionReportKey(question) : ""
@@ -1085,6 +1126,14 @@ function PracticePage() {
 
 	const showVocabGraph =
 		(vocabMode === "BUILD" || vocabMode === "NEWWORDS") && !isGuest && !!practiceTargetId
+
+	const practiceLanguagesInvalid =
+		!practiceNativeId || !practiceTargetId || practiceNativeId === practiceTargetId
+	const showVocabGraphForBuildGate = vocabMode === "BUILD" && showVocabGraph
+	const buildVocabGraphBlocksStart =
+		showVocabGraphForBuildGate && buildVocabGraphLoadState === "loading"
+	const canStartPractice = userMeLoaded && !practiceLanguagesInvalid
+	const nativeLanguageOptions = allLanguageOptions.length > 0 ? allLanguageOptions : languageOptions
 
 	return (
 		<div className="flex-1 flex flex-col min-h-0">
@@ -1168,6 +1217,9 @@ function PracticePage() {
 							showDevGrid={(account?.role === "ADMIN" || isLocalDevEnvironment()) && devMode}
 							onTerritoryColumnAdvanced={
 								sessionId && vocabMode === "BUILD" ? onTerritoryColumnAdvanced : undefined
+							}
+							onLoadStateChange={
+								vocabMode === "BUILD" && showVocabGraph ? onBuildVocabGraphLoadState : undefined
 							}
 						/>
 					</div>
@@ -1303,9 +1355,17 @@ function PracticePage() {
 								<Button
 									type="button"
 									onClick={() => void startSession()}
-									disabled={status === "loading" || practiceLanguagesInvalid}
+									disabled={
+										status === "loading" ||
+										practiceLanguagesInvalid ||
+										buildVocabGraphBlocksStart
+									}
 								>
-									{status === "loading" ? "Loading…" : "Start practice"}
+									{status === "loading"
+										? "Loading…"
+										: buildVocabGraphBlocksStart
+											? "Loading vocabulary graph…"
+											: "Start practice"}
 								</Button>
 							) : (
 								<div className="w-full max-w-4xl mx-auto space-y-4">
