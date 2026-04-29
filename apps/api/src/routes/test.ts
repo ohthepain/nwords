@@ -369,9 +369,7 @@ async function buildModeGraphVisibleRankRows(
 			},
 			_count: true,
 		})
-		const linkCountByWordId = new Map(
-			sentenceLinkCounts.map((r) => [r.wordId, r._count as number]),
-		)
+		const linkCountByWordId = new Map(sentenceLinkCounts.map((r) => [r.wordId, r._count as number]))
 		for (const row of batch) {
 			if (seenRanks.has(row.effectiveRank)) continue
 			if ((linkCountByWordId.get(row.id) ?? 0) < 1) continue

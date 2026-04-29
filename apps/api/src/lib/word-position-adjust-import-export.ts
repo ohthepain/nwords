@@ -124,8 +124,9 @@ export async function importPositionAdjustMerge(
 	for (let i = 0; i < resolved.length; i += CHUNK) {
 		const slice = resolved.slice(i, i + CHUNK)
 		await prisma.$transaction(
-			slice.map(({ id, positionAdjust }) =>
-				prisma.$executeRaw`
+			slice.map(
+				({ id, positionAdjust }) =>
+					prisma.$executeRaw`
 					UPDATE "word"
 					SET "positionAdjust" = ${positionAdjust},
 					    "effectiveRank" = "rank" + ${positionAdjust}

@@ -156,15 +156,9 @@ export function findUntestedTerritoryIntroColumnPayload(
 	firstIncompleteColumnIndex: number,
 	assumedRank: number,
 	minUntestedLemmas: number,
-): BuildColumnFocusPayload & { practiceWordIds: string[] } | null {
+): (BuildColumnFocusPayload & { practiceWordIds: string[] }) | null {
 	for (let col = firstIncompleteColumnIndex; col < numCols; col++) {
-		const colWordIds = nonTerritoryWordIdsInColumn(
-			visibleCells,
-			numCols,
-			numRows,
-			col,
-			assumedRank,
-		)
+		const colWordIds = nonTerritoryWordIdsInColumn(visibleCells, numCols, numRows, col, assumedRank)
 		if (colWordIds.length === 0) continue
 		const byId = new Map(visibleCells.map((cell) => [cell.wordId, cell] as const))
 		const testable = colWordIds.filter((id) => (byId.get(id)?.testSentenceCount ?? 0) > 0)

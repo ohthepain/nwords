@@ -207,9 +207,7 @@ export const progressRoute = new Hono()
 			)
 
 			/** Omit frequency slots with no joinable cloze (stale `isTestable` or wrong POS row vs admin). */
-			const wordsWithJoinableClozes = words.filter(
-				(w) => (linkCountByWordId.get(w.id) ?? 0) > 0,
-			)
+			const wordsWithJoinableClozes = words.filter((w) => (linkCountByWordId.get(w.id) ?? 0) > 0)
 
 			const knowledgeMap = new Map(knowledge.map((k) => [k.wordId, k]))
 

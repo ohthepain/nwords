@@ -1,5 +1,5 @@
 import { zValidator } from "@hono/zod-validator"
-import { prisma, Prisma } from "@nwords/db"
+import { Prisma, prisma } from "@nwords/db"
 import { Hono } from "hono"
 import { z } from "zod"
 import { setWordPositionAdjust } from "../../lib/resolve-word-order"

@@ -233,6 +233,12 @@ export async function processClozeQualityJob(job: PgBoss.Job<ClozeQualityJobData
 			const numberedList = sentences.map((s) => `${s.index}. ${s.clozeText}`).join("\n")
 
 			try {
+				await appendJobLog(
+					jobId,
+					"out",
+					`Assessing "${word.lemma}" (${sentences.length} sentences)…`,
+				)
+
 				const { object } = await generateObject({
 					model,
 					schema: clozeAssessmentSchema,

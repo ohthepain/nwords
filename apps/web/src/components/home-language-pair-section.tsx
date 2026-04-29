@@ -86,8 +86,7 @@ export function HomeLanguagePairSection({
 
 			const stored = readStoredPracticeLanguagePair()
 			const fromStored =
-				stored &&
-				pairExistsInLists(stored.nativeLanguageId, stored.targetLanguageId)
+				stored && pairExistsInLists(stored.nativeLanguageId, stored.targetLanguageId)
 					? stored
 					: null
 

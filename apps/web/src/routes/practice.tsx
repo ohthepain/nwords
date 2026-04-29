@@ -1366,9 +1366,7 @@ function PracticePage() {
 									type="button"
 									onClick={() => void startSession()}
 									disabled={
-										status === "loading" ||
-										practiceLanguagesInvalid ||
-										buildVocabGraphBlocksStart
+										status === "loading" || practiceLanguagesInvalid || buildVocabGraphBlocksStart
 									}
 								>
 									{status === "loading"
