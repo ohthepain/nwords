@@ -212,26 +212,6 @@ export function VocabGraph({
 
     const epoch = `${languageId}:${visibleCells.length}:${assumedRank}:${vocabSize}`;
     if (heatmapEpochRef.current !== epoch) {
-      // #region agent log
-      fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "30fe32" },
-        body: JSON.stringify({
-          sessionId: "30fe32",
-          runId: "pre-fix",
-          hypothesisId: "H2_H5",
-          location: "vocab-graph.tsx:heatmapEpochReset",
-          message: "heatmap epoch changed; refs reset",
-          data: {
-            languageId,
-            prevEpoch: heatmapEpochRef.current,
-            newEpoch: epoch,
-            completedColsSnapshot: countCompletedColsFromLeft(visibleCells, numCols, numRows, assumedRank),
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
       heatmapEpochRef.current = epoch;
       prevCompletedColsRef.current = null;
       lastFiredCompletedColsRef.current = null;
@@ -254,66 +234,7 @@ export function VocabGraph({
           MIN_TERRITORY_COLUMN_INTRO_LEMMAS,
         );
         if (intro) {
-          // #region agent log
-          {
-            const byId = new Map(visibleCells.map((cell) => [cell.wordId, cell] as const));
-            const perWord = intro.practiceWordIds.map((id) => {
-              const cell = byId.get(id);
-              return {
-                lemma: cell?.lemma,
-                rank: cell?.rank,
-                timesTested: cell?.timesTested ?? -1,
-                confidence: cell?.confidence,
-                testSentenceCount: cell?.testSentenceCount ?? 0,
-              };
-            });
-            fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "30fe32" },
-              body: JSON.stringify({
-                sessionId: "30fe32",
-                runId: "post-fix",
-                hypothesisId: "column-scan",
-                location: "vocab-graph.tsx:territoryIntroFire",
-                message: "onTerritoryColumnAdvanced fired (untested column scan)",
-                data: {
-                  languageId,
-                  epoch: `${languageId}:${visibleCells.length}:${assumedRank}:${vocabSize}`,
-                  firstIncompleteColumn: c,
-                  chosenColumnIndex: intro.columnIndex,
-                  numCols,
-                  numRows,
-                  practiceWordIdsLen: intro.practiceWordIds.length,
-                  perWord,
-                },
-                timestamp: Date.now(),
-              }),
-            }).catch(() => {});
-          }
-          // #endregion
           onTerritoryColumnAdvanced(intro);
-        } else {
-          // #region agent log
-          fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "30fe32" },
-            body: JSON.stringify({
-              sessionId: "30fe32",
-              runId: "post-fix",
-              hypothesisId: "column-scan",
-              location: "vocab-graph.tsx:territoryIntroSkip",
-              message: "no untested intro column (>= min lemmas) after first incomplete",
-              data: {
-                languageId,
-                firstIncompleteColumn: c,
-                minUntested: MIN_TERRITORY_COLUMN_INTRO_LEMMAS,
-                numCols,
-                numRows,
-              },
-              timestamp: Date.now(),
-            }),
-          }).catch(() => {});
-          // #endregion
         }
         lastFiredCompletedColsRef.current = c;
       }

@@ -146,6 +146,8 @@ export type VocabGraphColumnCellForTerritoryIntro = VocabGraphColumnCellWithTest
  * The first incomplete column often holds measured stragglers while lemmas at higher columns are still
  * “new” (untested). Pick the leftmost column ≥ `firstIncompleteColumnIndex` with at least
  * `minUntestedLemmas` non-territory, cloze-ready lemmas that have never been tested.
+ * The returned `words` / `wordIds` cover **all** non-territory lemmas in that column; `practiceWordIds`
+ * lists those with joinable cloze (same column, subset with `testSentenceCount > 0`).
  */
 export function findUntestedTerritoryIntroColumnPayload(
 	visibleCells: VocabGraphColumnCellForTerritoryIntro[],
@@ -168,15 +170,12 @@ export function findUntestedTerritoryIntroColumnPayload(
 		const testable = colWordIds.filter((id) => (byId.get(id)?.testSentenceCount ?? 0) > 0)
 		const untested = testable.filter((id) => (byId.get(id)?.timesTested ?? 0) < 1)
 		if (untested.length < minUntestedLemmas) continue
-		const words = untested.map((wordId) => {
-			const cell = byId.get(wordId)!
-			return { wordId, lemma: cell.lemma, rank: cell.rank }
-		})
+		const words = columnWordSummaries(visibleCells, numCols, numRows, col, assumedRank)
 		return {
 			columnIndex: col,
-			wordIds: untested,
+			wordIds: colWordIds,
 			words,
-			practiceWordIds: untested,
+			practiceWordIds: testable,
 		}
 	}
 	return null

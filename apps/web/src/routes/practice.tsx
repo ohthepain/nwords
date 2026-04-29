@@ -29,6 +29,8 @@ import { cn } from "~/lib/utils"
 import {
 	MIN_TERRITORY_COLUMN_INTRO_LEMMAS,
 	analyzeBuildPracticeColumn,
+	computeHeatmapGridLayout,
+	findUntestedTerritoryIntroColumnPayload,
 } from "~/lib/vocab-graph-column-utils"
 import { useDevStore } from "~/stores/dev"
 type UserMe = {
@@ -309,29 +311,7 @@ function PracticePage() {
 			if (!sessionId || vocabMode !== "BUILD" || !practiceTargetId) return
 			try {
 				const k = `dismissedColumnBatch:${practiceTargetId}:${payload.columnIndex}`
-				const dismissed = !!sessionStorage.getItem(k)
-				// #region agent log
-				fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
-					method: "POST",
-					headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "30fe32" },
-					body: JSON.stringify({
-						sessionId: "30fe32",
-						runId: "pre-fix",
-						hypothesisId: "H3",
-						location: "practice.tsx:onTerritoryColumnAdvanced",
-						message: dismissed ? "skipped: session dismissed" : "setting newWordsIntroPayload",
-						data: {
-							columnIndex: payload.columnIndex,
-							practiceWordIdsLen: payload.practiceWordIds.length,
-							wordIdsLen: payload.wordIds.length,
-							dismissed,
-							storageKey: k,
-						},
-						timestamp: Date.now(),
-					}),
-				}).catch(() => {})
-				// #endregion
-				if (dismissed) return
+				if (sessionStorage.getItem(k)) return
 			} catch {
 				/* sessionStorage unavailable */
 			}
@@ -754,23 +734,53 @@ function PracticePage() {
 						heatmap.vocabSize,
 					)
 					if (analysis) {
-						// Filter to words that actually have test sentences (cloze-resolvable).
 						const testableSet = new Set(
 							heatmap.cells.filter((c) => (c.testSentenceCount ?? 0) > 0).map((c) => c.wordId),
 						)
+						const cellsForIntro = heatmap.cells.map((c) => ({
+							wordId: c.wordId,
+							rank: c.rank,
+							lemma: c.lemma,
+							confidence: c.confidence,
+							timesTested: c.timesTested ?? 0,
+							testSentenceCount: c.testSentenceCount ?? 0,
+						}))
+						const layout = computeHeatmapGridLayout(
+							cellsForIntro,
+							heatmap.assumedRank,
+							heatmap.vocabSize,
+						)
+						const scannedIntro =
+							layout &&
+							findUntestedTerritoryIntroColumnPayload(
+								layout.visibleCells,
+								layout.numCols,
+								layout.numRows,
+								layout.completedCols,
+								heatmap.assumedRank,
+								MIN_TERRITORY_COLUMN_INTRO_LEMMAS,
+							)
+						if (scannedIntro && scannedIntro.practiceWordIds.length > 0) {
+							setStatus("idle")
+							setNewWordsIntroPayload({
+								...scannedIntro,
+								introKind: "territory_column",
+							})
+							return
+						}
+
 						const testableWordIds = analysis.payload.wordIds.filter((id) => testableSet.has(id))
 						if (testableWordIds.length > 0) {
 							const introPayload: NewWordsColumnIntroPayload = {
 								...analysis.payload,
 								practiceWordIds: testableWordIds,
 							}
-							if (analysis.testedNotMasteredCount >= 1) {
-								await beginColumnFocusBuildPractice(introPayload.wordIds)
-								return
-							}
 							if (analysis.payload.wordIds.length >= MIN_TERRITORY_COLUMN_INTRO_LEMMAS) {
 								setStatus("idle")
-								setNewWordsIntroPayload(introPayload)
+								setNewWordsIntroPayload({
+									...introPayload,
+									introKind: "territory_column",
+								})
 								return
 							}
 							await beginColumnFocusBuildPractice(introPayload.wordIds)
