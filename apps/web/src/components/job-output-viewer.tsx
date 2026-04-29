@@ -151,16 +151,14 @@ export function JobOutputViewer({
 							{detail && detail.totalItems > 0 ? (
 								<span className="text-foreground/90">
 									{" "}
-									· {detail.processedItems.toLocaleString()} / {detail.totalItems.toLocaleString()} (
-									{Math.min(100, Math.round((detail.processedItems / detail.totalItems) * 100))}%)
+									· {detail.processedItems.toLocaleString()} / {detail.totalItems.toLocaleString()}{" "}
+									({Math.min(100, Math.round((detail.processedItems / detail.totalItems) * 100))}%)
 								</span>
 							) : detail && (detail.processedItems > 0 || detail.errorCount > 0) ? (
 								<span className="text-foreground/90">
 									{" "}
 									· {detail.processedItems.toLocaleString()} processed
-									{detail.errorCount > 0
-										? ` · ${detail.errorCount.toLocaleString()} err`
-										: ""}
+									{detail.errorCount > 0 ? ` · ${detail.errorCount.toLocaleString()} err` : ""}
 								</span>
 							) : null}
 						</p>
