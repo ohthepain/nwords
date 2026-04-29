@@ -18,6 +18,32 @@ export interface ClozeQualityJobData {
 
 export const DEFAULT_MAX_SENTENCES_PER_WORD = 30
 
+/** Parallel LLM calls per job. Override with `CLOZE_QUALITY_LLM_CONCURRENCY` (1–12). */
+function clozeQualityLlmConcurrency(): number {
+	const raw = Number(process.env.CLOZE_QUALITY_LLM_CONCURRENCY)
+	const n = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 4
+	return Math.max(1, Math.min(12, n))
+}
+
+async function runPool<T>(
+	items: T[],
+	concurrency: number,
+	fn: (item: T) => Promise<void>,
+	shouldStop: () => Promise<boolean>,
+): Promise<void> {
+	let next = 0
+	const runWorker = async () => {
+		for (;;) {
+			if (await shouldStop()) return
+			const i = next++
+			if (i >= items.length) return
+			await fn(items[i])
+		}
+	}
+	const workers = Math.max(1, Math.min(concurrency, Math.max(1, items.length)))
+	await Promise.all(Array.from({ length: workers }, () => runWorker()))
+}
+
 /** All POS rows for this lemma in the language — aligns heatmap / cloze pools with stored flags. */
 async function markLemmaNonTestable(languageId: string, lemma: string): Promise<number> {
 	const result = await prisma.word.updateMany({
@@ -94,6 +120,9 @@ export async function processClozeQualityJob(job: PgBoss.Job<ClozeQualityJobData
 
 		const model = createModel(aiConfig)
 
+		// Cap linked sentences per Word row so we do not load unbounded SentenceWord + Sentence rows.
+		const perRowSentenceCap = Math.min(500, maxSentencesPerWord * 4 + 40)
+
 		// Fetch top-1000 testable words ordered by frequency rank (rank > 0 excludes unranked words).
 		// Multiple Word rows can share the same lemma (different POS), so we group them after fetching
 		// and keep the lowest rank (most common) as the canonical word for storing synonyms.
@@ -107,6 +136,8 @@ export async function processClozeQualityJob(job: PgBoss.Job<ClozeQualityJobData
 				rank: true,
 				testSentenceIds: true,
 				sentenceWords: {
+					take: perRowSentenceCap,
+					orderBy: { id: "asc" },
 					select: {
 						id: true,
 						sentenceId: true,
@@ -144,17 +175,21 @@ export async function processClozeQualityJob(job: PgBoss.Job<ClozeQualityJobData
 
 		const totalWords = words.length
 		await updateIngestionProgress(jobId, { totalItems: totalWords })
+		const workers = clozeQualityLlmConcurrency()
 		await appendJobLog(
 			jobId,
 			"out",
-			`Found ${totalWords} distinct lemmas. Assessing cloze quality (max ${maxSentencesPerWord} sentences per word)…`,
+			`Found ${totalWords} distinct lemmas. Assessing cloze quality (max ${maxSentencesPerWord} sentences per word, ${workers} parallel LLM tasks)…`,
 		)
 
-		let processed = 0
-		let errors = 0
-
-		for (const { canonical: word, allSentenceWords, curatedSentenceIds } of words) {
+		const processLemma = async ({
+			canonical: word,
+			allSentenceWords,
+			curatedSentenceIds,
+		}: (typeof words)[number]) => {
 			if (await isIngestionJobCancelled(jobId)) return
+
+			let errorThisLemma = 0
 
 			if (allSentenceWords.length === 0 && curatedSentenceIds.size === 0) {
 				const n = await markLemmaNonTestable(languageId, word.lemma)
@@ -163,9 +198,8 @@ export async function processClozeQualityJob(job: PgBoss.Job<ClozeQualityJobData
 					"out",
 					`"${word.lemma}": no SentenceWord links and no curated test sentences — marked ${n} word row(s) non-testable.`,
 				)
-				processed++
-				await updateIngestionProgress(jobId, { processedItems: processed, errorCount: errors })
-				continue
+				await updateIngestionProgress(jobId, { processedDelta: 1 })
+				return
 			}
 
 			if (allSentenceWords.length === 0) {
@@ -174,9 +208,8 @@ export async function processClozeQualityJob(job: PgBoss.Job<ClozeQualityJobData
 					"out",
 					`Skipping "${word.lemma}": ${curatedSentenceIds.size} curated sentence id(s) but no SentenceWord links — assess linked sentences only.`,
 				)
-				processed++
-				await updateIngestionProgress(jobId, { processedItems: processed, errorCount: errors })
-				continue
+				await updateIngestionProgress(jobId, { processedDelta: 1 })
+				return
 			}
 
 			// Deduplicate sentences by sentenceId (the same sentence may appear via multiple POS rows)
@@ -200,12 +233,6 @@ export async function processClozeQualityJob(job: PgBoss.Job<ClozeQualityJobData
 			const numberedList = sentences.map((s) => `${s.index}. ${s.clozeText}`).join("\n")
 
 			try {
-				await appendJobLog(
-					jobId,
-					"out",
-					`Assessing "${word.lemma}" (${sentences.length} sentences)…`,
-				)
-
 				const { object } = await generateObject({
 					model,
 					schema: clozeAssessmentSchema,
@@ -262,7 +289,7 @@ List up to 3 alternative answers (synonyms) that work naturally in ALL of them.
 Return JSON only.`,
 				})
 
-				// Persist sentence-level assessments
+				const updates: Prisma.PrismaPromise<unknown>[] = []
 				for (let i = 0; i < sentences.length; i++) {
 					const assessment = object.sentences[i]
 					if (!assessment) continue
@@ -273,19 +300,23 @@ Return JSON only.`,
 						tier,
 						sentences[i].sentenceText,
 					)
-					await prisma.sentenceWord.update({
-						where: { id: sentences[i].sentenceWordId },
-						data: {
-							aiKeep: assessment.keep,
-							aiUsefulness: assessment.usefulness,
-							aiNaturalness: assessment.naturalness,
-							aiCompositionalityTier: tier,
-							aiClozePriority,
-						},
-					})
+					updates.push(
+						prisma.sentenceWord.update({
+							where: { id: sentences[i].sentenceWordId },
+							data: {
+								aiKeep: assessment.keep,
+								aiUsefulness: assessment.usefulness,
+								aiNaturalness: assessment.naturalness,
+								aiCompositionalityTier: tier,
+								aiClozePriority,
+							},
+						}),
+					)
+				}
+				if (updates.length > 0) {
+					await prisma.$transaction(updates)
 				}
 
-				// Persist synonyms on the word
 				await prisma.word.update({
 					where: { id: word.id },
 					data: { aiSynonyms: object.synonyms },
@@ -301,7 +332,7 @@ Return JSON only.`,
 					)
 				}
 			} catch (err) {
-				errors++
+				errorThisLemma = 1
 				await appendJobLog(
 					jobId,
 					"err",
@@ -309,11 +340,25 @@ Return JSON only.`,
 				)
 			}
 
-			processed++
-			await updateIngestionProgress(jobId, { processedItems: processed, errorCount: errors })
+			await updateIngestionProgress(jobId, {
+				processedDelta: 1,
+				...(errorThisLemma ? { errorDelta: 1 } : {}),
+			})
 		}
 
-		await appendJobLog(jobId, "out", `Done: ${processed} words assessed, ${errors} errors`)
+		await runPool(words, workers, processLemma, () => isIngestionJobCancelled(jobId))
+
+		if (await isIngestionJobCancelled(jobId)) return
+
+		const doneRow = await prisma.ingestionJob.findUnique({
+			where: { id: jobId },
+			select: { processedItems: true, errorCount: true },
+		})
+		await appendJobLog(
+			jobId,
+			"out",
+			`Done: ${doneRow?.processedItems ?? 0} words assessed, ${doneRow?.errorCount ?? 0} errors`,
+		)
 
 		await prisma.ingestionJob.update({
 			where: { id: jobId },

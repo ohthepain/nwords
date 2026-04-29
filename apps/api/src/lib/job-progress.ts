@@ -9,21 +9,38 @@ export async function updateIngestionProgress(
 	jobId: string,
 	partial: {
 		processedItems?: number
+		/** Add to current `processedItems` (safe for concurrent workers on the same job). */
+		processedDelta?: number
 		totalItems?: number
 		errorCount?: number
+		/** Add to current `errorCount` (safe for concurrent workers on the same job). */
+		errorDelta?: number
 		extraMetadata?: Record<string, unknown>
 	},
 ): Promise<void> {
 	await runIngestJobMetaSerial(jobId, async (tx) => {
 		const job = await tx.ingestionJob.findUnique({
 			where: { id: jobId },
-			select: { metadata: true, processedItems: true },
+			select: { metadata: true, processedItems: true, errorCount: true },
 		})
 		if (!job) return
 
 		const prev = (job.metadata ?? {}) as Record<string, unknown>
 		const now = Date.now()
-		const processed = partial.processedItems ?? job.processedItems
+		let processed = job.processedItems
+		if (partial.processedDelta !== undefined) {
+			processed = job.processedItems + partial.processedDelta
+		} else if (partial.processedItems !== undefined) {
+			processed = partial.processedItems
+		}
+
+		let errors = job.errorCount
+		if (partial.errorDelta !== undefined) {
+			errors = job.errorCount + partial.errorDelta
+		} else if (partial.errorCount !== undefined) {
+			errors = partial.errorCount
+		}
+
 		const prevSample = prev.speedSample as { t: number; n: number } | undefined
 		let itemsPerSecond: number | undefined
 		if (prevSample && now > prevSample.t && processed >= prevSample.n) {
@@ -45,9 +62,13 @@ export async function updateIngestionProgress(
 		await tx.ingestionJob.update({
 			where: { id: jobId },
 			data: {
-				...(partial.processedItems !== undefined ? { processedItems: partial.processedItems } : {}),
+				...(partial.processedItems !== undefined || partial.processedDelta !== undefined
+					? { processedItems: processed }
+					: {}),
 				...(partial.totalItems !== undefined ? { totalItems: partial.totalItems } : {}),
-				...(partial.errorCount !== undefined ? { errorCount: partial.errorCount } : {}),
+				...(partial.errorCount !== undefined || partial.errorDelta !== undefined
+					? { errorCount: errors }
+					: {}),
 				metadata: nextMeta as Prisma.InputJsonValue,
 			},
 		})
