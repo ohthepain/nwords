@@ -27,6 +27,7 @@ import { Route as AuthedAdminAdminSettingsRouteImport } from './routes/_authed/_
 import { Route as AuthedAdminAdminSentencesRouteImport } from './routes/_authed/_admin/admin/sentences'
 import { Route as AuthedAdminAdminLanguagesRouteImport } from './routes/_authed/_admin/admin/languages'
 import { Route as AuthedAdminAdminJobsRouteImport } from './routes/_authed/_admin/admin/jobs'
+import { Route as AuthedAdminAdminCommonWordsRouteImport } from './routes/_authed/_admin/admin/common-words'
 import { Route as AuthedAdminAdminColorsRouteImport } from './routes/_authed/_admin/admin/colors'
 import { Route as AuthedAdminAdminClozeReportsRouteImport } from './routes/_authed/_admin/admin/cloze-reports'
 
@@ -121,6 +122,12 @@ const AuthedAdminAdminJobsRoute = AuthedAdminAdminJobsRouteImport.update({
   path: '/admin/jobs',
   getParentRoute: () => AuthedAdminRoute,
 } as any)
+const AuthedAdminAdminCommonWordsRoute =
+  AuthedAdminAdminCommonWordsRouteImport.update({
+    id: '/admin/common-words',
+    path: '/admin/common-words',
+    getParentRoute: () => AuthedAdminRoute,
+  } as any)
 const AuthedAdminAdminColorsRoute = AuthedAdminAdminColorsRouteImport.update({
   id: '/admin/colors',
   path: '/admin/colors',
@@ -146,6 +153,7 @@ export interface FileRoutesByFullPath {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/admin/cloze-reports': typeof AuthedAdminAdminClozeReportsRoute
   '/admin/colors': typeof AuthedAdminAdminColorsRoute
+  '/admin/common-words': typeof AuthedAdminAdminCommonWordsRoute
   '/admin/jobs': typeof AuthedAdminAdminJobsRoute
   '/admin/languages': typeof AuthedAdminAdminLanguagesRoute
   '/admin/sentences': typeof AuthedAdminAdminSentencesRoute
@@ -166,6 +174,7 @@ export interface FileRoutesByTo {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/admin/cloze-reports': typeof AuthedAdminAdminClozeReportsRoute
   '/admin/colors': typeof AuthedAdminAdminColorsRoute
+  '/admin/common-words': typeof AuthedAdminAdminCommonWordsRoute
   '/admin/jobs': typeof AuthedAdminAdminJobsRoute
   '/admin/languages': typeof AuthedAdminAdminLanguagesRoute
   '/admin/sentences': typeof AuthedAdminAdminSentencesRoute
@@ -189,6 +198,7 @@ export interface FileRoutesById {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/_authed/_admin/admin/cloze-reports': typeof AuthedAdminAdminClozeReportsRoute
   '/_authed/_admin/admin/colors': typeof AuthedAdminAdminColorsRoute
+  '/_authed/_admin/admin/common-words': typeof AuthedAdminAdminCommonWordsRoute
   '/_authed/_admin/admin/jobs': typeof AuthedAdminAdminJobsRoute
   '/_authed/_admin/admin/languages': typeof AuthedAdminAdminLanguagesRoute
   '/_authed/_admin/admin/sentences': typeof AuthedAdminAdminSentencesRoute
@@ -211,6 +221,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/admin/cloze-reports'
     | '/admin/colors'
+    | '/admin/common-words'
     | '/admin/jobs'
     | '/admin/languages'
     | '/admin/sentences'
@@ -231,6 +242,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/admin/cloze-reports'
     | '/admin/colors'
+    | '/admin/common-words'
     | '/admin/jobs'
     | '/admin/languages'
     | '/admin/sentences'
@@ -253,6 +265,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/_authed/_admin/admin/cloze-reports'
     | '/_authed/_admin/admin/colors'
+    | '/_authed/_admin/admin/common-words'
     | '/_authed/_admin/admin/jobs'
     | '/_authed/_admin/admin/languages'
     | '/_authed/_admin/admin/sentences'
@@ -400,6 +413,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedAdminAdminJobsRouteImport
       parentRoute: typeof AuthedAdminRoute
     }
+    '/_authed/_admin/admin/common-words': {
+      id: '/_authed/_admin/admin/common-words'
+      path: '/admin/common-words'
+      fullPath: '/admin/common-words'
+      preLoaderRoute: typeof AuthedAdminAdminCommonWordsRouteImport
+      parentRoute: typeof AuthedAdminRoute
+    }
     '/_authed/_admin/admin/colors': {
       id: '/_authed/_admin/admin/colors'
       path: '/admin/colors'
@@ -420,6 +440,7 @@ declare module '@tanstack/react-router' {
 interface AuthedAdminRouteChildren {
   AuthedAdminAdminClozeReportsRoute: typeof AuthedAdminAdminClozeReportsRoute
   AuthedAdminAdminColorsRoute: typeof AuthedAdminAdminColorsRoute
+  AuthedAdminAdminCommonWordsRoute: typeof AuthedAdminAdminCommonWordsRoute
   AuthedAdminAdminJobsRoute: typeof AuthedAdminAdminJobsRoute
   AuthedAdminAdminLanguagesRoute: typeof AuthedAdminAdminLanguagesRoute
   AuthedAdminAdminSentencesRoute: typeof AuthedAdminAdminSentencesRoute
@@ -431,6 +452,7 @@ interface AuthedAdminRouteChildren {
 const AuthedAdminRouteChildren: AuthedAdminRouteChildren = {
   AuthedAdminAdminClozeReportsRoute: AuthedAdminAdminClozeReportsRoute,
   AuthedAdminAdminColorsRoute: AuthedAdminAdminColorsRoute,
+  AuthedAdminAdminCommonWordsRoute: AuthedAdminAdminCommonWordsRoute,
   AuthedAdminAdminJobsRoute: AuthedAdminAdminJobsRoute,
   AuthedAdminAdminLanguagesRoute: AuthedAdminAdminLanguagesRoute,
   AuthedAdminAdminSentencesRoute: AuthedAdminAdminSentencesRoute,

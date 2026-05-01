@@ -3,6 +3,7 @@ import {
 	BookOpen,
 	Flag,
 	Languages,
+	ListOrdered,
 	ListTodo,
 	MessageSquareText,
 	Palette,
@@ -38,6 +39,17 @@ function AdminHomePage() {
 						</span>
 						<span className="text-sm font-normal text-muted-foreground">
 							Global vocabulary graph color palette
+						</span>
+					</Link>
+				</Button>
+				<Button variant="outline" className="h-auto py-5 px-5 justify-start" asChild>
+					<Link to="/admin/common-words" className="flex flex-col items-start gap-1">
+						<span className="flex items-center gap-2 text-base font-semibold">
+							<ListOrdered className="size-5 shrink-0 text-brand" />
+							Common words
+						</span>
+						<span className="text-sm font-normal text-muted-foreground">
+							Curated frequency seed for AI vocabulary
 						</span>
 					</Link>
 				</Button>

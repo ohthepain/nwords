@@ -5,7 +5,7 @@ const ROUTE_PAGE_TITLE: Record<string, string> = {
 	"/_authed/settings": "Settings",
 	"/_authed/_admin/admin/": "Admin",
 	"/_authed/_admin/admin/settings": "Site settings",
-	"/_authed/_admin/admin/languages": "Languages",
+	"/_authed/_admin/admin/common-words": "Common words",
 	"/_authed/_admin/admin/jobs": "Jobs",
 	"/_authed/_admin/admin/words": "Words",
 	"/_authed/_admin/admin/sentences": "Sentences",

@@ -36,6 +36,11 @@ function linesForTab(lines: PersistedJobLogLine[], tab: "out" | "err"): Persiste
 	return lines.filter((l) => l.s === tab)
 }
 
+/** Output tab shows full job transcript: stdout + stderr interleaved by time. */
+function sortedMergedJobLines(lines: PersistedJobLogLine[]): PersistedJobLogLine[] {
+	return [...lines].sort((a, b) => a.t.localeCompare(b.t))
+}
+
 export function JobOutputViewer({
 	jobId,
 	title,
@@ -100,7 +105,7 @@ export function JobOutputViewer({
 	}, [open, jobId])
 
 	const allLines = detail ? parseJobLogLines(detail.metadata) : []
-	const shownLines = linesForTab(allLines, tab)
+	const shownLines = tab === "out" ? sortedMergedJobLines(allLines) : linesForTab(allLines, tab)
 	const summaryError = detail ? jobMetadataError(detail.metadata) : null
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: shownLines/tab/summaryError are intentional triggers to auto-scroll on content change
@@ -190,9 +195,7 @@ export function JobOutputViewer({
 						}
 					>
 						Output
-						<span className="ml-1.5 font-mono text-[10px] opacity-70">
-							({linesForTab(allLines, "out").length})
-						</span>
+						<span className="ml-1.5 font-mono text-[10px] opacity-70">({allLines.length})</span>
 					</button>
 					<button
 						type="button"
@@ -212,6 +215,16 @@ export function JobOutputViewer({
 
 				<div className="flex-1 min-h-0 flex flex-col p-3">
 					{loadError ? <p className="text-sm text-destructive px-1 py-2">{loadError}</p> : null}
+					{tab === "out" && summaryError ? (
+						<div className="mb-2 rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 shrink-0">
+							<p className="text-[10px] font-mono uppercase tracking-wider text-destructive/80 mb-1">
+								Job failure (metadata.error)
+							</p>
+							<p className="text-xs font-mono text-destructive whitespace-pre-wrap break-all">
+								{summaryError}
+							</p>
+						</div>
+					) : null}
 					{tab === "err" && summaryError ? (
 						<div className="mb-2 rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 shrink-0">
 							<p className="text-[10px] font-mono uppercase tracking-wider text-destructive/80 mb-1">
@@ -231,7 +244,8 @@ export function JobOutputViewer({
 								{tab === "out" ? (
 									<>
 										<span className="block">
-											No output lines yet. Progress messages appear as the worker runs.
+											No lines yet. Progress and error messages appear here (merged by time) as the
+											worker runs.
 										</span>
 										{detail &&
 										(detail.status === "RUNNING" || detail.status === "PENDING") &&
@@ -259,15 +273,19 @@ export function JobOutputViewer({
 							</span>
 						) : (
 							shownLines.map((l, i) => (
-								<span key={`${l.t}-${i}`} className="block">
-									<span className="text-muted-foreground">{formatLogTime(l.t)}</span> {l.m}
+								<span
+									key={`${l.t}-${l.s}-${i}`}
+									className={`block ${l.s === "err" ? "text-destructive" : ""}`}
+								>
+									<span className="text-muted-foreground">{formatLogTime(l.t)}</span>
+									{l.s === "err" ? <span className="font-semibold"> [err]</span> : null} {l.m}
 								</span>
 							))
 						)}
 					</pre>
 					<p className="text-[10px] text-muted-foreground mt-2 px-1 shrink-0">
-						Refreshes every 2s while this dialog is open. Server process logs also appear in the API
-						terminal during local dev.
+						Output tab merges stdout and stderr by timestamp (stderr in red). Refreshes every 2s
+						while this dialog is open. Server logs also appear in the API terminal during local dev.
 					</p>
 				</div>
 			</div>

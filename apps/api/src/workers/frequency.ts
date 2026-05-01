@@ -8,6 +8,7 @@ import { appendJobLog, snapshotJobMetadata } from "../lib/job-logs"
 import { updateIngestionProgress } from "../lib/job-progress"
 import { nodeReadableFromWeb, readLinesFromReadable } from "../lib/node-streams"
 import { chainTatoebaFromFrequency } from "../lib/pipeline-chain"
+import { isLegacyVocabPipeline } from "../lib/vocab-pipeline-env"
 import { resolveWordOrder } from "../lib/resolve-word-order"
 
 /**
@@ -189,7 +190,7 @@ export async function processFrequencyJob(job: PgBoss.Job<FrequencyJobData>) {
 				`[frequency/hermitdave] Done: ${updated} ranks applied, ${notFound} missing lemmas`,
 			)
 
-			if (chainPipeline) {
+			if (chainPipeline && isLegacyVocabPipeline()) {
 				await chainTatoebaFromFrequency(languageId)
 			}
 			return
@@ -277,7 +278,7 @@ export async function processFrequencyJob(job: PgBoss.Job<FrequencyJobData>) {
 
 			console.log(`[frequency/bnpd] Done: ${updated} ranks applied, ${notFound} missing lemmas`)
 
-			if (chainPipeline) {
+			if (chainPipeline && isLegacyVocabPipeline()) {
 				await chainTatoebaFromFrequency(languageId)
 			}
 			return
@@ -397,7 +398,7 @@ export async function processFrequencyJob(job: PgBoss.Job<FrequencyJobData>) {
 
 		console.log(`[frequency] Done: ${updated} updated, ${notFound} not found, ${errors} errors`)
 
-		if (chainPipeline) {
+		if (chainPipeline && isLegacyVocabPipeline()) {
 			await chainTatoebaFromFrequency(languageId)
 		}
 	} catch (err) {

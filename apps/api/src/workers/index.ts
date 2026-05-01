@@ -2,6 +2,8 @@ import type PgBoss from "pg-boss"
 import { INGEST_QUEUE } from "../lib/ingestion-queues"
 import type { ClozeQualityJobData } from "./cloze-quality"
 import { processClozeQualityJob } from "./cloze-quality"
+import type { CommonWordsTopJobData } from "./common-words-top"
+import { processCommonWordsTopJob } from "./common-words-top"
 import type { FixedExpressionsJobData } from "./fixed-expressions"
 import { processFixedExpressionsJob } from "./fixed-expressions"
 import type { FrequencyJobData } from "./frequency"
@@ -10,6 +12,8 @@ import type { KaikkiJobData } from "./kaikki"
 import { processKaikkiJob } from "./kaikki"
 import type { TatoebaJobData } from "./tatoeba"
 import { processTatoebaJob } from "./tatoeba"
+import type { VocabUnitsLlmJobData } from "./vocab-units-llm"
+import { processVocabUnitsLlmJob } from "./vocab-units-llm"
 import type { WordFormsJobData } from "./word-forms"
 import { processWordFormsJob } from "./word-forms"
 
@@ -46,8 +50,14 @@ export async function registerIngestWorkers(boss: PgBoss) {
 	await boss.work(INGEST_QUEUE.CLOZE_QUALITY, opts, async ([job]) =>
 		processClozeQualityJob(job as PgBoss.Job<ClozeQualityJobData>),
 	)
+	await boss.work(INGEST_QUEUE.COMMON_WORDS_TOP, opts, async ([job]) =>
+		processCommonWordsTopJob(job as PgBoss.Job<CommonWordsTopJobData>),
+	)
+	await boss.work(INGEST_QUEUE.VOCAB_UNITS_LLM, opts, async ([job]) =>
+		processVocabUnitsLlmJob(job as PgBoss.Job<VocabUnitsLlmJobData>),
+	)
 
 	console.log(
-		"[workers] Registered: kaikki, frequency, tatoeba, word-forms, fixed-expressions, cloze-quality",
+		"[workers] Registered: kaikki, frequency, tatoeba, word-forms, fixed-expressions, cloze-quality, common-words-top, vocab-units-llm",
 	)
 }

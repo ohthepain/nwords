@@ -44,10 +44,14 @@ const searchWords = createServerFn({ method: "POST" })
 			matchMode: "starts_with" | "contains" | "ends_with" | "exact"
 			pos?: string
 			limit: number
+			page?: number
 		}) => data,
 	)
 	.handler(async ({ data }) => {
-		const { languageId, query, matchMode, pos, limit } = data
+		const { languageId, query, matchMode, pos } = data
+		const limit = Math.min(Math.max(Math.trunc(data.limit), 1), 500)
+		const page = Math.max(Math.trunc(data.page ?? 1), 1)
+		const offset = (page - 1) * limit
 
 		const posWhere =
 			pos && pos !== "ALL" ? { pos: pos as "NOUN" | "VERB" | "ADJECTIVE" | "ADVERB" } : {}
@@ -99,7 +103,7 @@ const searchWords = createServerFn({ method: "POST" })
 
 			if (rankedWords > 0) {
 				const [words, rankGroups] = await Promise.all([
-					collectFirstNUniqueEffectiveRanks(limit, (skip, take) =>
+					collectFirstNUniqueEffectiveRanks(offset + limit, (skip, take) =>
 						prisma.word.findMany({
 							where: { ...baseWhere, effectiveRank: { gt: 0 } },
 							orderBy: [{ effectiveRank: "asc" }, { id: "asc" }],
@@ -115,8 +119,10 @@ const searchWords = createServerFn({ method: "POST" })
 				])
 				const uniqueRankSlots = rankGroups.length
 				return {
-					words: words.map(mapWordRow),
+					words: words.slice(offset, offset + limit).map(mapWordRow),
 					total: uniqueRankSlots,
+					page,
+					limit,
 					mode: "browse_ranked" as const,
 					stats: { totalWords, rankedWords, uniqueRankSlots },
 				}
@@ -126,6 +132,7 @@ const searchWords = createServerFn({ method: "POST" })
 				prisma.word.findMany({
 					where: baseWhere,
 					orderBy: [{ lemma: "asc" }],
+					skip: offset,
 					take: limit,
 					include: wordInclude,
 				}),
@@ -134,6 +141,8 @@ const searchWords = createServerFn({ method: "POST" })
 			return {
 				words: words.map(mapWordRow),
 				total,
+				page,
+				limit,
 				mode: "browse_unranked" as const,
 				stats: { totalWords, rankedWords: 0, uniqueRankSlots: 0 },
 			}
@@ -170,9 +179,13 @@ const searchWords = createServerFn({ method: "POST" })
 					}
 				: { languageId, ...lemmaWhere, ...posWhere }
 
-		const [total, rankedMatches] = await Promise.all([
-			prisma.word.count({ where }),
-			collectFirstNUniqueEffectiveRanks(limit, (skip, take) =>
+		const [rankGroups, unrankedTotal, rankedMatches] = await Promise.all([
+			prisma.word.groupBy({
+				by: ["effectiveRank"],
+				where: { ...where, effectiveRank: { gt: 0 } },
+			}),
+			prisma.word.count({ where: { ...where, effectiveRank: { lte: 0 } } }),
+			collectFirstNUniqueEffectiveRanks(offset + limit, (skip, take) =>
 				prisma.word.findMany({
 					where: { ...where, effectiveRank: { gt: 0 } },
 					orderBy: [{ effectiveRank: "asc" }, { id: "asc" }],
@@ -182,24 +195,29 @@ const searchWords = createServerFn({ method: "POST" })
 				}),
 			),
 		])
+		const rankedTotal = rankGroups.length
+		const rankedPage = rankedMatches.slice(offset, offset + limit)
 
-		const need = limit - rankedMatches.length
+		const need = limit - rankedPage.length
 		const words =
 			need > 0
 				? [
-						...rankedMatches,
+						...rankedPage,
 						...(await prisma.word.findMany({
 							where: { ...where, effectiveRank: { lte: 0 } },
 							orderBy: [{ lemma: "asc" }],
+							skip: Math.max(offset - rankedTotal, 0),
 							take: need,
 							include: wordInclude,
 						})),
 					]
-				: rankedMatches
+				: rankedPage
 
 		return {
 			words: words.map(mapWordRow),
-			total,
+			total: rankedTotal + unrankedTotal,
+			page,
+			limit,
 			mode: "search" as const,
 		}
 	})
@@ -227,6 +245,23 @@ const MATCH_MODES = [
 	{ value: "ends_with", label: "Ends with" },
 	{ value: "exact", label: "Is exactly" },
 ] as const
+
+const WORDS_PAGE_SIZE = 100
+
+function visiblePageNumbers(page: number, totalPages: number): (number | "ellipsis")[] {
+	const pages = new Set<number>([1, totalPages])
+	for (let p = page - 2; p <= page + 2; p += 1) {
+		if (p >= 1 && p <= totalPages) pages.add(p)
+	}
+	const sorted = [...pages].sort((a, b) => a - b)
+	const out: (number | "ellipsis")[] = []
+	for (const p of sorted) {
+		const previous = out[out.length - 1]
+		if (typeof previous === "number" && p - previous > 1) out.push("ellipsis")
+		out.push(p)
+	}
+	return out
+}
 
 const POS_BADGE_STYLES: Record<string, string> = {
 	NOUN: "bg-blue-500/15 text-blue-400",
@@ -284,6 +319,8 @@ function AdminWordsPage() {
 		"starts_with",
 	)
 	const [pos, setPos] = useState("ALL")
+	const [page, setPage] = useState(1)
+	const lastFilterKeyRef = useRef(`${languageId}:${pos}`)
 	const [results, setResults] = useState<Awaited<ReturnType<typeof searchWords>> | null>(null)
 	const [searching, setSearching] = useState(false)
 
@@ -486,7 +523,7 @@ function AdminWordsPage() {
 		}
 	}
 
-	async function runWordQuery() {
+	async function runWordQuery(nextPage = page) {
 		if (!languageId) {
 			setResults(null)
 			return
@@ -494,7 +531,7 @@ function AdminWordsPage() {
 		setSearching(true)
 		try {
 			const data = await searchWords({
-				data: { languageId, query, matchMode, pos, limit: 100 },
+				data: { languageId, query, matchMode, pos, limit: WORDS_PAGE_SIZE, page: nextPage },
 			})
 			setResults(data)
 		} finally {
@@ -504,19 +541,30 @@ function AdminWordsPage() {
 
 	function handleSearch(e: React.FormEvent) {
 		e.preventDefault()
-		void runWordQuery()
+		if (page === 1) {
+			void runWordQuery(1)
+		} else {
+			setPage(1)
+		}
 	}
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: reload on language/POS change only; query/matchMode submitted explicitly
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reload on language/POS/page change only; query/matchMode submitted explicitly
 	useEffect(() => {
 		if (!languageId) {
 			setResults(null)
 			setSearching(false)
 			return
 		}
+		const filterKey = `${languageId}:${pos}`
+		const filtersChanged = lastFilterKeyRef.current !== filterKey
+		lastFilterKeyRef.current = filterKey
+		if (filtersChanged && page !== 1) {
+			setPage(1)
+			return
+		}
 		let cancelled = false
 		setSearching(true)
-		searchWords({ data: { languageId, query, matchMode, pos, limit: 100 } })
+		searchWords({ data: { languageId, query, matchMode, pos, limit: WORDS_PAGE_SIZE, page } })
 			.then((data) => {
 				if (!cancelled) setResults(data)
 			})
@@ -526,7 +574,14 @@ function AdminWordsPage() {
 		return () => {
 			cancelled = true
 		}
-	}, [languageId, pos])
+	}, [languageId, pos, page])
+
+	const resultPage = results?.page ?? page
+	const resultLimit = results?.limit ?? WORDS_PAGE_SIZE
+	const totalPages = results ? Math.max(Math.ceil(results.total / resultLimit), 1) : 1
+	const pageStart = results && results.words.length > 0 ? (resultPage - 1) * resultLimit + 1 : 0
+	const pageEnd = results ? pageStart + results.words.length - 1 : 0
+	const pageItems = results ? visiblePageNumbers(resultPage, totalPages) : []
 
 	return (
 		<div className="p-6 space-y-4">
@@ -548,7 +603,7 @@ function AdminWordsPage() {
 
 			<div className="flex flex-wrap items-center gap-2 border border-border rounded-lg px-3 bg-muted/20">
 				<strong className="text-foreground/90">Synonyms</strong>
-				<p className="text-xs text-muted-foreground flex-1 min-w-[12rem]">
+				<p className="text-xs text-muted-foreground flex-1 min-w-48">
 					Good/bad cloze synonym pairs: export as JSON (all languages), or import to merge without
 					removing existing pairs.
 				</p>
@@ -586,7 +641,7 @@ function AdminWordsPage() {
 			) : null}
 
 			<div className="flex flex-wrap items-center gap-2 border border-border rounded-lg px-3 py-2.5 bg-muted/20">
-				<p className="text-xs text-muted-foreground flex-1 min-w-[12rem]">
+				<p className="text-xs text-muted-foreground flex-1 min-w-48">
 					<strong className="text-foreground/90">Rank adjustments</strong> (Adj column): export{" "}
 					<code className="text-[10px]">positionAdjust</code> as JSON — only non-zero values. Import
 					merges into the database and does not clear adjustments for words that are not in the
@@ -711,7 +766,7 @@ function AdminWordsPage() {
 
 			<div className="flex flex-wrap items-center gap-2 border border-border rounded-lg px-3 py-2.5 bg-muted/20">
 				<strong className="text-foreground/90">Prompt wordlist</strong>
-				<p className="text-xs text-muted-foreground flex-1 min-w-[12rem]">
+				<p className="text-xs text-muted-foreground flex-1 min-w-48">
 					First 5000 <strong className="text-foreground/90 font-medium">unique</strong> lemmas (one
 					per lemma: best <code className="text-[10px]">effectiveRank</code> when split across POS
 					rows) as compact JSON (<code className="text-[10px]">w</code> array). Uses the Language
@@ -744,21 +799,25 @@ function AdminWordsPage() {
 									{results.stats.uniqueRankSlots.toLocaleString()} unique frequency ranks (
 									{results.stats.rankedWords.toLocaleString()} word rows,{" "}
 									{results.stats.totalWords.toLocaleString()} total in language)
-									{results.words.length < results.total ? " — showing lowest ranks first" : ""}
-									{results.words.length >= 100 ? " (first 100 ranks)" : ""}
+									{results.total > resultLimit ? " — lowest ranks first" : ""}
 								</>
 							) : results.mode === "browse_unranked" && results.stats ? (
 								<>
 									No frequency ranks yet — {results.stats.totalWords.toLocaleString()} word row
-									{results.stats.totalWords !== 1 ? "s" : ""} in DB (alphabetical sample)
-									{results.stats.totalWords > 100 ? " (first 100)" : ""}
+									{results.stats.totalWords !== 1 ? "s" : ""} in DB (alphabetical)
 								</>
 							) : (
 								<>
 									{results.total.toLocaleString()} match{results.total !== 1 ? "es" : ""}
-									{results.total > 100 && " (showing first 100)"}
 								</>
 							)}
+							{results.total > 0 ? (
+								<>
+									{" "}
+									— showing {pageStart.toLocaleString()}-{pageEnd.toLocaleString()} of{" "}
+									{results.total.toLocaleString()}
+								</>
+							) : null}
 						</p>
 					</div>
 
@@ -862,6 +921,55 @@ function AdminWordsPage() {
 							</div>
 						</div>
 					)}
+					{totalPages > 1 ? (
+						<nav className="flex flex-wrap items-center gap-2" aria-label="Word result pages">
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								disabled={searching || resultPage <= 1}
+								onClick={() => setPage((p) => Math.max(p - 1, 1))}
+							>
+								Previous
+							</Button>
+							{pageItems.map((item, index) =>
+								item === "ellipsis" ? (
+									<span
+										key={`ellipsis-${index}`}
+										className="px-1 text-xs text-muted-foreground"
+										aria-hidden="true"
+									>
+										...
+									</span>
+								) : (
+									<Button
+										key={item}
+										type="button"
+										variant={item === resultPage ? "default" : "outline"}
+										size="sm"
+										className="min-w-9"
+										disabled={searching || item === resultPage}
+										aria-current={item === resultPage ? "page" : undefined}
+										onClick={() => setPage(item)}
+									>
+										{item.toLocaleString()}
+									</Button>
+								),
+							)}
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								disabled={searching || resultPage >= totalPages}
+								onClick={() => setPage((p) => Math.min(p + 1, totalPages))}
+							>
+								Next
+							</Button>
+							<span className="text-xs text-muted-foreground font-mono">
+								Page {resultPage.toLocaleString()} of {totalPages.toLocaleString()}
+							</span>
+						</nav>
+					) : null}
 				</div>
 			)}
 

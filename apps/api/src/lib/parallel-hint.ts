@@ -811,6 +811,8 @@ export async function resolveClozeWithHint(params: {
 	const glossPivotHint = (): Promise<string | null> =>
 		translateViaGlossPivot(word.definitions, params.nativeLanguageId, params.targetLanguageId)
 
+	// Tatoeba translation links are optional: without `SentenceTranslation` rows, every candidate
+	// fails `findBestNativeParallelForSense` and we fall through to definition / gloss-based hints.
 	for (const c of candidates) {
 		const parallel = await findBestNativeParallelForSense(
 			c.targetSentenceId,

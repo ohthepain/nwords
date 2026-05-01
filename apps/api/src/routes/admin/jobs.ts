@@ -4,6 +4,10 @@ import { zValidator } from "@hono/zod-validator"
 import { type Prisma, prisma } from "@nwords/db"
 import { Hono } from "hono"
 import { z } from "zod"
+import {
+	enqueueAiVocabPipeline,
+	enqueueVocabUnitsLlmFromCommonWords,
+} from "../../lib/ai-vocab-pipeline"
 import { sendIngestJob } from "../../lib/boss"
 import { INGEST_QUEUE } from "../../lib/ingestion-queues"
 import { jobMetadataForRetry } from "../../lib/job-logs"
@@ -20,6 +24,8 @@ const TYPE_TO_QUEUE: Record<string, string> = {
 	WORD_FORMS: INGEST_QUEUE.WORD_FORMS,
 	FIXED_EXPRESSIONS: INGEST_QUEUE.FIXED_EXPRESSIONS,
 	CLOZE_QUALITY_ASSESSMENT: INGEST_QUEUE.CLOZE_QUALITY,
+	COMMON_WORDS_TOP: INGEST_QUEUE.COMMON_WORDS_TOP,
+	VOCAB_UNITS_LLM: INGEST_QUEUE.VOCAB_UNITS_LLM,
 }
 
 type RetryPlan =
@@ -222,6 +228,55 @@ async function planRetryFromJob(job: {
 				payload: { languageId: job.languageId },
 			}
 		}
+		case "COMMON_WORDS_TOP": {
+			const limit = typeof meta.limit === "number" && meta.limit > 0 ? meta.limit : 200
+			const unitCount =
+				typeof meta.unitCount === "number" && meta.unitCount > 0 ? meta.unitCount : 2000
+			const glossLanguageName =
+				typeof meta.glossLanguageName === "string" ? meta.glossLanguageName : "English"
+			const glossLanguageCode =
+				typeof meta.glossLanguageCode === "string" ? meta.glossLanguageCode : "en"
+			return {
+				ok: true,
+				queue: INGEST_QUEUE.COMMON_WORDS_TOP,
+				payload: {
+					languageId: job.languageId,
+					limit,
+					unitCount,
+					glossLanguageName,
+					glossLanguageCode,
+					chainPipeline: meta.chainPipeline === true,
+				},
+			}
+		}
+		case "VOCAB_UNITS_LLM": {
+			const requiredWords = Array.isArray(meta.requiredWords)
+				? meta.requiredWords.filter(
+						(x): x is string => typeof x === "string" && x.trim().length > 0,
+					)
+				: []
+			if (requiredWords.length === 0) {
+				return { ok: false, error: "Job metadata missing requiredWords; cannot retry" }
+			}
+			const unitCount =
+				typeof meta.unitCount === "number" && meta.unitCount > 0 ? meta.unitCount : 2000
+			const glossLanguageName =
+				typeof meta.glossLanguageName === "string" ? meta.glossLanguageName : "English"
+			const glossLanguageCode =
+				typeof meta.glossLanguageCode === "string" ? meta.glossLanguageCode : "en"
+			return {
+				ok: true,
+				queue: INGEST_QUEUE.VOCAB_UNITS_LLM,
+				payload: {
+					languageId: job.languageId,
+					requiredWords,
+					unitCount,
+					glossLanguageName,
+					glossLanguageCode,
+					chainPipeline: meta.chainPipeline === true,
+				},
+			}
+		}
 		default:
 			return { ok: false, error: "This job type cannot be retried from the admin UI" }
 	}
@@ -347,6 +402,8 @@ export const adminJobsRoute = new Hono()
 						"AUDIO_FILES",
 						"FIXED_EXPRESSIONS",
 						"CLOZE_QUALITY_ASSESSMENT",
+						"COMMON_WORDS_TOP",
+						"VOCAB_UNITS_LLM",
 					])
 					.optional(),
 				limit: z.coerce.number().min(1).max(100).default(20),
@@ -552,6 +609,181 @@ export const adminJobsRoute = new Hono()
 			await sendIngestJob(INGEST_QUEUE.FIXED_EXPRESSIONS, {
 				jobId: job.id,
 				languageId,
+			})
+
+			return c.json(serializeJob(job), 201)
+		},
+	)
+
+	/** AI step 1: enqueue `COMMON_WORDS_TOP` only (review `topLemmas`, then `POST …/vocab-units-llm/from-common-words`). */
+	.post(
+		"/ai-vocab-pipeline",
+		zValidator(
+			"json",
+			z.object({
+				languageId: z.string().uuid(),
+				commonWordLimit: z.number().int().min(10).max(5000).optional(),
+				unitCount: z.number().int().min(50).max(10_000).optional(),
+				glossLanguageName: z.string().min(1).optional(),
+				glossLanguageCode: z.string().min(1).optional(),
+			}),
+		),
+		async (c) => {
+			const body = c.req.valid("json")
+			const language = await prisma.language.findUnique({ where: { id: body.languageId } })
+			if (!language) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+
+			const started = await enqueueAiVocabPipeline(body.languageId, {
+				commonWordLimit: body.commonWordLimit,
+				unitCount: body.unitCount,
+				glossLanguageName: body.glossLanguageName,
+				glossLanguageCode: body.glossLanguageCode,
+			})
+			if (!started) {
+				return c.json({ error: "Failed to enqueue AI vocabulary pipeline" }, 500)
+			}
+
+			const job = await prisma.ingestionJob.findUnique({ where: { id: started.jobId } })
+			if (!job) {
+				return c.json({ error: "Job row missing after enqueue" }, 500)
+			}
+			return c.json(serializeJob(job), 201)
+		},
+	)
+
+	.post(
+		"/common-words-top",
+		zValidator(
+			"json",
+			z.object({
+				languageId: z.string().uuid(),
+				limit: z.number().int().min(10).max(5000).optional(),
+				unitCount: z.number().int().min(50).max(10_000).optional(),
+				glossLanguageName: z.string().min(1).optional(),
+				glossLanguageCode: z.string().min(1).optional(),
+				chainPipeline: z.boolean().optional(),
+			}),
+		),
+		async (c) => {
+			const body = c.req.valid("json")
+			const language = await prisma.language.findUnique({ where: { id: body.languageId } })
+			if (!language) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+
+			const limit = body.limit ?? 200
+			const unitCount = body.unitCount ?? 2000
+			const glossLanguageName = body.glossLanguageName ?? "English"
+			const glossLanguageCode = body.glossLanguageCode ?? "en"
+			const chainPipeline = body.chainPipeline === true
+
+			const job = await prisma.ingestionJob.create({
+				data: {
+					type: "COMMON_WORDS_TOP",
+					languageId: body.languageId,
+					metadata: {
+						limit,
+						unitCount,
+						glossLanguageName,
+						glossLanguageCode,
+						chainPipeline,
+						languageCode: language.code,
+						languageName: language.name,
+					},
+				},
+			})
+
+			await sendIngestJob(INGEST_QUEUE.COMMON_WORDS_TOP, {
+				jobId: job.id,
+				languageId: body.languageId,
+				limit,
+				unitCount,
+				glossLanguageName,
+				glossLanguageCode,
+				chainPipeline,
+			})
+
+			return c.json(serializeJob(job), 201)
+		},
+	)
+
+	.post(
+		"/vocab-units-llm/from-common-words",
+		zValidator(
+			"json",
+			z.object({
+				languageId: z.string().uuid(),
+				commonWordsJobId: z.string().uuid().optional(),
+			}),
+		),
+		async (c) => {
+			const body = c.req.valid("json")
+			const language = await prisma.language.findUnique({ where: { id: body.languageId } })
+			if (!language) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+
+			try {
+				const out = await enqueueVocabUnitsLlmFromCommonWords(
+					body.languageId,
+					body.commonWordsJobId,
+				)
+				const job = await prisma.ingestionJob.findUnique({ where: { id: out.jobId } })
+				if (!job) {
+					return c.json({ error: "Job row missing after enqueue" }, 500)
+				}
+				return c.json(serializeJob(job), 201)
+			} catch (e) {
+				return c.json({ error: e instanceof Error ? e.message : String(e) }, 400)
+			}
+		},
+	)
+
+	.post(
+		zValidator(
+			"json",
+			z.object({
+				languageId: z.string().uuid(),
+				requiredWords: z.array(z.string().min(1)).min(1),
+				unitCount: z.number().int().min(50).max(10_000),
+				glossLanguageName: z.string().min(1).optional(),
+				glossLanguageCode: z.string().min(1).optional(),
+			}),
+		),
+		async (c) => {
+			const body = c.req.valid("json")
+			const language = await prisma.language.findUnique({ where: { id: body.languageId } })
+			if (!language) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+
+			const glossLanguageName = body.glossLanguageName ?? "English"
+			const glossLanguageCode = body.glossLanguageCode ?? "en"
+
+			const job = await prisma.ingestionJob.create({
+				data: {
+					type: "VOCAB_UNITS_LLM",
+					languageId: body.languageId,
+					metadata: {
+						requiredWords: body.requiredWords,
+						unitCount: body.unitCount,
+						glossLanguageName,
+						glossLanguageCode,
+						languageCode: language.code,
+						languageName: language.name,
+					},
+				},
+			})
+
+			await sendIngestJob(INGEST_QUEUE.VOCAB_UNITS_LLM, {
+				jobId: job.id,
+				languageId: body.languageId,
+				requiredWords: body.requiredWords,
+				unitCount: body.unitCount,
+				glossLanguageName,
+				glossLanguageCode,
 			})
 
 			return c.json(serializeJob(job), 201)

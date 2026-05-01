@@ -1,5 +1,6 @@
 import type { Prisma } from "@nwords/db"
 import { prisma } from "@nwords/db"
+import { chainVocabUnitsLlmFromCommonWordsJob } from "./ai-vocab-pipeline"
 import { appendJobLog, snapshotJobMetadata } from "./job-logs"
 import {
 	chainFrequencyFromKaikki,
@@ -85,6 +86,20 @@ export async function skipIngestionJobAndContinuePipeline(
 			await chainWordFormsFromTatoeba(languageId, { operatorSkippedTatoebaJob: true })
 			break
 		case "WORD_FORMS":
+			break
+		case "COMMON_WORDS_TOP": {
+			const m = asMetaRecord(job.metadata)
+			if (
+				m.chainPipeline === true &&
+				Array.isArray(m.topLemmas) &&
+				m.topLemmas.every((x): x is string => typeof x === "string") &&
+				m.topLemmas.length > 0
+			) {
+				await chainVocabUnitsLlmFromCommonWordsJob(languageId, jobId)
+			}
+			break
+		}
+		case "VOCAB_UNITS_LLM":
 			break
 		default:
 			break

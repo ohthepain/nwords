@@ -115,8 +115,29 @@ model Language {
   posMismatchMessages    PosMismatchMessage[]
   fixedExpressionRules   FixedExpressionRule[]
   wordSynonymPairs       WordSynonymPair[]
+  commonLemmas           LanguageCommonLemma[]
 
   @@map("language")
+}
+
+/// Curated frequency seed list per language (admin-editable). LLM vocabulary uses this when non-empty; otherwise falls back to the latest completed COMMON_WORDS_TOP job.
+model LanguageCommonLemma {
+  id         String   @id @default(uuid()) @db.Uuid
+  languageId String   @db.Uuid
+  language   Language @relation(fields: [languageId], references: [id], onDelete: Cascade)
+  lemma      String
+  /// Order for the LLM required-words list (0 = first).
+  sortOrder  Int
+  createdAt  DateTime @default(now())
+
+  @@unique([languageId, lemma])
+  @@index([languageId, sortOrder])
+  @@map("language_common_lemma")
+}
+
+enum CurriculumSource {
+  KAIKKI
+  AI_CURRICULUM
 }
 
 // ─── Words ──────────────────────────────────────────────
@@ -128,6 +149,10 @@ model Word {
   lemma           String
   pos             PartOfSpeech
   alternatePos    PartOfSpeech[] @default([])
+  /// Kaikki dictionary vs AI-generated curriculum (`VOCAB_UNITS_LLM` job).
+  curriculumSource CurriculumSource @default(KAIKKI)
+  /// Structured AI unit payload (`unitType`, `form`, `tags`, etc.) when `curriculumSource` is AI.
+  curriculumUnit   Json?
   rank            Int
   definitions     Json
   isOffensive     Boolean      @default(false)
@@ -246,12 +271,19 @@ model FrequencyList {
 
 // ─── Sentences ──────────────────────────────────────────
 
+enum SentenceSource {
+  TATOEBA
+  AI_GENERATED
+}
+
 model Sentence {
   id         String   @id @default(uuid()) @db.Uuid
   tatoebaId  Int?     @unique
   languageId String   @db.Uuid
   language   Language @relation("SentenceLanguage", fields: [languageId], references: [id])
   text       String
+  /// Null = legacy rows before this column existed (typically Tatoeba).
+  source     SentenceSource?
   hasAudio   Boolean  @default(false)
   audioS3Key String?
   /// Heuristic 0–1 quality for use in translation / cloze tests.
@@ -496,6 +528,8 @@ enum IngestionType {
   AUDIO_FILES
   FIXED_EXPRESSIONS
   CLOZE_QUALITY_ASSESSMENT
+  COMMON_WORDS_TOP
+  VOCAB_UNITS_LLM
 }
 
 enum IngestionStatus {

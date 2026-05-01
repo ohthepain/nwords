@@ -134,6 +134,7 @@ export async function processClozeQualityJob(job: PgBoss.Job<ClozeQualityJobData
 				id: true,
 				lemma: true,
 				rank: true,
+				curriculumSource: true,
 				testSentenceIds: true,
 				sentenceWords: {
 					take: perRowSentenceCap,
@@ -192,6 +193,15 @@ export async function processClozeQualityJob(job: PgBoss.Job<ClozeQualityJobData
 			let errorThisLemma = 0
 
 			if (allSentenceWords.length === 0 && curatedSentenceIds.size === 0) {
+				if (word.curriculumSource === "AI_CURRICULUM") {
+					await appendJobLog(
+						jobId,
+						"out",
+						`"${word.lemma}": AI curriculum — no sentences linked yet; skipping (run sentence generation when available).`,
+					)
+					await updateIngestionProgress(jobId, { processedDelta: 1 })
+					return
+				}
 				const n = await markLemmaNonTestable(languageId, word.lemma)
 				await appendJobLog(
 					jobId,

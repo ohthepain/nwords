@@ -7,6 +7,7 @@ import {
 	resolveKaikkiDownloadPlan,
 	tatoebaPerLanguageSentencesUrl,
 } from "./ingestion-urls"
+import { isLegacyVocabPipeline } from "./vocab-pipeline-env"
 
 export async function chainFrequencyFromKaikki(languageId: string): Promise<void> {
 	const lang = await prisma.language.findUnique({ where: { id: languageId } })
@@ -51,13 +52,19 @@ export async function chainFrequencyFromKaikki(languageId: string): Promise<void
 	}
 
 	if (!ok) {
-		console.warn(
-			`[pipeline] No hermitdave or bnpd frequency file for ${lang.code}; skipping to Tatoeba`,
-		)
-		await chainTatoebaFromFrequency(languageId, {
-			skippedFrequency: true,
-			downloadUrlAttempted: downloadUrl,
-		})
+		if (isLegacyVocabPipeline()) {
+			console.warn(
+				`[pipeline] No hermitdave or bnpd frequency file for ${lang.code}; skipping to Tatoeba`,
+			)
+			await chainTatoebaFromFrequency(languageId, {
+				skippedFrequency: true,
+				downloadUrlAttempted: downloadUrl,
+			})
+		} else {
+			console.warn(
+				`[pipeline] No hermitdave or bnpd frequency file for ${lang.code}; VOCAB_PIPELINE is not legacy — skipping Tatoeba chain`,
+			)
+		}
 		return
 	}
 

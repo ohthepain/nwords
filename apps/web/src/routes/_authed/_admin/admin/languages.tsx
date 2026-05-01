@@ -160,6 +160,56 @@ const runLanguagePipeline = createServerFn({ method: "POST" })
 		return { success: true, pipelineJobId: body.pipelineJobId }
 	})
 
+const runAiVocabPipeline = createServerFn({ method: "POST" })
+	.inputValidator((data: { id: string }) => data)
+	.handler(async ({ data }) => {
+		const request = getRequest()
+		if (!request) {
+			throw new Error("Missing request context")
+		}
+		const origin = new URL(request.url).origin
+		const res = await app.fetch(
+			new Request(`${origin}/api/admin/languages/${data.id}/run-ai-vocab-pipeline`, {
+				method: "POST",
+				headers: forwardedAdminApiHeaders(request),
+			}),
+		)
+		const body = (await res.json().catch(() => ({}))) as {
+			error?: string
+			pipelineJobId?: string
+		}
+		if (!res.ok) {
+			throw new Error(body.error ?? `Common words job failed (${res.status})`)
+		}
+		return { success: true, pipelineJobId: body.pipelineJobId }
+	})
+
+const runLlmVocabFromCommonWords = createServerFn({ method: "POST" })
+	.inputValidator((data: { id: string }) => data)
+	.handler(async ({ data }) => {
+		const request = getRequest()
+		if (!request) {
+			throw new Error("Missing request context")
+		}
+		const origin = new URL(request.url).origin
+		const json = JSON.stringify({})
+		const res = await app.fetch(
+			new Request(`${origin}/api/admin/languages/${data.id}/run-llm-vocab-from-common-words`, {
+				method: "POST",
+				headers: forwardedAdminApiHeaders(request, { jsonBody: json }),
+				body: json,
+			}),
+		)
+		const body = (await res.json().catch(() => ({}))) as {
+			error?: string
+			pipelineJobId?: string
+		}
+		if (!res.ok) {
+			throw new Error(body.error ?? `LLM vocabulary job failed (${res.status})`)
+		}
+		return { success: true, pipelineJobId: body.pipelineJobId }
+	})
+
 const generateFixedExpressions = createServerFn({ method: "POST" })
 	.inputValidator((data: { id: string }) => data)
 	.handler(async ({ data }) => {
@@ -249,6 +299,8 @@ function AdminLanguagesPage() {
 	const { languages, jobsByLanguageId } = Route.useLoaderData()
 	const [toggling, setToggling] = useState<string | null>(null)
 	const [runningPipeline, setRunningPipeline] = useState<string | null>(null)
+	const [runningAiVocab, setRunningAiVocab] = useState<string | null>(null)
+	const [runningLlmVocab, setRunningLlmVocab] = useState<string | null>(null)
 	const [generatingFixedExpr, setGeneratingFixedExpr] = useState<string | null>(null)
 	const [assessingClozeQuality, setAssessingClozeQuality] = useState<string | null>(null)
 	const [clozeMaxSentences, setClozeMaxSentences] = useState(30)
@@ -318,6 +370,50 @@ function AdminLanguagesPage() {
 			setNotice({ kind: "err", text: e instanceof Error ? e.message : "Pipeline failed" })
 		} finally {
 			setRunningPipeline(null)
+		}
+		await router.invalidate()
+	}
+
+	async function handleRunAiVocab(id: string) {
+		setNotice(null)
+		setRunningAiVocab(id)
+		try {
+			const out = await runAiVocabPipeline({ data: { id } })
+			setNotice({
+				kind: "ok",
+				text: out.pipelineJobId
+					? `Common words job queued — ${out.pipelineJobId.slice(0, 8)}… Review topLemmas in job output/metadata, then run LLM vocabulary.`
+					: "Common words job queued.",
+			})
+		} catch (e) {
+			setNotice({
+				kind: "err",
+				text: e instanceof Error ? e.message : "Common words job failed",
+			})
+		} finally {
+			setRunningAiVocab(null)
+		}
+		await router.invalidate()
+	}
+
+	async function handleRunLlmVocab(id: string) {
+		setNotice(null)
+		setRunningLlmVocab(id)
+		try {
+			const out = await runLlmVocabFromCommonWords({ data: { id } })
+			setNotice({
+				kind: "ok",
+				text: out.pipelineJobId
+					? `LLM vocabulary queued — ${out.pipelineJobId.slice(0, 8)}… Uses the latest completed Common words job for this language.`
+					: "LLM vocabulary queued.",
+			})
+		} catch (e) {
+			setNotice({
+				kind: "err",
+				text: e instanceof Error ? e.message : "LLM vocabulary job failed",
+			})
+		} finally {
+			setRunningLlmVocab(null)
 		}
 		await router.invalidate()
 	}
@@ -492,20 +588,16 @@ function AdminLanguagesPage() {
 						Jobs
 					</Link>
 					. Turning a language on with no words starts the pipeline automatically; use{" "}
-					<strong className="text-foreground font-medium">Re-import</strong> to run it again.
+					<strong className="text-foreground font-medium">Common words</strong> then{" "}
+					<strong className="text-foreground font-medium">LLM vocabulary</strong>, or{" "}
+					<strong className="text-foreground font-medium">Legacy</strong> (Kaikki → frequency →
+					Tatoeba when <code className="text-xs">VOCAB_PIPELINE=legacy</code>). Turning a language
+					on with no words starts{" "}
+					<strong className="text-foreground font-medium">Common words</strong> by default.
 				</p>
 				<p className="text-xs">
-					Pipeline: Kaikki.org (four{" "}
-					<a
-						href="https://kaikki.org/dictionary/Italian/pos-noun/index.html"
-						target="_blank"
-						rel="noreferrer"
-						className="underline underline-offset-2 hover:text-foreground"
-					>
-						pos-noun
-					</a>
-					-style JSONL streams when available, else one full dump) → frequency ranks (HermitDave or
-					bnpd) → Tatoeba sentences (ISO 639-3 required).
+					Legacy pipeline: Kaikki.org JSONL → frequency ranks (HermitDave or bnpd) → Tatoeba when{" "}
+					<code className="text-xs">VOCAB_PIPELINE=legacy</code>.
 				</p>
 			</div>
 
@@ -556,7 +648,7 @@ function AdminLanguagesPage() {
 
 			{/* Table */}
 			<div className="border border-border rounded-lg overflow-hidden">
-				<div className="grid grid-cols-[1fr_90px_90px_100px_108px] gap-4 text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] px-4 py-2.5 bg-muted/50 border-b border-border">
+				<div className="grid grid-cols-[1fr_90px_90px_100px_200px] gap-4 text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] px-4 py-2.5 bg-muted/50 border-b border-border">
 					<span>Language</span>
 					<span className="text-right">Words</span>
 					<span className="text-right">Sentences</span>
@@ -568,7 +660,7 @@ function AdminLanguagesPage() {
 						const langJobs = jobsByLanguageId[lang.id] ?? []
 						return (
 							<div key={lang.id} className="bg-background">
-								<div className="grid grid-cols-[1fr_90px_90px_100px_108px] gap-4 items-center px-4 py-2.5 hover:bg-muted/30 transition-colors">
+								<div className="grid grid-cols-[1fr_90px_90px_100px_200px] gap-4 items-center px-4 py-2.5 hover:bg-muted/30 transition-colors">
 									<div className="flex flex-col gap-1 min-w-0">
 										<div className="flex items-center gap-3 min-w-0">
 											<span className="text-sm font-medium truncate">{lang.name}</span>
@@ -577,6 +669,14 @@ function AdminLanguagesPage() {
 											</span>
 										</div>
 										<div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+											<Link
+												to="/admin/common-words"
+												search={{ languageId: lang.id }}
+												className="text-muted-foreground hover:text-foreground underline underline-offset-2"
+											>
+												Common words
+											</Link>
+											<span className="text-border select-none">·</span>
 											<Link
 												to="/admin/words"
 												search={{ languageId: lang.id }}
@@ -599,6 +699,8 @@ function AdminLanguagesPage() {
 													clearingLinksId === lang.id ||
 													toggling === lang.id ||
 													runningPipeline === lang.id ||
+													runningAiVocab === lang.id ||
+													runningLlmVocab === lang.id ||
 													lang.sentenceCount === 0
 												}
 												className="text-destructive/90 hover:text-destructive hover:underline underline-offset-2 disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed"
@@ -627,21 +729,59 @@ function AdminLanguagesPage() {
 											variant={lang.enabled ? "default" : "outline"}
 											size="sm"
 											className="h-7 text-xs w-20 font-mono"
-											disabled={toggling === lang.id || runningPipeline === lang.id}
+											disabled={
+												toggling === lang.id ||
+												runningPipeline === lang.id ||
+												runningAiVocab === lang.id ||
+												runningLlmVocab === lang.id
+											}
 											onClick={() => handleToggle(lang.id, lang.enabled)}
 										>
 											{lang.enabled ? "On" : "Off"}
 										</Button>
 									</div>
-									<div className="flex justify-end">
+									<div className="flex flex-col gap-1 items-end">
 										<Button
 											variant="secondary"
 											size="sm"
-											className="h-7 text-xs px-2 font-mono"
-											disabled={runningPipeline === lang.id || toggling === lang.id}
+											className="h-7 text-xs px-2 font-mono w-full max-w-[11rem]"
+											disabled={
+												runningPipeline === lang.id ||
+												runningAiVocab === lang.id ||
+												runningLlmVocab === lang.id ||
+												toggling === lang.id
+											}
+											onClick={() => handleRunAiVocab(lang.id)}
+										>
+											{runningAiVocab === lang.id ? "…" : "Common words"}
+										</Button>
+										<Button
+											variant="secondary"
+											size="sm"
+											className="h-7 text-xs px-2 font-mono w-full max-w-[11rem]"
+											disabled={
+												runningPipeline === lang.id ||
+												runningAiVocab === lang.id ||
+												runningLlmVocab === lang.id ||
+												toggling === lang.id
+											}
+											onClick={() => handleRunLlmVocab(lang.id)}
+										>
+											{runningLlmVocab === lang.id ? "…" : "LLM vocabulary"}
+										</Button>
+										<Button
+											variant="secondary"
+											size="sm"
+											className="h-7 text-xs px-2 font-mono w-full max-w-[11rem]"
+											disabled={
+												runningPipeline === lang.id ||
+												runningAiVocab === lang.id ||
+												runningLlmVocab === lang.id ||
+												toggling === lang.id
+											}
 											onClick={() => handleRunPipeline(lang.id)}
 										>
-											{runningPipeline === lang.id ? "…" : "Re-import"}
+											{runningPipeline === lang.id ? "…" : "Legacy"}
 										</Button>
 									</div>
 								</div>
