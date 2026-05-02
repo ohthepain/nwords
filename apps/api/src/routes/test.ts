@@ -330,7 +330,7 @@ function buildNextPickPreview(args: {
  * Build mode must use this ordinal cap, not `rank <= ceil(baseline × 1.2)` alone; sparse rank
  * numbering can put higher numeric ranks outside the heatmap slice while still below that bound.
  *
- * Uses one word id per `effectiveRank` that has ≥1 joinable cloze sentence (same semantics as GET /progress/heatmap).
+ * Uses one word id per `effectiveRank` that has ≥1 generated cloze (same semantics as GET /progress/heatmap).
  */
 type GraphVisibleRankRow = { id: string; effectiveRank: number }
 
@@ -361,18 +361,20 @@ async function buildModeGraphVisibleRankRows(
 			select: { id: true, effectiveRank: true },
 		})
 		if (batch.length === 0) break
-		const sentenceLinkCounts = await prisma.sentenceWord.groupBy({
+		const generatedClozeCounts = await prisma.generatedCloze.groupBy({
 			by: ["wordId"],
 			where: {
 				wordId: { in: batch.map((b) => b.id) },
-				sentence: { languageId, markedForRemoval: false },
+				languageId,
 			},
 			_count: true,
 		})
-		const linkCountByWordId = new Map(sentenceLinkCounts.map((r) => [r.wordId, r._count as number]))
+		const clozeCountByWordId = new Map(
+			generatedClozeCounts.map((r) => [r.wordId, r._count as number]),
+		)
 		for (const row of batch) {
 			if (seenRanks.has(row.effectiveRank)) continue
-			if ((linkCountByWordId.get(row.id) ?? 0) < 1) continue
+			if ((clozeCountByWordId.get(row.id) ?? 0) < 1) continue
 			seenRanks.add(row.effectiveRank)
 			out.push(row)
 			if (out.length >= targetCellCount) break
@@ -520,6 +522,8 @@ async function handleAssessmentNext(
 			hintSentenceId: resolved.hintSentenceId,
 			hintSource: resolved.hintSource,
 			inlineHint: resolved.inlineHint,
+			answer: resolved.answer,
+			alternatives: resolved.alternatives,
 			answerType: "TRANSLATION_TYPED" as const,
 			sessionMode: session.mode,
 			vocabMode: "ASSESSMENT" as const,
@@ -566,7 +570,7 @@ async function handleFrustrationNext(
 					languageId: langs.targetLanguageId,
 					isAbbreviation: false,
 					isTestable: true,
-					testSentenceIds: { isEmpty: false },
+					generatedClozes: { some: { languageId: langs.targetLanguageId } },
 				},
 			},
 		},
@@ -635,6 +639,8 @@ async function handleFrustrationNext(
 		hintSentenceId: resolved.hintSentenceId,
 		hintSource: resolved.hintSource,
 		inlineHint: resolved.inlineHint,
+		answer: resolved.answer,
+		alternatives: resolved.alternatives,
 		answerType: "TRANSLATION_TYPED" as const,
 		sessionMode: session.mode,
 		vocabMode: "FRUSTRATION" as const,
@@ -707,6 +713,8 @@ async function handleNewWordsNext(
 				hintSentenceId: resolved.hintSentenceId,
 				hintSource: resolved.hintSource,
 				inlineHint: resolved.inlineHint,
+				answer: resolved.answer,
+				alternatives: resolved.alternatives,
 				answerType: "TRANSLATION_TYPED" as const,
 				sessionMode: session.mode,
 				vocabMode: "NEWWORDS" as const,
@@ -850,6 +858,8 @@ async function handleBuildNext(
 				hintSentenceId: resolved.hintSentenceId,
 				hintSource: resolved.hintSource,
 				inlineHint: resolved.inlineHint,
+				answer: resolved.answer,
+				alternatives: resolved.alternatives,
 				answerType: "TRANSLATION_TYPED" as const,
 				sessionMode: session.mode,
 				vocabMode,
@@ -1016,6 +1026,8 @@ async function handleBuildNext(
 				hintSentenceId: resolved.hintSentenceId,
 				hintSource: resolved.hintSource,
 				inlineHint: resolved.inlineHint,
+				answer: resolved.answer,
+				alternatives: resolved.alternatives,
 				answerType: "TRANSLATION_TYPED" as const,
 				sessionMode: session.mode,
 				vocabMode,
@@ -1060,6 +1072,8 @@ async function handleBuildNext(
 				hintSentenceId: resolved.hintSentenceId,
 				hintSource: resolved.hintSource,
 				inlineHint: resolved.inlineHint,
+				answer: resolved.answer,
+				alternatives: resolved.alternatives,
 				answerType: "TRANSLATION_TYPED" as const,
 				sessionMode: session.mode,
 				vocabMode,
@@ -1339,6 +1353,16 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 			const targetWordId =
 				forceWordId ??
 				(
+					await prisma.generatedCloze.findFirst({
+						where: {
+							id: forceSentenceId,
+							languageId: langs.targetLanguageId,
+							word: { isAbbreviation: false, isTestable: true },
+						},
+						select: { wordId: true },
+					})
+				)?.wordId ??
+				(
 					await prisma.sentenceWord.findFirst({
 						where: {
 							sentenceId: forceSentenceId,
@@ -1377,6 +1401,8 @@ export const testRoute = new Hono<OptionalAuthEnv>()
 				hintSentenceId: resolved.hintSentenceId,
 				hintSource: resolved.hintSource,
 				inlineHint: resolved.inlineHint,
+				answer: resolved.answer,
+				alternatives: resolved.alternatives,
 				answerType: "TRANSLATION_TYPED" as const,
 				sessionMode: session.mode,
 				devSelection: devSelection(

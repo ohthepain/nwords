@@ -41,6 +41,75 @@ function sortedMergedJobLines(lines: PersistedJobLogLine[]): PersistedJobLogLine
 	return [...lines].sort((a, b) => a.t.localeCompare(b.t))
 }
 
+type VocabCleanupPreview = {
+	dryRun?: boolean
+	/** Legacy jobs only (frequency-removal era). */
+	wouldRemoveTotal: number
+	wouldRemove: Array<{ wordId: string; lemma: string; pos: string; reason: string }>
+	wouldRenumberTotal: number
+	wouldRenumber: Array<{
+		wordId: string
+		lemma: string
+		pos: string
+		oldIndex: number
+		newRank: number
+	}>
+	senseGroupsAdjusted?: number
+	senseOffset?: number
+}
+
+function parseVocabCleanupPreview(metadata: unknown): VocabCleanupPreview | null {
+	if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) return null
+	const m = metadata as Record<string, unknown>
+	if (typeof m.wouldRenumberTotal !== "number") return null
+
+	const wr = Array.isArray(m.wouldRemove) ? m.wouldRemove : []
+	const wouldRemove: VocabCleanupPreview["wouldRemove"] = []
+	for (const x of wr) {
+		if (x === null || typeof x !== "object") continue
+		const o = x as Record<string, unknown>
+		if (typeof o.wordId !== "string" || typeof o.lemma !== "string" || typeof o.reason !== "string")
+			continue
+		const pos = typeof o.pos === "string" ? o.pos : String(o.pos ?? "")
+		wouldRemove.push({ wordId: o.wordId, lemma: o.lemma, pos, reason: o.reason })
+	}
+
+	const wn = Array.isArray(m.wouldRenumber) ? m.wouldRenumber : []
+	const wouldRenumber: VocabCleanupPreview["wouldRenumber"] = []
+	for (const x of wn) {
+		if (x === null || typeof x !== "object") continue
+		const o = x as Record<string, unknown>
+		if (
+			typeof o.wordId !== "string" ||
+			typeof o.lemma !== "string" ||
+			typeof o.oldIndex !== "number" ||
+			typeof o.newRank !== "number"
+		)
+			continue
+		const pos = typeof o.pos === "string" ? o.pos : String(o.pos ?? "")
+		wouldRenumber.push({
+			wordId: o.wordId,
+			lemma: o.lemma,
+			pos,
+			oldIndex: o.oldIndex,
+			newRank: o.newRank,
+		})
+	}
+
+	const wouldRemoveTotal = typeof m.wouldRemoveTotal === "number" ? m.wouldRemoveTotal : 0
+
+	return {
+		dryRun: m.dryRun === true,
+		wouldRemoveTotal,
+		wouldRemove,
+		wouldRenumberTotal: m.wouldRenumberTotal,
+		wouldRenumber,
+		senseGroupsAdjusted:
+			typeof m.senseGroupsAdjusted === "number" ? m.senseGroupsAdjusted : undefined,
+		senseOffset: typeof m.senseOffset === "number" ? m.senseOffset : undefined,
+	}
+}
+
 export function JobOutputViewer({
 	jobId,
 	title,
@@ -52,7 +121,7 @@ export function JobOutputViewer({
 	open: boolean
 	onClose: () => void
 }) {
-	const [tab, setTab] = useState<"out" | "err">("out")
+	const [tab, setTab] = useState<"out" | "err" | "preview">("out")
 	const [detail, setDetail] = useState<AdminJobDetail | null>(null)
 	const [loadError, setLoadError] = useState<string | null>(null)
 	const [autoScroll, setAutoScroll] = useState(true)
@@ -105,12 +174,20 @@ export function JobOutputViewer({
 	}, [open, jobId])
 
 	const allLines = detail ? parseJobLogLines(detail.metadata) : []
-	const shownLines = tab === "out" ? sortedMergedJobLines(allLines) : linesForTab(allLines, tab)
+	const shownLines =
+		tab === "out"
+			? sortedMergedJobLines(allLines)
+			: tab === "err"
+				? linesForTab(allLines, "err")
+				: []
 	const summaryError = detail ? jobMetadataError(detail.metadata) : null
+	const vocabPreview = detail ? parseVocabCleanupPreview(detail.metadata) : null
+	const showPreviewTab = vocabPreview !== null
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: shownLines/tab/summaryError are intentional triggers to auto-scroll on content change
 	useLayoutEffect(() => {
 		if (!autoScroll || !preRef.current) return
+		if (tab === "preview") return
 		const el = preRef.current
 		el.scrollTop = el.scrollHeight
 	}, [shownLines, tab, autoScroll, summaryError])
@@ -118,6 +195,10 @@ export function JobOutputViewer({
 	useEffect(() => {
 		if (!open) setTab("out")
 	}, [open])
+
+	useEffect(() => {
+		if (tab === "preview" && !showPreviewTab) setTab("out")
+	}, [tab, showPreviewTab])
 
 	if (!open || !jobId) return null
 
@@ -211,6 +292,19 @@ export function JobOutputViewer({
 							({linesForTab(allLines, "err").length + (summaryError ? 1 : 0)})
 						</span>
 					</button>
+					{showPreviewTab ? (
+						<button
+							type="button"
+							onClick={() => setTab("preview")}
+							className={
+								tab === "preview"
+									? "px-3 py-1.5 text-xs font-medium rounded-t-md bg-muted text-foreground border border-b-0 border-border -mb-px"
+									: "px-3 py-1.5 text-xs font-medium rounded-t-md text-muted-foreground hover:text-foreground"
+							}
+						>
+							Preview
+						</button>
+					) : null}
 				</div>
 
 				<div className="flex-1 min-h-0 flex flex-col p-3">
@@ -235,6 +329,94 @@ export function JobOutputViewer({
 							</p>
 						</div>
 					) : null}
+					{tab === "preview" && vocabPreview ? (
+						<div className="flex-1 min-h-[200px] overflow-auto rounded-md border border-border/80 bg-muted/20 px-3 py-3 text-xs space-y-4">
+							<div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground font-mono">
+								{vocabPreview.dryRun ? (
+									<span className="text-brand font-medium">Dry run (no DB changes)</span>
+								) : null}
+								{typeof vocabPreview.senseOffset === "number" ? (
+									<span>Sense offset: {vocabPreview.senseOffset}</span>
+								) : null}
+								{typeof vocabPreview.senseGroupsAdjusted === "number" ? (
+									<span>Homograph groups: {vocabPreview.senseGroupsAdjusted.toLocaleString()}</span>
+								) : null}
+							</div>
+							{(vocabPreview.wouldRemoveTotal > 0 || vocabPreview.wouldRemove.length > 0) ? (
+								<div>
+									<p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-2">
+										Removals (legacy job; {vocabPreview.wouldRemoveTotal.toLocaleString()} total,
+										sample {vocabPreview.wouldRemove.length})
+									</p>
+									<div className="overflow-x-auto rounded border border-border/80">
+										<table className="w-full text-left text-[11px] font-mono">
+											<thead className="bg-muted/60 text-muted-foreground">
+												<tr>
+													<th className="px-2 py-1.5 font-medium">Lemma</th>
+													<th className="px-2 py-1.5 font-medium">POS</th>
+													<th className="px-2 py-1.5 font-medium">Reason</th>
+												</tr>
+											</thead>
+											<tbody>
+												{vocabPreview.wouldRemove.length === 0 ? (
+													<tr>
+														<td colSpan={3} className="px-2 py-2 text-muted-foreground">
+															None
+														</td>
+													</tr>
+												) : (
+													vocabPreview.wouldRemove.map((r) => (
+														<tr key={r.wordId} className="border-t border-border/60">
+															<td className="px-2 py-1.5 break-all">{r.lemma}</td>
+															<td className="px-2 py-1.5 whitespace-nowrap">{r.pos}</td>
+															<td className="px-2 py-1.5 text-muted-foreground">{r.reason}</td>
+														</tr>
+													))
+												)}
+											</tbody>
+										</table>
+									</div>
+								</div>
+							) : null}
+							<div>
+								<p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-2">
+									Order changes ({vocabPreview.wouldRenumberTotal.toLocaleString()} rows moved; sample{" "}
+									{vocabPreview.wouldRenumber.length})
+								</p>
+								<div className="overflow-x-auto rounded border border-border/80">
+									<table className="w-full text-left text-[11px] font-mono">
+										<thead className="bg-muted/60 text-muted-foreground">
+											<tr>
+												<th className="px-2 py-1.5 font-medium">Lemma</th>
+												<th className="px-2 py-1.5 font-medium">POS</th>
+												<th className="px-2 py-1.5 font-medium">Old index</th>
+												<th className="px-2 py-1.5 font-medium">New rank</th>
+											</tr>
+										</thead>
+										<tbody>
+											{vocabPreview.wouldRenumber.length === 0 ? (
+												<tr>
+													<td colSpan={4} className="px-2 py-2 text-muted-foreground">
+														None (or no large deltas in sample)
+													</td>
+												</tr>
+											) : (
+												vocabPreview.wouldRenumber.map((r) => (
+													<tr key={r.wordId} className="border-t border-border/60">
+														<td className="px-2 py-1.5 break-all">{r.lemma}</td>
+														<td className="px-2 py-1.5 whitespace-nowrap">{r.pos}</td>
+														<td className="px-2 py-1.5 tabular-nums">{r.oldIndex}</td>
+														<td className="px-2 py-1.5 tabular-nums">{r.newRank}</td>
+													</tr>
+												))
+											)}
+										</tbody>
+									</table>
+								</div>
+							</div>
+						</div>
+					) : (
+						<>
 					<pre
 						ref={preRef}
 						className="flex-1 min-h-[200px] overflow-auto rounded-md border border-border/80 bg-muted/30 px-3 py-2 text-[11px] font-mono leading-relaxed text-foreground whitespace-pre-wrap break-all"
@@ -287,6 +469,8 @@ export function JobOutputViewer({
 						Output tab merges stdout and stderr by timestamp (stderr in red). Refreshes every 2s
 						while this dialog is open. Server logs also appear in the API terminal during local dev.
 					</p>
+						</>
+					)}
 				</div>
 			</div>
 		</div>

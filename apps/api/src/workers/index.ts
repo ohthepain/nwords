@@ -1,5 +1,7 @@
 import type PgBoss from "pg-boss"
 import { INGEST_QUEUE } from "../lib/ingestion-queues"
+import type { ClozeGenerationJobData } from "./cloze-generation"
+import { processClozeGenerationJob } from "./cloze-generation"
 import type { ClozeQualityJobData } from "./cloze-quality"
 import { processClozeQualityJob } from "./cloze-quality"
 import type { CommonWordsTopJobData } from "./common-words-top"
@@ -12,6 +14,8 @@ import type { KaikkiJobData } from "./kaikki"
 import { processKaikkiJob } from "./kaikki"
 import type { TatoebaJobData } from "./tatoeba"
 import { processTatoebaJob } from "./tatoeba"
+import type { VocabCleanupJobData } from "./vocab-cleanup"
+import { processVocabCleanupJob } from "./vocab-cleanup"
 import type { VocabUnitsLlmJobData } from "./vocab-units-llm"
 import { processVocabUnitsLlmJob } from "./vocab-units-llm"
 import type { WordFormsJobData } from "./word-forms"
@@ -50,14 +54,20 @@ export async function registerIngestWorkers(boss: PgBoss) {
 	await boss.work(INGEST_QUEUE.CLOZE_QUALITY, opts, async ([job]) =>
 		processClozeQualityJob(job as PgBoss.Job<ClozeQualityJobData>),
 	)
+	await boss.work(INGEST_QUEUE.CLOZE_GENERATION, opts, async ([job]) =>
+		processClozeGenerationJob(job as PgBoss.Job<ClozeGenerationJobData>),
+	)
 	await boss.work(INGEST_QUEUE.COMMON_WORDS_TOP, opts, async ([job]) =>
 		processCommonWordsTopJob(job as PgBoss.Job<CommonWordsTopJobData>),
 	)
 	await boss.work(INGEST_QUEUE.VOCAB_UNITS_LLM, opts, async ([job]) =>
 		processVocabUnitsLlmJob(job as PgBoss.Job<VocabUnitsLlmJobData>),
 	)
+	await boss.work(INGEST_QUEUE.VOCAB_CLEANUP, opts, async ([job]) =>
+		processVocabCleanupJob(job as PgBoss.Job<VocabCleanupJobData>),
+	)
 
 	console.log(
-		"[workers] Registered: kaikki, frequency, tatoeba, word-forms, fixed-expressions, cloze-quality, common-words-top, vocab-units-llm",
+		"[workers] Registered: kaikki, frequency, tatoeba, word-forms, fixed-expressions, cloze-quality, cloze-generation, common-words-top, vocab-units-llm, vocab-cleanup",
 	)
 }

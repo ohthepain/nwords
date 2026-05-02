@@ -23,6 +23,7 @@ type LanguageAdminRow = {
 	name: string
 	enabled: boolean
 	wordCount: number
+	aiWordCount: number
 	sentenceCount: number
 }
 
@@ -56,6 +57,15 @@ const loadAdminLanguagesPage = createServerFn({ method: "GET" }).handler(async (
 			_count: { select: { words: true, sentences: true } },
 		},
 	})
+	const wordSourceCounts = await prisma.word.groupBy({
+		by: ["languageId", "curriculumSource"],
+		_count: { _all: true },
+	})
+	const aiWordCountsByLanguageId = new Map(
+		wordSourceCounts
+			.filter((row) => row.curriculumSource === "AI_CURRICULUM")
+			.map((row) => [row.languageId, row._count._all]),
+	)
 
 	const languages: LanguageAdminRow[] = languagesRaw.map((l) => ({
 		id: l.id,
@@ -63,6 +73,7 @@ const loadAdminLanguagesPage = createServerFn({ method: "GET" }).handler(async (
 		name: l.name,
 		enabled: l.enabled,
 		wordCount: l._count.words,
+		aiWordCount: aiWordCountsByLanguageId.get(l.id) ?? 0,
 		sentenceCount: l._count.sentences,
 	}))
 
@@ -210,6 +221,29 @@ const runLlmVocabFromCommonWords = createServerFn({ method: "POST" })
 		return { success: true, pipelineJobId: body.pipelineJobId }
 	})
 
+const runVocabCleanup = createServerFn({ method: "POST" })
+	.inputValidator((data: { id: string; dryRun: boolean }) => data)
+	.handler(async ({ data }) => {
+		const request = getRequest()
+		if (!request) {
+			throw new Error("Missing request context")
+		}
+		const origin = new URL(request.url).origin
+		const json = JSON.stringify({ dryRun: data.dryRun })
+		const res = await app.fetch(
+			new Request(`${origin}/api/admin/languages/${data.id}/run-vocab-cleanup`, {
+				method: "POST",
+				headers: forwardedAdminApiHeaders(request, { jsonBody: json }),
+				body: json,
+			}),
+		)
+		const body = (await res.json().catch(() => ({}))) as { error?: string; jobId?: string }
+		if (!res.ok) {
+			throw new Error(body.error ?? `Vocab cleanup failed (${res.status})`)
+		}
+		return { success: true, jobId: body.jobId ?? null }
+	})
+
 const generateFixedExpressions = createServerFn({ method: "POST" })
 	.inputValidator((data: { id: string }) => data)
 	.handler(async ({ data }) => {
@@ -233,8 +267,8 @@ const generateFixedExpressions = createServerFn({ method: "POST" })
 		return { success: true, jobId: body.id ?? null }
 	})
 
-const assessClozeQuality = createServerFn({ method: "POST" })
-	.inputValidator((data: { id: string; maxSentencesPerWord: number }) => data)
+const generateClozes = createServerFn({ method: "POST" })
+	.inputValidator((data: { id: string; unitsLimit?: number }) => data)
 	.handler(async ({ data }) => {
 		const request = getRequest()
 		if (!request) {
@@ -243,10 +277,11 @@ const assessClozeQuality = createServerFn({ method: "POST" })
 		const origin = new URL(request.url).origin
 		const json = JSON.stringify({
 			languageId: data.id,
-			maxSentencesPerWord: data.maxSentencesPerWord,
+			...(data.unitsLimit !== undefined ? { unitsLimit: data.unitsLimit } : {}),
+			resetExisting: false,
 		})
 		const res = await app.fetch(
-			new Request(`${origin}/api/admin/jobs/cloze-quality-assessment`, {
+			new Request(`${origin}/api/admin/jobs/cloze-generation`, {
 				method: "POST",
 				headers: forwardedAdminApiHeaders(request, { jsonBody: json }),
 				body: json,
@@ -254,7 +289,7 @@ const assessClozeQuality = createServerFn({ method: "POST" })
 		)
 		const body = (await res.json().catch(() => ({}))) as { error?: string; id?: string }
 		if (!res.ok) {
-			throw new Error(body.error ?? `Cloze quality assessment job failed (${res.status})`)
+			throw new Error(body.error ?? `Cloze generation job failed (${res.status})`)
 		}
 		return { success: true, jobId: body.id ?? null }
 	})
@@ -289,6 +324,76 @@ const clearLanguageSentenceLinks = createServerFn({ method: "POST" })
 		}
 	})
 
+const clearGeneratedClozes = createServerFn({ method: "POST" })
+	.inputValidator((data: { id: string }) => data)
+	.handler(async ({ data }) => {
+		const request = getRequest()
+		if (!request) {
+			throw new Error("Missing request context")
+		}
+		const origin = new URL(request.url).origin
+		const res = await app.fetch(
+			new Request(`${origin}/api/admin/languages/${data.id}/clear-generated-clozes`, {
+				method: "POST",
+				headers: forwardedAdminApiHeaders(request),
+			}),
+		)
+		const body = (await res.json().catch(() => ({}))) as {
+			error?: string
+			generatedClozesDeleted?: number
+			wordsCleared?: number
+			sentenceWordScoresCleared?: number
+			aiSentencesDeleted?: number
+		}
+		if (!res.ok) {
+			throw new Error(body.error ?? `Clear clozes failed (${res.status})`)
+		}
+		return {
+			generatedClozesDeleted: body.generatedClozesDeleted ?? 0,
+			wordsCleared: body.wordsCleared ?? 0,
+			sentenceWordScoresCleared: body.sentenceWordScoresCleared ?? 0,
+			aiSentencesDeleted: body.aiSentencesDeleted ?? 0,
+		}
+	})
+
+const clearVocabulary = createServerFn({ method: "POST" })
+	.inputValidator((data: { id: string }) => data)
+	.handler(async ({ data }) => {
+		const request = getRequest()
+		if (!request) {
+			throw new Error("Missing request context")
+		}
+		const origin = new URL(request.url).origin
+		const res = await app.fetch(
+			new Request(`${origin}/api/admin/languages/${data.id}/clear-vocabulary`, {
+				method: "POST",
+				headers: forwardedAdminApiHeaders(request),
+			}),
+		)
+		const body = (await res.json().catch(() => ({}))) as {
+			error?: string
+			wordsDeleted?: number
+			generatedClozesDeleted?: number
+			clozeReportsDeleted?: number
+			userKnowledgeDeleted?: number
+			sentenceWordsDeleted?: number
+			wordFormsDeleted?: number
+			synonymPairsDeleted?: number
+		}
+		if (!res.ok) {
+			throw new Error(body.error ?? `Clear vocabulary failed (${res.status})`)
+		}
+		return {
+			wordsDeleted: body.wordsDeleted ?? 0,
+			generatedClozesDeleted: body.generatedClozesDeleted ?? 0,
+			clozeReportsDeleted: body.clozeReportsDeleted ?? 0,
+			userKnowledgeDeleted: body.userKnowledgeDeleted ?? 0,
+			sentenceWordsDeleted: body.sentenceWordsDeleted ?? 0,
+			wordFormsDeleted: body.wordFormsDeleted ?? 0,
+			synonymPairsDeleted: body.synonymPairsDeleted ?? 0,
+		}
+	})
+
 export const Route = createFileRoute("/_authed/_admin/admin/languages")({
 	loader: () => loadAdminLanguagesPage(),
 	component: AdminLanguagesPage,
@@ -302,9 +407,15 @@ function AdminLanguagesPage() {
 	const [runningAiVocab, setRunningAiVocab] = useState<string | null>(null)
 	const [runningLlmVocab, setRunningLlmVocab] = useState<string | null>(null)
 	const [generatingFixedExpr, setGeneratingFixedExpr] = useState<string | null>(null)
-	const [assessingClozeQuality, setAssessingClozeQuality] = useState<string | null>(null)
-	const [clozeMaxSentences, setClozeMaxSentences] = useState(30)
+	const [generatingClozes, setGeneratingClozes] = useState<string | null>(null)
+	const [clozeUnitsLimit, setClozeUnitsLimit] = useState("")
+	const [runningVocabCleanup, setRunningVocabCleanup] = useState<{
+		langId: string
+		dryRun: boolean
+	} | null>(null)
 	const [clearingLinksId, setClearingLinksId] = useState<string | null>(null)
+	const [clearingClozesId, setClearingClozesId] = useState<string | null>(null)
+	const [clearingVocabId, setClearingVocabId] = useState<string | null>(null)
 	const [notice, setNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null)
 	const [jobActionError, setJobActionError] = useState<string | null>(null)
 	const [requeueJobId, setRequeueJobId] = useState<string | null>(null)
@@ -440,24 +551,54 @@ function AdminLanguagesPage() {
 		await router.invalidate()
 	}
 
-	async function handleAssessClozeQuality(id: string) {
+	async function handleGenerateClozes(id: string) {
 		setNotice(null)
-		setAssessingClozeQuality(id)
+		setGeneratingClozes(id)
 		try {
-			const out = await assessClozeQuality({ data: { id, maxSentencesPerWord: clozeMaxSentences } })
+			const parsedLimit = Number.parseInt(clozeUnitsLimit, 10)
+			const out = await generateClozes({
+				data: {
+					id,
+					...(Number.isFinite(parsedLimit) && parsedLimit > 0 ? { unitsLimit: parsedLimit } : {}),
+				},
+			})
 			setNotice({
 				kind: "ok",
 				text: out.jobId
-					? `Cloze quality assessment queued — ${out.jobId.slice(0, 8)}… Progress appears below and on Jobs.`
-					: "Cloze quality assessment queued.",
+					? `Cloze generation queued — ${out.jobId.slice(0, 8)}… Progress appears below and on Jobs.`
+					: "Cloze generation queued.",
 			})
 		} catch (e) {
 			setNotice({
 				kind: "err",
-				text: e instanceof Error ? e.message : "Cloze quality assessment failed",
+				text: e instanceof Error ? e.message : "Cloze generation failed",
 			})
 		} finally {
-			setAssessingClozeQuality(null)
+			setGeneratingClozes(null)
+		}
+		await router.invalidate()
+	}
+
+	async function handleVocabCleanup(id: string, dryRun: boolean) {
+		setNotice(null)
+		setRunningVocabCleanup({ langId: id, dryRun })
+		try {
+			const out = await runVocabCleanup({ data: { id, dryRun } })
+			setNotice({
+				kind: "ok",
+				text: out.jobId
+					? dryRun
+						? `Vocab cleanup preview queued — ${out.jobId.slice(0, 8)}… Open Output → Preview when done.`
+						: `Vocab cleanup (apply) queued — ${out.jobId.slice(0, 8)}… Updates ranks when done.`
+					: "Vocab cleanup queued.",
+			})
+		} catch (e) {
+			setNotice({
+				kind: "err",
+				text: e instanceof Error ? e.message : "Vocab cleanup failed",
+			})
+		} finally {
+			setRunningVocabCleanup(null)
 		}
 		await router.invalidate()
 	}
@@ -482,6 +623,57 @@ function AdminLanguagesPage() {
 			setNotice({ kind: "err", text: e instanceof Error ? e.message : "Clear failed" })
 		} finally {
 			setClearingLinksId(null)
+		}
+		await router.invalidate()
+	}
+
+	async function handleClearGeneratedClozes(id: string, name: string) {
+		if (
+			!globalThis.confirm(
+				`Clear generated clozes for ${name}? This deletes generated cloze rows and clears cloze-generation metadata, so the next cloze generation run starts fresh.`,
+			)
+		) {
+			return
+		}
+		setNotice(null)
+		setClearingClozesId(id)
+		try {
+			const out = await clearGeneratedClozes({ data: { id } })
+			setNotice({
+				kind: "ok",
+				text: `Cleared ${out.generatedClozesDeleted.toLocaleString()} generated cloze(s); reset ${out.wordsCleared.toLocaleString()} word row(s).`,
+			})
+		} catch (e) {
+			setNotice({ kind: "err", text: e instanceof Error ? e.message : "Clear clozes failed" })
+		} finally {
+			setClearingClozesId(null)
+		}
+		await router.invalidate()
+	}
+
+	async function handleClearVocabulary(id: string, name: string) {
+		if (
+			!globalThis.confirm(
+				`Clear ALL vocabulary for ${name}? This deletes every word row for this language, plus generated clozes, word forms, sentence links, user knowledge, synonym pairs, and cloze issue reports tied to those words. This cannot be undone.`,
+			)
+		) {
+			return
+		}
+		setNotice(null)
+		setClearingVocabId(id)
+		try {
+			const out = await clearVocabulary({ data: { id } })
+			setNotice({
+				kind: "ok",
+				text: `Deleted ${out.wordsDeleted.toLocaleString()} vocabulary word(s), ${out.generatedClozesDeleted.toLocaleString()} generated cloze(s), ${out.wordFormsDeleted.toLocaleString()} word form(s), ${out.sentenceWordsDeleted.toLocaleString()} sentence link(s), ${out.userKnowledgeDeleted.toLocaleString()} user knowledge row(s), ${out.synonymPairsDeleted.toLocaleString()} synonym pair(s), and ${out.clozeReportsDeleted.toLocaleString()} cloze report(s).`,
+			})
+		} catch (e) {
+			setNotice({
+				kind: "err",
+				text: e instanceof Error ? e.message : "Clear vocabulary failed",
+			})
+		} finally {
+			setClearingVocabId(null)
 		}
 		await router.invalidate()
 	}
@@ -646,9 +838,24 @@ function AdminLanguagesPage() {
 				</div>
 			</div>
 
+			<div className="rounded-lg border border-border bg-muted/25 px-4 py-3 space-y-2">
+				<p className="text-sm font-semibold text-foreground">Vocabulary cleanup</p>
+				<p className="text-xs text-muted-foreground leading-relaxed max-w-3xl">
+					Re-order <strong className="text-foreground font-medium">AI curriculum</strong> units so
+					the same spelling with different parts of speech (different senses) are spaced apart in
+					the list. Uses your curated{" "}
+					<strong className="text-foreground font-medium">common words</strong> order to pick the
+					primary sense when needed. In the{" "}
+					<strong className="text-foreground font-medium">Import</strong> column, use{" "}
+					<strong className="text-foreground font-medium">Cleanup preview</strong> (no DB changes;
+					open <strong className="text-foreground">Output → Preview</strong> when done) or{" "}
+					<strong className="text-foreground font-medium">Cleanup apply</strong> to write new ranks.
+				</p>
+			</div>
+
 			{/* Table */}
 			<div className="border border-border rounded-lg overflow-hidden">
-				<div className="grid grid-cols-[1fr_90px_90px_100px_200px] gap-4 text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] px-4 py-2.5 bg-muted/50 border-b border-border">
+				<div className="grid grid-cols-[1fr_90px_90px_100px_minmax(14rem,1fr)] gap-4 text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em] px-4 py-2.5 bg-muted/50 border-b border-border">
 					<span>Language</span>
 					<span className="text-right">Words</span>
 					<span className="text-right">Sentences</span>
@@ -660,7 +867,7 @@ function AdminLanguagesPage() {
 						const langJobs = jobsByLanguageId[lang.id] ?? []
 						return (
 							<div key={lang.id} className="bg-background">
-								<div className="grid grid-cols-[1fr_90px_90px_100px_200px] gap-4 items-center px-4 py-2.5 hover:bg-muted/30 transition-colors">
+								<div className="grid grid-cols-[1fr_90px_90px_100px_minmax(14rem,1fr)] gap-4 items-center px-4 py-2.5 hover:bg-muted/30 transition-colors">
 									<div className="flex flex-col gap-1 min-w-0">
 										<div className="flex items-center gap-3 min-w-0">
 											<span className="text-sm font-medium truncate">{lang.name}</span>
@@ -697,10 +904,13 @@ function AdminLanguagesPage() {
 												type="button"
 												disabled={
 													clearingLinksId === lang.id ||
+													clearingClozesId === lang.id ||
+													clearingVocabId === lang.id ||
 													toggling === lang.id ||
 													runningPipeline === lang.id ||
 													runningAiVocab === lang.id ||
 													runningLlmVocab === lang.id ||
+													runningVocabCleanup?.langId === lang.id ||
 													lang.sentenceCount === 0
 												}
 												className="text-destructive/90 hover:text-destructive hover:underline underline-offset-2 disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed"
@@ -708,14 +918,52 @@ function AdminLanguagesPage() {
 											>
 												{clearingLinksId === lang.id ? "Clearing…" : "Clear sentence links"}
 											</button>
+											<span className="text-border select-none">·</span>
+											<button
+												type="button"
+												disabled={
+													clearingLinksId === lang.id ||
+													clearingClozesId === lang.id ||
+													clearingVocabId === lang.id ||
+													generatingClozes === lang.id ||
+													toggling === lang.id
+												}
+												className="text-destructive/90 hover:text-destructive hover:underline underline-offset-2 disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed"
+												onClick={() => handleClearGeneratedClozes(lang.id, lang.name)}
+											>
+												{clearingClozesId === lang.id ? "Clearing…" : "Clear clozes"}
+											</button>
+											<span className="text-border select-none">·</span>
+											<button
+												type="button"
+												disabled={
+													clearingLinksId === lang.id ||
+													clearingClozesId === lang.id ||
+													clearingVocabId === lang.id ||
+													runningAiVocab === lang.id ||
+													runningLlmVocab === lang.id ||
+													runningVocabCleanup?.langId === lang.id ||
+													generatingClozes === lang.id ||
+													toggling === lang.id
+												}
+												className="text-destructive/90 hover:text-destructive hover:underline underline-offset-2 disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed"
+												onClick={() => handleClearVocabulary(lang.id, lang.name)}
+											>
+												{clearingVocabId === lang.id ? "Clearing…" : "Clear vocab"}
+											</button>
 										</div>
 									</div>
-									<span className="text-sm font-mono text-right tabular-nums">
-										{lang.wordCount > 0 ? (
-											lang.wordCount.toLocaleString()
-										) : (
-											<span className="text-muted-foreground">—</span>
-										)}
+									<span className="text-right tabular-nums">
+										<span className="block text-sm font-mono">
+											{lang.wordCount > 0 ? (
+												lang.wordCount.toLocaleString()
+											) : (
+												<span className="text-muted-foreground">—</span>
+											)}
+										</span>
+										<span className="block text-[10px] text-muted-foreground">
+											AI {lang.aiWordCount.toLocaleString()}
+										</span>
 									</span>
 									<span className="text-sm font-mono text-right tabular-nums">
 										{lang.sentenceCount > 0 ? (
@@ -733,7 +981,8 @@ function AdminLanguagesPage() {
 												toggling === lang.id ||
 												runningPipeline === lang.id ||
 												runningAiVocab === lang.id ||
-												runningLlmVocab === lang.id
+												runningLlmVocab === lang.id ||
+												runningVocabCleanup?.langId === lang.id
 											}
 											onClick={() => handleToggle(lang.id, lang.enabled)}
 										>
@@ -749,6 +998,7 @@ function AdminLanguagesPage() {
 												runningPipeline === lang.id ||
 												runningAiVocab === lang.id ||
 												runningLlmVocab === lang.id ||
+												runningVocabCleanup?.langId === lang.id ||
 												toggling === lang.id
 											}
 											onClick={() => handleRunAiVocab(lang.id)}
@@ -763,6 +1013,7 @@ function AdminLanguagesPage() {
 												runningPipeline === lang.id ||
 												runningAiVocab === lang.id ||
 												runningLlmVocab === lang.id ||
+												runningVocabCleanup?.langId === lang.id ||
 												toggling === lang.id
 											}
 											onClick={() => handleRunLlmVocab(lang.id)}
@@ -777,11 +1028,54 @@ function AdminLanguagesPage() {
 												runningPipeline === lang.id ||
 												runningAiVocab === lang.id ||
 												runningLlmVocab === lang.id ||
+												runningVocabCleanup?.langId === lang.id ||
 												toggling === lang.id
 											}
 											onClick={() => handleRunPipeline(lang.id)}
 										>
 											{runningPipeline === lang.id ? "…" : "Legacy"}
+										</Button>
+										<Button
+											variant="outline"
+											size="sm"
+											className="h-7 text-xs px-2 font-mono w-full max-w-[11rem]"
+											disabled={
+												runningPipeline === lang.id ||
+												runningAiVocab === lang.id ||
+												runningLlmVocab === lang.id ||
+												runningVocabCleanup?.langId === lang.id ||
+												toggling === lang.id
+											}
+											onClick={() => void handleVocabCleanup(lang.id, true)}
+										>
+											{runningVocabCleanup?.langId === lang.id && runningVocabCleanup.dryRun
+												? "…"
+												: "Cleanup preview"}
+										</Button>
+										<Button
+											variant="secondary"
+											size="sm"
+											className="h-7 text-xs px-2 font-mono w-full max-w-[11rem]"
+											disabled={
+												runningPipeline === lang.id ||
+												runningAiVocab === lang.id ||
+												runningLlmVocab === lang.id ||
+												runningVocabCleanup?.langId === lang.id ||
+												toggling === lang.id
+											}
+											onClick={() => {
+												if (
+													!window.confirm(
+														"Apply vocabulary cleanup? This updates word ranks in the database.",
+													)
+												)
+													return
+												void handleVocabCleanup(lang.id, false)
+											}}
+										>
+											{runningVocabCleanup?.langId === lang.id && !runningVocabCleanup.dryRun
+												? "…"
+												: "Cleanup apply"}
 										</Button>
 									</div>
 								</div>
@@ -808,10 +1102,10 @@ function AdminLanguagesPage() {
 													variant="outline"
 													size="sm"
 													className="h-6 text-[11px] px-2 font-mono"
-													disabled={assessingClozeQuality === lang.id}
-													onClick={() => handleAssessClozeQuality(lang.id)}
+													disabled={generatingClozes === lang.id}
+													onClick={() => handleGenerateClozes(lang.id)}
 												>
-													{assessingClozeQuality === lang.id ? "Queuing…" : "Assess cloze quality"}
+													{generatingClozes === lang.id ? "Queuing…" : "Generate clozes"}
 												</Button>
 											</div>
 										</div>
@@ -822,27 +1116,23 @@ function AdminLanguagesPage() {
 														htmlFor={`cloze-max-${lang.id}`}
 														className="text-[11px] font-mono text-muted-foreground whitespace-nowrap"
 													>
-														Max sentences/word
+														Unit limit
 													</label>
 													<input
 														id={`cloze-max-${lang.id}`}
 														type="number"
 														min={1}
-														max={500}
-														value={clozeMaxSentences}
-														onChange={(e) =>
-															setClozeMaxSentences(
-																Math.max(1, Math.min(500, Number(e.target.value) || 30)),
-															)
-														}
+														max={10000}
+														placeholder="all"
+														value={clozeUnitsLimit}
+														onChange={(e) => setClozeUnitsLimit(e.target.value)}
 														className="w-16 h-6 rounded border border-input bg-background px-2 text-xs font-mono text-center tabular-nums focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
 													/>
 												</div>
 												<p className="text-[11px] text-muted-foreground leading-relaxed">
-													Limits how many cloze sentences are sent to the AI per word.
-													High-frequency words can have hundreds of sentences — capping this keeps
-													costs predictable and avoids overloading the prompt. 30 is usually enough
-													to find the best examples.
+													Generates 10 candidate clozes per AI curriculum unit, stores the best 5,
+													and skips units that already have enough generated clozes. Leave blank to
+													process all units; set a small limit for a smoke test.
 												</p>
 											</div>
 										</div>

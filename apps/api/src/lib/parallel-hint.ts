@@ -1,5 +1,9 @@
+import { createHash } from "node:crypto"
 import { type Prisma, prisma } from "@nwords/db"
 import { KNOWN_CONFIDENCE_THRESHOLD, KNOWN_MIN_TESTS } from "@nwords/shared"
+import { generateText } from "ai"
+import { createModel } from "./ai"
+import { getAiConfig } from "./app-settings"
 import { clozeLengthMultiplier, countClozeWordRuns } from "./cloze-compositionality"
 import {
 	linkedSentenceIdsForClozePool,
@@ -125,6 +129,8 @@ export type ClozeResolution =
 			hintSentenceId: string | null
 			hintSource: HintSource
 			blankTokenIndex: number
+			answer: string
+			alternatives: string[]
 			/** Target word translated to native language via English-gloss pivot (best-effort). */
 			inlineHint: string | null
 	  }
@@ -240,6 +246,9 @@ type ClozeCandidate = {
 	position: number
 	/** 0–100 from cloze-quality job; null = not assessed */
 	aiClozePriority: number | null
+	promptText?: string
+	answer?: string
+	alternatives?: string[]
 }
 
 function clozePickWeight(c: ClozeCandidate): number {
@@ -257,6 +266,133 @@ function weightedShuffleClozeCandidates<T extends ClozeCandidate>(candidates: T[
 	}))
 	scored.sort((a, b) => a.key - b.key)
 	return scored.map((s) => s.c)
+}
+
+function normalizeGeneratedPrompt(cloze: string): string {
+	return cloze.replace(/_{2,}/g, "____")
+}
+
+function textHash(value: string): string {
+	return createHash("sha256").update(value.normalize("NFC")).digest("hex")
+}
+
+function cleanGeneratedTranslation(value: string): string {
+	return value
+		.normalize("NFC")
+		.trim()
+		.replace(/^["“”]+|["“”]+$/g, "")
+		.replace(/\s+/g, " ")
+}
+
+async function loadGeneratedClozeCandidates(
+	wordId: string,
+	targetLanguageId: string,
+	forceGeneratedClozeId?: string,
+): Promise<ClozeCandidate[]> {
+	const rows = await prisma.generatedCloze.findMany({
+		where: {
+			wordId,
+			languageId: targetLanguageId,
+			...(forceGeneratedClozeId ? { id: forceGeneratedClozeId } : {}),
+		},
+		orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+		select: {
+			id: true,
+			sentence: true,
+			cloze: true,
+			answer: true,
+			alternatives: true,
+			sortOrder: true,
+		},
+	})
+	return rows.map((row) => ({
+		targetSentenceId: row.id,
+		targetSentenceText: row.sentence,
+		position: -1,
+		aiClozePriority: 100 - row.sortOrder,
+		promptText: normalizeGeneratedPrompt(row.cloze),
+		answer: row.answer,
+		alternatives: row.alternatives,
+	}))
+}
+
+async function resolveGeneratedClozeTranslation(params: {
+	generatedClozeId: string
+	sentence: string
+	nativeLanguageId: string
+	targetLanguageId: string
+}): Promise<string | null> {
+	const sourceSentenceHash = textHash(params.sentence)
+	const cached = await prisma.generatedClozeTranslation.findUnique({
+		where: {
+			generatedClozeId_languageId: {
+				generatedClozeId: params.generatedClozeId,
+				languageId: params.nativeLanguageId,
+			},
+		},
+		select: { text: true, sourceSentenceHash: true },
+	})
+	if (cached && (!cached.sourceSentenceHash || cached.sourceSentenceHash === sourceSentenceHash)) {
+		return cached.text
+	}
+
+	const [nativeLanguage, targetLanguage, aiConfig] = await Promise.all([
+		prisma.language.findUnique({
+			where: { id: params.nativeLanguageId },
+			select: { name: true, code: true },
+		}),
+		prisma.language.findUnique({
+			where: { id: params.targetLanguageId },
+			select: { name: true, code: true },
+		}),
+		getAiConfig(),
+	])
+	if (!nativeLanguage || !targetLanguage) return null
+
+	const translated =
+		params.nativeLanguageId === params.targetLanguageId
+			? params.sentence
+			: aiConfig
+				? cleanGeneratedTranslation(
+						(
+							await generateText({
+								model: createModel(aiConfig),
+								system:
+									"You translate language-learning hint sentences. Return only the translated sentence, with no explanation, quotes, labels, or markdown.",
+								prompt: `Translate this ${targetLanguage.name} (${targetLanguage.code}) sentence into ${nativeLanguage.name} (${nativeLanguage.code}).
+
+Sentence:
+${params.sentence}`,
+							})
+						).text,
+					)
+				: null
+	if (!translated) return null
+
+	await prisma.generatedClozeTranslation.upsert({
+		where: {
+			generatedClozeId_languageId: {
+				generatedClozeId: params.generatedClozeId,
+				languageId: params.nativeLanguageId,
+			},
+		},
+		create: {
+			generatedClozeId: params.generatedClozeId,
+			languageId: params.nativeLanguageId,
+			text: translated,
+			aiProvider: aiConfig?.provider,
+			aiModel: aiConfig?.model,
+			sourceSentenceHash,
+		},
+		update: {
+			text: translated,
+			aiProvider: aiConfig?.provider,
+			aiModel: aiConfig?.model,
+			sourceSentenceHash,
+		},
+	})
+
+	return translated
 }
 
 async function materializeClozeCandidates(
@@ -763,6 +899,7 @@ export async function resolveClozeWithHint(params: {
 			lemma: true,
 			effectiveRank: true,
 			definitions: true,
+			aiSynonyms: true,
 			testSentenceIds: true,
 			isAbbreviation: true,
 			isTestable: true,
@@ -772,6 +909,50 @@ export async function resolveClozeWithHint(params: {
 
 	if (!word || word.isAbbreviation || !word.isTestable) {
 		return { ok: false, reason: "no_test_sentences" }
+	}
+
+	const generated = await loadGeneratedClozeCandidates(
+		word.id,
+		params.targetLanguageId,
+		params.forceSentenceId,
+	)
+	if (generated.length > 0) {
+		const candidates = params.forceSentenceId
+			? generated
+			: weightedShuffleClozeCandidates(generated)
+		const c = candidates[0]
+		const gloss = firstDefinitionHint(word.definitions)
+		if (c) {
+			const translatedHint = await resolveGeneratedClozeTranslation({
+				generatedClozeId: c.targetSentenceId,
+				sentence: c.targetSentenceText,
+				nativeLanguageId: params.nativeLanguageId,
+				targetLanguageId: params.targetLanguageId,
+			})
+			const hintText = translatedHint ?? gloss
+			if (!hintText) return { ok: false, reason: "no_hint_available" }
+			const inlineHint = await translateViaGlossPivot(
+				word.definitions,
+				params.nativeLanguageId,
+				params.targetLanguageId,
+			)
+			return {
+				ok: true,
+				wordId: word.id,
+				lemma: word.lemma,
+				rank: word.effectiveRank,
+				targetSentenceId: c.targetSentenceId,
+				targetSentenceText: c.targetSentenceText,
+				promptText: c.promptText ?? buildClozePrompt(c.targetSentenceText, c.position),
+				hintText,
+				hintSentenceId: null,
+				hintSource: translatedHint ? "parallel" : "definition",
+				blankTokenIndex: c.position,
+				answer: c.answer ?? word.lemma,
+				alternatives: c.alternatives ?? word.aiSynonyms,
+				inlineHint,
+			}
+		}
 	}
 
 	// When forcing a sentence, ensure it's in the candidate pool even if not in testSentenceIds
@@ -852,6 +1033,8 @@ export async function resolveClozeWithHint(params: {
 				hintSentenceId: parallel.id,
 				hintSource: "parallel",
 				blankTokenIndex: c.position,
+				answer: word.lemma,
+				alternatives: word.aiSynonyms,
 				inlineHint,
 			}
 		}
@@ -873,6 +1056,8 @@ export async function resolveClozeWithHint(params: {
 			hintSentenceId: null,
 			hintSource: "definition",
 			blankTokenIndex: c.position,
+			answer: word.lemma,
+			alternatives: word.aiSynonyms,
 			inlineHint,
 		}
 	}
@@ -993,10 +1178,7 @@ export async function pickWordNearRank(
 ): Promise<{ wordId: string; rank: number } | null> {
 	const baseWhere: Prisma.WordWhereInput = {
 		languageId: targetLanguageId,
-		isOffensive: false,
-		isAbbreviation: false,
-		isTestable: true,
-		testSentenceIds: { isEmpty: false },
+		...prismaWhereWordHasResolvableClozeMaterial(targetLanguageId),
 		effectiveRank: { gte: Math.max(1, targetRank - 25), lte: targetRank + 25 },
 		...(excludeWordIds.length > 0 ? { id: { notIn: excludeWordIds } } : {}),
 	}
@@ -1013,10 +1195,7 @@ export async function pickWordNearRank(
 	const wider = await prisma.word.findFirst({
 		where: {
 			languageId: targetLanguageId,
-			isOffensive: false,
-			isAbbreviation: false,
-			isTestable: true,
-			testSentenceIds: { isEmpty: false },
+			...prismaWhereWordHasResolvableClozeMaterial(targetLanguageId),
 			effectiveRank: { gte: Math.max(1, targetRank - 100), lte: targetRank + 100 },
 			...(excludeWordIds.length > 0 ? { id: { notIn: excludeWordIds } } : {}),
 		},

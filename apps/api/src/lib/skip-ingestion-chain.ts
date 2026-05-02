@@ -101,6 +101,8 @@ export async function skipIngestionJobAndContinuePipeline(
 		}
 		case "VOCAB_UNITS_LLM":
 			break
+		case "VOCAB_CLEANUP":
+			break
 		default:
 			break
 	}

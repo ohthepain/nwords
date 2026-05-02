@@ -24,8 +24,10 @@ const TYPE_TO_QUEUE: Record<string, string> = {
 	WORD_FORMS: INGEST_QUEUE.WORD_FORMS,
 	FIXED_EXPRESSIONS: INGEST_QUEUE.FIXED_EXPRESSIONS,
 	CLOZE_QUALITY_ASSESSMENT: INGEST_QUEUE.CLOZE_QUALITY,
+	CLOZE_GENERATION: INGEST_QUEUE.CLOZE_GENERATION,
 	COMMON_WORDS_TOP: INGEST_QUEUE.COMMON_WORDS_TOP,
 	VOCAB_UNITS_LLM: INGEST_QUEUE.VOCAB_UNITS_LLM,
+	VOCAB_CLEANUP: INGEST_QUEUE.VOCAB_CLEANUP,
 }
 
 type RetryPlan =
@@ -228,6 +230,23 @@ async function planRetryFromJob(job: {
 				payload: { languageId: job.languageId },
 			}
 		}
+		case "CLOZE_GENERATION": {
+			return {
+				ok: true,
+				queue: INGEST_QUEUE.CLOZE_GENERATION,
+				payload: {
+					languageId: job.languageId,
+					...(typeof meta.unitsLimit === "number" ? { unitsLimit: meta.unitsLimit } : {}),
+					...(typeof meta.candidatesPerUnit === "number"
+						? { candidatesPerUnit: meta.candidatesPerUnit }
+						: {}),
+					...(typeof meta.selectedPerUnit === "number"
+						? { selectedPerUnit: meta.selectedPerUnit }
+						: {}),
+					resetExisting: false,
+				},
+			}
+		}
 		case "COMMON_WORDS_TOP": {
 			const limit = typeof meta.limit === "number" && meta.limit > 0 ? meta.limit : 200
 			const unitCount =
@@ -274,6 +293,17 @@ async function planRetryFromJob(job: {
 					glossLanguageName,
 					glossLanguageCode,
 					chainPipeline: meta.chainPipeline === true,
+				},
+			}
+		}
+		case "VOCAB_CLEANUP": {
+			return {
+				ok: true,
+				queue: INGEST_QUEUE.VOCAB_CLEANUP,
+				payload: {
+					languageId: job.languageId,
+					dryRun: meta.dryRun === true,
+					...(typeof meta.senseOffset === "number" ? { senseOffset: meta.senseOffset } : {}),
 				},
 			}
 		}
@@ -402,8 +432,10 @@ export const adminJobsRoute = new Hono()
 						"AUDIO_FILES",
 						"FIXED_EXPRESSIONS",
 						"CLOZE_QUALITY_ASSESSMENT",
+						"CLOZE_GENERATION",
 						"COMMON_WORDS_TOP",
 						"VOCAB_UNITS_LLM",
+						"VOCAB_CLEANUP",
 					])
 					.optional(),
 				limit: z.coerce.number().min(1).max(100).default(20),
@@ -790,6 +822,48 @@ export const adminJobsRoute = new Hono()
 		},
 	)
 
+	.post(
+		"/vocab-cleanup",
+		zValidator(
+			"json",
+			z.object({
+				languageId: z.string().uuid(),
+				dryRun: z.boolean().optional(),
+				senseOffset: z.number().int().min(1).max(10_000).optional(),
+			}),
+		),
+		async (c) => {
+			const body = c.req.valid("json")
+			const language = await prisma.language.findUnique({ where: { id: body.languageId } })
+			if (!language) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+
+			const dryRun = body.dryRun === true
+			const job = await prisma.ingestionJob.create({
+				data: {
+					type: "VOCAB_CLEANUP",
+					languageId: body.languageId,
+					metadata: {
+						dryRun,
+						languageCode: language.code,
+						languageName: language.name,
+						...(body.senseOffset !== undefined ? { senseOffset: body.senseOffset } : {}),
+					},
+				},
+			})
+
+			await sendIngestJob(INGEST_QUEUE.VOCAB_CLEANUP, {
+				jobId: job.id,
+				languageId: body.languageId,
+				dryRun,
+				...(body.senseOffset !== undefined ? { senseOffset: body.senseOffset } : {}),
+			})
+
+			return c.json(serializeJob(job), 201)
+		},
+	)
+
 	// Assess cloze quality for the top-1000 words of a language via LLM (no file upload needed)
 	.post(
 		"/cloze-quality-assessment",
@@ -824,6 +898,56 @@ export const adminJobsRoute = new Hono()
 				jobId: job.id,
 				languageId,
 				...(maxSentencesPerWord !== undefined ? { maxSentencesPerWord } : {}),
+			})
+
+			return c.json(serializeJob(job), 201)
+		},
+	)
+
+	// Generate first-class AI cloze items from AI curriculum units (no file upload needed)
+	.post(
+		"/cloze-generation",
+		zValidator(
+			"json",
+			z.object({
+				languageId: z.string().uuid(),
+				unitsLimit: z.number().int().min(1).max(10000).optional(),
+				candidatesPerUnit: z.number().int().min(5).max(20).default(10),
+				selectedPerUnit: z.number().int().min(1).max(10).default(5),
+				resetExisting: z.boolean().default(false),
+			}),
+		),
+		async (c) => {
+			const { languageId, unitsLimit, candidatesPerUnit, selectedPerUnit, resetExisting } =
+				c.req.valid("json")
+
+			const language = await prisma.language.findUnique({ where: { id: languageId } })
+			if (!language) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+
+			const job = await prisma.ingestionJob.create({
+				data: {
+					type: "CLOZE_GENERATION",
+					languageId,
+					metadata: {
+						languageCode: language.code,
+						languageName: language.name,
+						...(unitsLimit !== undefined ? { unitsLimit } : {}),
+						candidatesPerUnit,
+						selectedPerUnit,
+						resetExisting,
+					},
+				},
+			})
+
+			await sendIngestJob(INGEST_QUEUE.CLOZE_GENERATION, {
+				jobId: job.id,
+				languageId,
+				...(unitsLimit !== undefined ? { unitsLimit } : {}),
+				candidatesPerUnit,
+				selectedPerUnit,
+				resetExisting,
 			})
 
 			return c.json(serializeJob(job), 201)

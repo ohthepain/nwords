@@ -62,7 +62,8 @@ function mapDesignPos(pos: string): PartOfSpeech {
 		case "DET":
 			return "DETERMINER"
 		default:
-			return "PARTICLE"
+			// LLM catch-all must not become linguistics PARTICLE (confuses admin + learner word lists).
+			return "INTERJECTION"
 	}
 }
 
@@ -100,6 +101,133 @@ const vocabOutSchema = z.object({
 
 type VocabCandidateUnit = z.infer<typeof candidateUnitSchema>
 type VocabUnit = z.infer<typeof unitSchema>
+
+function unitTokens(text: string): string[] {
+	return text.match(/[\p{L}\p{N}]+/gu) ?? []
+}
+
+/** First-token pronouns / discourse that usually start a clause (SV + EN). */
+const CLAUSE_START_TOKENS = new Set([
+	"jag",
+	"du",
+	"han",
+	"hon",
+	"vi",
+	"ni",
+	"de",
+	"dom",
+	"det",
+	"den",
+	"man",
+	"nu",
+	"så",
+	"i",
+	"you",
+	"he",
+	"she",
+	"we",
+	"they",
+	"it",
+	"here",
+	"there",
+	"then",
+])
+
+/** WH / question-word starts on a multi-word unit — not a particle-verb lexical chunk. */
+const WH_OR_QUESTION_START_TOKENS = new Set([
+	"vad",
+	"vem",
+	"vilket",
+	"vilken",
+	"vilka",
+	"varför",
+	"hur",
+	"när",
+	"var",
+	"vart",
+	"how",
+	"what",
+	"who",
+	"whom",
+	"whose",
+	"why",
+	"when",
+	"where",
+	"which",
+])
+
+const FINITE_OR_AUXILIARY_TOKENS = new Set([
+	// Swedish
+	"är",
+	"var",
+	"har",
+	"hade",
+	"kommer",
+	"kom",
+	"ska",
+	"skall",
+	"vill",
+	"kan",
+	"måste",
+	"får",
+	"blev",
+	"blir",
+	"ha",
+	// English: copula + auxiliaries (appearing in greetings / questions / light clauses)
+	"am",
+	"is",
+	"are",
+	"was",
+	"were",
+	"been",
+	"being",
+	"do",
+	"does",
+	"did",
+	"done",
+	"has",
+	"have",
+	"had",
+	"will",
+	"would",
+	"shall",
+	"should",
+	"could",
+	"might",
+	"may",
+	"must",
+	"need",
+])
+
+/**
+ * Keep the curriculum lexical. Multi-word units are allowed only for particle / split verbs.
+ */
+function rejectReasonForUnit(unit: Pick<VocabUnit, "text" | "type">): string | null {
+	const text = normalizeCurriculumText(unit.text)
+	const tokens = unitTokens(text)
+	if (tokens.length <= 1) return null
+
+	const lowerTokens = tokens.map((t) => t.toLowerCase())
+	const first = lowerTokens[0]
+	if (!first) return null
+
+	if (unit.type === "WORD") return "multi-word WORD"
+	if (unit.type === "SPLIT") {
+		if (!text.includes("...")) return "SPLIT missing ellipsis"
+		if (tokens.length > 3) return "SPLIT too long"
+		return null
+	}
+
+	if (unit.type !== "PARTICLE") return "only particle/split verbs may be multi-word"
+	if (tokens.length > 3) return "multi-word expression too long"
+	if (/[?!]/.test(text)) return "sentence-like punctuation"
+	if (WH_OR_QUESTION_START_TOKENS.has(first)) return "question or WH-led phrase"
+	if (CLAUSE_START_TOKENS.has(first)) return "sentence-like phrase"
+	if (lowerTokens.some((token) => FINITE_OR_AUXILIARY_TOKENS.has(token))) {
+		return "ordinary verb phrase"
+	}
+	return null
+}
 
 /** OpenAI structured output often truncates huge JSON; batch to stay under output limits. */
 function resolveVocabUnitsBatchSize(): number {
@@ -215,24 +343,27 @@ function buildCandidateSystemPrompt(
 Generate useful "learning units" for everyday spoken ${languageName}.
 
 A learning unit is:
-- a single word (in any useful form: plural, gendered, conjugated), OR
-- a fixed expression, OR
-- a particle verb, OR
-- a split expression (e.g. "se ... ut")
+- usually a single word (in any useful form: plural, gendered, conjugated), OR
+- rarely, a particle verb or split verb expression that must be memorised as a lexical unit.
 
 Rules:
 1. Prefer modern, spoken language.
 2. Avoid literary, poetic, archaic, formal-only, rare, or domain-specific vocabulary.
-3. Include a balanced mix of nouns, verbs, adjectives, adverbs, function words, and useful expressions.
-4. Include multi-word expressions only if commonly used in speech.
-5. For split expressions, use the format "verb ... particle".
-6. Avoid duplicates, near-duplicates, and multiple forms of the same word unless both are very common.
-7. Keep units short (max 4 words).
-8. Use lang="${langCode}".
-9. Provide short glosses in ${glossLocaleName} (${_glossLocaleCode}).
+3. Prefer single-word lexical units. At least 90% of the list should be single words.
+4. Include a balanced mix of nouns, verbs, adjectives, adverbs, and function words.
+5. Multi-word units are allowed ONLY as type PARTICLE (verb + particle/preposition you must memorise) or type SPLIT ("verb ... particle"). Never use type PARTICLE for greetings, questions, full clauses, or generic conversational formulas.
+6. Do NOT include fixed phrases that are not particle verbs. Do NOT include ordinary clauses, sentence fragments, adjective+noun collocations, subject+verb phrases, verb+adverb phrases, greetings, adverbial phrases, or generic formulas.
+7. Bad multi-word examples to avoid — do not output these at all, plus any text containing ? or !: "inte så mycket", "ledig dag", "så mycket bättre", "jag tänker", "jag vet inte", "ha en bra dag", "kommer snart", "nu är det bra", "kan du hjälpa mig", "vad heter du", "vi ses senare", "ha det bra", "how are you", "vad gör du".
+8. Good multi-word examples: particle/preposition verbs like "tycka om", "tänka på", and split expressions like "se ... ut".
+9. For split expressions, use the format "verb ... particle".
+10. Avoid duplicates, near-duplicates, and multiple forms of the same word unless both are very common.
+11. Keep multi-word units to 2-3 words. Single words may be any useful form.
+12. Use lang="${langCode}".
+13. Provide short glosses in ${glossLocaleName} (${_glossLocaleCode}).
 
 Return ONLY a JSON object: { "units": [ ... ] }.
 Each item: text, lang, type (WORD | PARTICLE | FIXED_EXPR | SPLIT), pos (VERB | NOUN | ADJ | ADV | PRON | PREP | CONJ | DET | OTHER), optional form, gloss, tags.
+Use FIXED_EXPR only for single-token lexical items that genuinely do not fit another type; multi-word FIXED_EXPR items will be rejected.
 Do not include ranks; the app assigns ranks after deduplication.`
 }
 
@@ -267,7 +398,7 @@ We have accepted ${acceptedCount}/${targetCount} unique units so far. Return abo
 ${requiredBlock}
 ${forbiddenBlock}
 
-Fill the rest of the chunk with new high-utility spoken ${languageName} items. As the accepted count grows, move beyond the most obvious beginner/core words into still-common everyday words, phrases, and useful inflected forms. Avoid duplicate "text" + POS pairs within this response.`
+Fill the rest of the chunk with new high-utility spoken ${languageName} items. As the accepted count grows, move beyond the most obvious beginner/core words into still-common everyday words and useful inflected forms. Prefer single words; use multi-word units only for true particle verbs or split verb expressions. Avoid duplicate "text" + POS pairs within this response.`
 }
 
 export async function processVocabUnitsLlmJob(job: PgBoss.Job<VocabUnitsLlmJobData>) {
@@ -363,6 +494,7 @@ export async function processVocabUnitsLlmJob(job: PgBoss.Job<VocabUnitsLlmJobDa
 			requiredWords.map((w) => normalizeCurriculumText(w)).filter((w) => w.length > 0),
 		)
 		const keptIds: string[] = []
+		let rejectedBadMultiword = 0
 
 		const existingWords = await prisma.word.findMany({
 			where: { languageId, curriculumSource: "AI_CURRICULUM" },
@@ -380,6 +512,11 @@ export async function processVocabUnitsLlmJob(job: PgBoss.Job<VocabUnitsLlmJobDa
 		for (const word of existingWords) {
 			const unit = existingAiWordToUnit(word)
 			if (!unit.text) continue
+			const rejectReason = rejectReasonForUnit(unit)
+			if (rejectReason) {
+				rejectedBadMultiword++
+				continue
+			}
 			const key = curriculumUnitKey(unit)
 			if (acceptedKeys.has(key)) continue
 
@@ -393,7 +530,7 @@ export async function processVocabUnitsLlmJob(job: PgBoss.Job<VocabUnitsLlmJobDa
 			await appendJobLog(
 				jobId,
 				"out",
-				`Resuming from ${allUnits.length} existing AI curriculum unit(s). Required seeds remaining: ${missingRequired.size}.`,
+				`Resuming from ${allUnits.length} existing AI curriculum unit(s). Rejected ${rejectedBadMultiword} existing sentence-like multi-word unit(s). Required seeds remaining: ${missingRequired.size}.`,
 			)
 			await updateIngestionProgress(jobId, {
 				processedItems: Math.min(allUnits.length, unitCount),
@@ -482,6 +619,7 @@ export async function processVocabUnitsLlmJob(job: PgBoss.Job<VocabUnitsLlmJobDa
 			let acceptedThisChunk = 0
 			let duplicateSkipped = 0
 			let emptySkipped = 0
+			let badMultiwordSkipped = 0
 
 			for (const candidate of object.units) {
 				if (await isIngestionJobCancelled(jobId)) return
@@ -489,6 +627,12 @@ export async function processVocabUnitsLlmJob(job: PgBoss.Job<VocabUnitsLlmJobDa
 				const text = normalizeCurriculumText(candidate.text)
 				if (!text) {
 					emptySkipped++
+					continue
+				}
+				const rejectReason = rejectReasonForUnit({ text, type: candidate.type })
+				if (rejectReason) {
+					badMultiwordSkipped++
+					rejectedBadMultiword++
 					continue
 				}
 
@@ -516,7 +660,7 @@ export async function processVocabUnitsLlmJob(job: PgBoss.Job<VocabUnitsLlmJobDa
 			await appendJobLog(
 				jobId,
 				"out",
-				`Chunk ${chunk}/${maxChunks}: accepted ${acceptedThisChunk}/${object.units.length} candidate unit(s); skipped ${duplicateSkipped} duplicate(s), ${emptySkipped} empty item(s). Total accepted: ${allUnits.length}/${unitCount} (minimum ${minAcceptedCount}). Required seeds remaining: ${missingRequired.size}.`,
+				`Chunk ${chunk}/${maxChunks}: accepted ${acceptedThisChunk}/${object.units.length} candidate unit(s); skipped ${duplicateSkipped} duplicate(s), ${emptySkipped} empty item(s), ${badMultiwordSkipped} sentence-like multi-word item(s). Total accepted: ${allUnits.length}/${unitCount} (minimum ${minAcceptedCount}). Required seeds remaining: ${missingRequired.size}.`,
 			)
 			await updateIngestionProgress(jobId, {
 				processedItems: Math.min(allUnits.length, unitCount),
@@ -564,6 +708,7 @@ export async function processVocabUnitsLlmJob(job: PgBoss.Job<VocabUnitsLlmJobDa
 					...prev,
 					unitsUpserted: allUnits.length,
 					aiCurriculumDeletedOrphans: del.count,
+					rejectedSentenceLikeMultiwordUnits: rejectedBadMultiword,
 				} as Prisma.InputJsonValue,
 			},
 		})

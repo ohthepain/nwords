@@ -7,9 +7,8 @@ const LINKED_POOL_TAKE = 80
 const LINKED_POOL_FETCH = 320
 
 /**
- * Predicate for words that can yield cloze candidates via `loadClozeCandidates`: non-empty
- * curated `testSentenceIds` and/or at least one `SentenceWord` in the target language (not
- * marked for removal). Matches `resolveClozeWithHint` / `linkedSentenceIdsForClozePool`.
+ * Predicate for words that can yield cloze candidates. Generated clozes are preferred; legacy
+ * sentence material remains as a fallback for admin testing and older languages.
  */
 export function prismaWhereWordHasResolvableClozeMaterial(
 	targetLanguageId: string,
@@ -19,6 +18,7 @@ export function prismaWhereWordHasResolvableClozeMaterial(
 		isAbbreviation: false,
 		isTestable: true,
 		OR: [
+			{ generatedClozes: { some: { languageId: targetLanguageId } } },
 			{ testSentenceIds: { isEmpty: false } },
 			{
 				sentenceWords: {

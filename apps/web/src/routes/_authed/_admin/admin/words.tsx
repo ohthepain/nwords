@@ -1,6 +1,6 @@
 import { auth } from "@nwords/auth/server"
 import { Prisma, prisma } from "@nwords/db"
-import type { CefrLevel, PartOfSpeech } from "@nwords/db"
+import type { CefrLevel, CurriculumSource, PartOfSpeech } from "@nwords/db"
 import { cefrLevelForFrequencyRank, collectFirstNUniqueEffectiveRanks } from "@nwords/shared"
 import { createFileRoute } from "@tanstack/react-router"
 import { createServerFn } from "@tanstack/react-start"
@@ -43,18 +43,21 @@ const searchWords = createServerFn({ method: "POST" })
 			query: string
 			matchMode: "starts_with" | "contains" | "ends_with" | "exact"
 			pos?: string
+			source?: "ALL" | CurriculumSource
 			limit: number
 			page?: number
 		}) => data,
 	)
 	.handler(async ({ data }) => {
-		const { languageId, query, matchMode, pos } = data
+		const { languageId, query, matchMode, pos, source } = data
 		const limit = Math.min(Math.max(Math.trunc(data.limit), 1), 500)
 		const page = Math.max(Math.trunc(data.page ?? 1), 1)
 		const offset = (page - 1) * limit
 
 		const posWhere =
 			pos && pos !== "ALL" ? { pos: pos as "NOUN" | "VERB" | "ADJECTIVE" | "ADVERB" } : {}
+		const sourceWhere =
+			source && source !== "ALL" ? { curriculumSource: source as CurriculumSource } : {}
 
 		const wordInclude = {
 			language: { select: { code: true } },
@@ -69,6 +72,7 @@ const searchWords = createServerFn({ method: "POST" })
 			rank: number
 			positionAdjust: number
 			effectiveRank: number
+			curriculumSource: CurriculumSource
 			definitions: unknown
 			cefrLevel: CefrLevel | null
 			isOffensive: boolean
@@ -84,6 +88,7 @@ const searchWords = createServerFn({ method: "POST" })
 				rank: w.rank,
 				positionAdjust: w.positionAdjust,
 				effectiveRank: w.effectiveRank,
+				curriculumSource: w.curriculumSource,
 				definitions: w.definitions as string[],
 				cefrLevel: w.cefrLevel ?? cefrLevelForFrequencyRank(w.effectiveRank),
 				isOffensive: w.isOffensive,
@@ -95,7 +100,7 @@ const searchWords = createServerFn({ method: "POST" })
 
 		/** Empty pattern = browse: prefer lemmas with frequency rank so you can verify import without guessing a search. */
 		if (!query.trim()) {
-			const baseWhere = { languageId, ...posWhere }
+			const baseWhere = { languageId, ...posWhere, ...sourceWhere }
 			const [totalWords, rankedWords] = await Promise.all([
 				prisma.word.count({ where: baseWhere }),
 				prisma.word.count({ where: { ...baseWhere, effectiveRank: { gt: 0 } } }),
@@ -176,8 +181,9 @@ const searchWords = createServerFn({ method: "POST" })
 						languageId,
 						OR: [lemmaWhere, { id: { in: idMatchIds } }],
 						...posWhere,
+						...sourceWhere,
 					}
-				: { languageId, ...lemmaWhere, ...posWhere }
+				: { languageId, ...lemmaWhere, ...posWhere, ...sourceWhere }
 
 		const [rankGroups, unrankedTotal, rankedMatches] = await Promise.all([
 			prisma.word.groupBy({
@@ -239,6 +245,11 @@ export const Route = createFileRoute("/_authed/_admin/admin/words")({
 // ─── Component ───────────────────────────────────────────
 
 const POS_OPTIONS = ["ALL", "NOUN", "VERB", "ADJECTIVE", "ADVERB"] as const
+const SOURCE_OPTIONS = [
+	{ value: "ALL", label: "All sources" },
+	{ value: "KAIKKI", label: "Kaikki" },
+	{ value: "AI_CURRICULUM", label: "AI curriculum" },
+] as const
 const MATCH_MODES = [
 	{ value: "starts_with", label: "Starts with" },
 	{ value: "contains", label: "Contains" },
@@ -248,16 +259,20 @@ const MATCH_MODES = [
 
 const WORDS_PAGE_SIZE = 100
 
-function visiblePageNumbers(page: number, totalPages: number): (number | "ellipsis")[] {
+type PageItem = number | { type: "ellipsis"; key: string }
+
+function visiblePageNumbers(page: number, totalPages: number): PageItem[] {
 	const pages = new Set<number>([1, totalPages])
 	for (let p = page - 2; p <= page + 2; p += 1) {
 		if (p >= 1 && p <= totalPages) pages.add(p)
 	}
 	const sorted = [...pages].sort((a, b) => a - b)
-	const out: (number | "ellipsis")[] = []
+	const out: PageItem[] = []
 	for (const p of sorted) {
 		const previous = out[out.length - 1]
-		if (typeof previous === "number" && p - previous > 1) out.push("ellipsis")
+		if (typeof previous === "number" && p - previous > 1) {
+			out.push({ type: "ellipsis", key: `gap-${previous}-${p}` })
+		}
 		out.push(p)
 	}
 	return out
@@ -286,6 +301,7 @@ type AdminWordRow = {
 	rank: number
 	positionAdjust: number
 	effectiveRank: number
+	curriculumSource: CurriculumSource
 	definitions: string[]
 	cefrLevel: string | null
 	isOffensive: boolean
@@ -319,8 +335,9 @@ function AdminWordsPage() {
 		"starts_with",
 	)
 	const [pos, setPos] = useState("ALL")
+	const [source, setSource] = useState<(typeof SOURCE_OPTIONS)[number]["value"]>("ALL")
 	const [page, setPage] = useState(1)
-	const lastFilterKeyRef = useRef(`${languageId}:${pos}`)
+	const lastFilterKeyRef = useRef(`${languageId}:${pos}:${source}`)
 	const [results, setResults] = useState<Awaited<ReturnType<typeof searchWords>> | null>(null)
 	const [searching, setSearching] = useState(false)
 
@@ -531,7 +548,7 @@ function AdminWordsPage() {
 		setSearching(true)
 		try {
 			const data = await searchWords({
-				data: { languageId, query, matchMode, pos, limit: WORDS_PAGE_SIZE, page: nextPage },
+				data: { languageId, query, matchMode, pos, source, limit: WORDS_PAGE_SIZE, page: nextPage },
 			})
 			setResults(data)
 		} finally {
@@ -555,7 +572,7 @@ function AdminWordsPage() {
 			setSearching(false)
 			return
 		}
-		const filterKey = `${languageId}:${pos}`
+		const filterKey = `${languageId}:${pos}:${source}`
 		const filtersChanged = lastFilterKeyRef.current !== filterKey
 		lastFilterKeyRef.current = filterKey
 		if (filtersChanged && page !== 1) {
@@ -564,7 +581,9 @@ function AdminWordsPage() {
 		}
 		let cancelled = false
 		setSearching(true)
-		searchWords({ data: { languageId, query, matchMode, pos, limit: WORDS_PAGE_SIZE, page } })
+		searchWords({
+			data: { languageId, query, matchMode, pos, source, limit: WORDS_PAGE_SIZE, page },
+		})
 			.then((data) => {
 				if (!cancelled) setResults(data)
 			})
@@ -574,7 +593,7 @@ function AdminWordsPage() {
 		return () => {
 			cancelled = true
 		}
-	}, [languageId, pos, page])
+	}, [languageId, pos, source, page])
 
 	const resultPage = results?.page ?? page
 	const resultLimit = results?.limit ?? WORDS_PAGE_SIZE
@@ -582,6 +601,7 @@ function AdminWordsPage() {
 	const pageStart = results && results.words.length > 0 ? (resultPage - 1) * resultLimit + 1 : 0
 	const pageEnd = results ? pageStart + results.words.length - 1 : 0
 	const pageItems = results ? visiblePageNumbers(resultPage, totalPages) : []
+	const sourceFilterLabel = SOURCE_OPTIONS.find((s) => s.value === source)?.label ?? source
 
 	return (
 		<div className="p-6 space-y-4">
@@ -692,7 +712,7 @@ function AdminWordsPage() {
 
 			{/* Search form */}
 			<form onSubmit={handleSearch} className="space-y-4">
-				<div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+				<div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
 					<div className="space-y-1.5">
 						<Label htmlFor="word-lang" className="text-xs">
 							Language
@@ -740,6 +760,25 @@ function AdminWordsPage() {
 							{POS_OPTIONS.map((p) => (
 								<option key={p} value={p}>
 									{p === "ALL" ? "All" : p.charAt(0) + p.slice(1).toLowerCase()}
+								</option>
+							))}
+						</select>
+					</div>
+					<div className="space-y-1.5">
+						<Label htmlFor="word-source" className="text-xs">
+							Source
+						</Label>
+						<select
+							id="word-source"
+							value={source}
+							onChange={(e) =>
+								setSource(e.target.value as (typeof SOURCE_OPTIONS)[number]["value"])
+							}
+							className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+						>
+							{SOURCE_OPTIONS.map((s) => (
+								<option key={s.value} value={s.value}>
+									{s.label}
 								</option>
 							))}
 						</select>
@@ -798,13 +837,15 @@ function AdminWordsPage() {
 								<>
 									{results.stats.uniqueRankSlots.toLocaleString()} unique frequency ranks (
 									{results.stats.rankedWords.toLocaleString()} word rows,{" "}
-									{results.stats.totalWords.toLocaleString()} total in language)
+									{results.stats.totalWords.toLocaleString()} total{" "}
+									{source === "ALL" ? "in language" : sourceFilterLabel.toLowerCase()})
 									{results.total > resultLimit ? " — lowest ranks first" : ""}
 								</>
 							) : results.mode === "browse_unranked" && results.stats ? (
 								<>
 									No frequency ranks yet — {results.stats.totalWords.toLocaleString()} word row
-									{results.stats.totalWords !== 1 ? "s" : ""} in DB (alphabetical)
+									{results.stats.totalWords !== 1 ? "s" : ""}{" "}
+									{source === "ALL" ? "in DB" : sourceFilterLabel.toLowerCase()} (alphabetical)
 								</>
 							) : (
 								<>
@@ -869,8 +910,20 @@ function AdminWordsPage() {
 										<span className="text-[10px] font-mono text-muted-foreground/60 break-all">
 											{word.id}
 										</span>
-										<span className="text-sm font-medium font-mono group-hover:underline underline-offset-2 decoration-foreground/60 truncate text-left">
-											{word.lemma}
+										<span className="min-w-0 flex items-center gap-2">
+											<span className="text-sm font-medium font-mono group-hover:underline underline-offset-2 decoration-foreground/60 truncate text-left">
+												{word.lemma}
+											</span>
+											<span
+												className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full shrink-0 ${
+													word.curriculumSource === "AI_CURRICULUM"
+														? "bg-brand/15 text-brand"
+														: "bg-muted text-muted-foreground"
+												}`}
+												title={`Source: ${word.curriculumSource}`}
+											>
+												{word.curriculumSource === "AI_CURRICULUM" ? "ai" : "kaikki"}
+											</span>
 										</span>
 										<span
 											className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full w-fit ${POS_BADGE_STYLES[word.pos] ?? "bg-muted text-muted-foreground"}`}
@@ -932,10 +985,10 @@ function AdminWordsPage() {
 							>
 								Previous
 							</Button>
-							{pageItems.map((item, index) =>
-								item === "ellipsis" ? (
+							{pageItems.map((item) =>
+								typeof item !== "number" ? (
 									<span
-										key={`ellipsis-${index}`}
+										key={item.key}
 										className="px-1 text-xs text-muted-foreground"
 										aria-hidden="true"
 									>

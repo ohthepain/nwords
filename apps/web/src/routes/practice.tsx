@@ -83,6 +83,8 @@ type NextQuestion = {
 	hintSource: "parallel" | "definition"
 	/** Target word translated to native language via English-gloss pivot (null if unavailable). */
 	inlineHint: string | null
+	answer?: string
+	alternatives?: string[]
 	answerType: "TRANSLATION_TYPED"
 	sessionMode: string
 	vocabMode?: VocabMode
@@ -913,7 +915,11 @@ function PracticePage() {
 
 	const submitAnswer = useCallback(async () => {
 		if (!sessionId || !question) return
-		const correct = normalizeAnswer(answer) === normalizeAnswer(question.lemma)
+		const acceptedAnswers = [question.answer ?? question.lemma, ...(question.alternatives ?? [])]
+		const normalizedUserAnswer = normalizeAnswer(answer)
+		const correct = acceptedAnswers.some(
+			(accepted) => normalizeAnswer(accepted) === normalizedUserAnswer,
+		)
 		if (correct) setClozeRevealed(true)
 		setFeedback(correct ? "Correct." : "Not quite.")
 		const res = await fetch(`/api/test/sessions/${sessionId}/answer`, {
@@ -942,7 +948,7 @@ function PracticePage() {
 		}
 
 		if (!correct) {
-			const expectedLine = `Not quite — expected “${question.lemma}”.`
+			const expectedLine = `Not quite — expected “${question.answer ?? question.lemma}”.`
 			if (data.synonymFeedback?.kind === "good") {
 				setFeedback(data.synonymFeedback.message)
 			} else if (data.synonymFeedback?.kind === "bad") {
@@ -1392,7 +1398,7 @@ function PracticePage() {
 											<ClozePrompt
 												promptText={question.promptText}
 												inlineHint={showInlineHints ? question.inlineHint : null}
-												revealedWord={clozeRevealed ? question.lemma : null}
+												revealedWord={clozeRevealed ? (question.answer ?? question.lemma) : null}
 												onRevealedWordTap={
 													clozeRevealed ? () => void openPracticeWordDetail() : undefined
 												}
@@ -1520,18 +1526,15 @@ function ClozePrompt({
 	onRevealedWordTap?: () => void
 }) {
 	const BLANK = "____"
-	const idx = promptText.indexOf(BLANK)
+	const parts = promptText.split(BLANK)
 
-	if (idx === -1) {
+	if (parts.length === 1) {
 		return <>{promptText}</>
 	}
 
-	const before = promptText.slice(0, idx)
-	const after = promptText.slice(idx + BLANK.length)
-
 	const underlineClass = "underline underline-offset-4 decoration-brand/60 font-semibold"
 	const showRevealed = revealedWord != null && revealedWord !== ""
-	const revealedDisplay = showRevealed ? revealedLemmaDisplay(revealedWord, before) : ""
+	const revealedDisplay = showRevealed ? revealedLemmaDisplay(revealedWord, parts[0] ?? "") : ""
 	const blank =
 		showRevealed && onRevealedWordTap ? (
 			<button
@@ -1551,9 +1554,13 @@ function ClozePrompt({
 
 	return (
 		<>
-			{before}
-			{blank}
-			{after}
+			{parts.map((part, index) => (
+				// biome-ignore lint/suspicious/noArrayIndexKey: prompt parts are static for a question.
+				<span key={index}>
+					{part}
+					{index < parts.length - 1 ? blank : null}
+				</span>
+			))}
 		</>
 	)
 }

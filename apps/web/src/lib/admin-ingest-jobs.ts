@@ -42,8 +42,10 @@ export const JOB_TYPE_LABELS: Record<string, string> = {
 	AUDIO_FILES: "Audio Files",
 	FIXED_EXPRESSIONS: "Fixed Expressions",
 	CLOZE_QUALITY_ASSESSMENT: "Cloze Quality Assessment",
+	CLOZE_GENERATION: "Cloze Generation",
 	COMMON_WORDS_TOP: "Common words (frequency top-N)",
 	VOCAB_UNITS_LLM: "Vocabulary units (LLM)",
+	VOCAB_CLEANUP: "Vocabulary cleanup",
 }
 
 export const STATUS_STYLES: Record<string, string> = {

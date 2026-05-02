@@ -116,6 +116,8 @@ model Language {
   fixedExpressionRules   FixedExpressionRule[]
   wordSynonymPairs       WordSynonymPair[]
   commonLemmas           LanguageCommonLemma[]
+  generatedClozes        GeneratedCloze[]
+  generatedClozeTranslations GeneratedClozeTranslation[]
 
   @@map("language")
 }
@@ -178,6 +180,7 @@ model Word {
   clozeIssueReports ClozeIssueReport[]
   synonymPairsAsLow  WordSynonymPair[] @relation("SynonymWordLow")
   synonymPairsAsHigh WordSynonymPair[] @relation("SynonymWordHigh")
+  generatedClozes GeneratedCloze[]
 
   @@unique([languageId, lemma, pos])
   @@index([languageId, rank])
@@ -337,6 +340,48 @@ model SentenceWord {
   @@unique([sentenceId, wordId])
   @@index([wordId])
   @@map("sentence_word")
+}
+
+model GeneratedCloze {
+  id               String   @id @default(uuid()) @db.Uuid
+  languageId       String   @db.Uuid
+  language         Language @relation(fields: [languageId], references: [id], onDelete: Cascade)
+  wordId           String   @db.Uuid
+  word             Word     @relation(fields: [wordId], references: [id], onDelete: Cascade)
+  sentence         String   @db.Text
+  cloze            String   @db.Text
+  answer           String
+  alternatives     String[] @default([])
+  difficulty       String
+  tags             String[] @default([])
+  sortOrder        Int
+  sourceCandidates Json?
+  selectionReason  String?  @db.Text
+  createdAt        DateTime @default(now())
+  translations     GeneratedClozeTranslation[]
+
+  @@unique([wordId, sortOrder])
+  @@index([languageId])
+  @@index([languageId, wordId])
+  @@map("generated_cloze")
+}
+
+model GeneratedClozeTranslation {
+  id                 String         @id @default(uuid()) @db.Uuid
+  generatedClozeId  String         @db.Uuid
+  generatedCloze    GeneratedCloze @relation(fields: [generatedClozeId], references: [id], onDelete: Cascade)
+  languageId         String         @db.Uuid
+  language           Language       @relation(fields: [languageId], references: [id], onDelete: Restrict)
+  text               String         @db.Text
+  aiProvider         String?
+  aiModel            String?
+  sourceSentenceHash String?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  @@unique([generatedClozeId, languageId])
+  @@index([languageId])
+  @@map("generated_cloze_translation")
 }
 
 // ─── User Language Profile ──────────────────────────────
@@ -528,8 +573,10 @@ enum IngestionType {
   AUDIO_FILES
   FIXED_EXPRESSIONS
   CLOZE_QUALITY_ASSESSMENT
+  CLOZE_GENERATION
   COMMON_WORDS_TOP
   VOCAB_UNITS_LLM
+  VOCAB_CLEANUP
 }
 
 enum IngestionStatus {

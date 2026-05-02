@@ -6,6 +6,14 @@ const globalForPrisma = globalThis as unknown as {
 	prisma: PrismaClient | undefined
 }
 
+const REQUIRED_PRISMA_DELEGATES = ["generatedCloze", "generatedClozeTranslation"] as const
+
+function hasRequiredPrismaDelegates(client: PrismaClient | undefined): boolean {
+	if (!client) return false
+	const clientObj = client as unknown as Record<string, unknown>
+	return REQUIRED_PRISMA_DELEGATES.every((delegate) => typeof clientObj[delegate] === "object")
+}
+
 function createPrismaClient(): PrismaClient {
 	const connectionString = process.env.DATABASE_URL
 	if (!connectionString) {
@@ -26,6 +34,13 @@ function createPrismaClient(): PrismaClient {
 			timeout,
 		},
 	})
+}
+
+if (globalForPrisma.prisma && !hasRequiredPrismaDelegates(globalForPrisma.prisma)) {
+	void globalForPrisma.prisma.$disconnect().catch(() => {
+		// Best effort: the cached client is stale after a schema change, so discard it either way.
+	})
+	globalForPrisma.prisma = undefined
 }
 
 export const prisma = globalForPrisma.prisma ?? createPrismaClient()

@@ -6,6 +6,8 @@ export const INGEST_QUEUE = {
 	WORD_FORMS: "ingest:word-forms",
 	FIXED_EXPRESSIONS: "ingest:fixed-expressions",
 	CLOZE_QUALITY: "ingest:cloze-quality",
+	CLOZE_GENERATION: "ingest:cloze-generation",
 	COMMON_WORDS_TOP: "ingest:common-words-top",
 	VOCAB_UNITS_LLM: "ingest:vocab-units-llm",
+	VOCAB_CLEANUP: "ingest:vocab-cleanup",
 } as const

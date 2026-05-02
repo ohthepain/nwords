@@ -164,9 +164,9 @@ export const progressRoute = new Hono()
 			})
 			const words = dedupeByEffectiveRank(wordsRaw)
 
-			// Get user knowledge + per-word sentence link counts (same notion as admin word panel / getWordSentences)
+			// Get user knowledge + per-word generated cloze counts.
 			const wordIds = words.map((w) => w.id)
-			const [knowledge, sentenceLinkCounts] = await Promise.all([
+			const [knowledge, generatedClozeCounts] = await Promise.all([
 				prisma.userWordKnowledge.findMany({
 					where: {
 						userId: user.id,
@@ -192,22 +192,22 @@ export const progressRoute = new Hono()
 								timesCorrect: true,
 							},
 				}),
-				prisma.sentenceWord.groupBy({
+				prisma.generatedCloze.groupBy({
 					by: ["wordId"],
 					where: {
 						wordId: { in: wordIds },
-						sentence: { languageId, markedForRemoval: false },
+						languageId,
 					},
 					_count: true,
 				}),
 			])
 
-			const linkCountByWordId = new Map(
-				sentenceLinkCounts.map((r) => [r.wordId, r._count as number]),
+			const clozeCountByWordId = new Map(
+				generatedClozeCounts.map((r) => [r.wordId, r._count as number]),
 			)
 
-			/** Omit frequency slots with no joinable cloze (stale `isTestable` or wrong POS row vs admin). */
-			const wordsWithJoinableClozes = words.filter((w) => (linkCountByWordId.get(w.id) ?? 0) > 0)
+			/** Omit frequency slots with no generated cloze material. */
+			const wordsWithJoinableClozes = words.filter((w) => (clozeCountByWordId.get(w.id) ?? 0) > 0)
 
 			const knowledgeMap = new Map(knowledge.map((k) => [k.wordId, k]))
 
@@ -255,9 +255,9 @@ export const progressRoute = new Hono()
 					confidence: k?.confidence ?? (isAssumedKnown ? 1.0 : null),
 					timesTested: k?.timesTested ?? 0,
 					timesCorrect: k?.timesCorrect ?? 0,
-					/** `SentenceWord` rows to target-language sentences not marked for removal (admin “Sentences”). */
-					testSentenceCount: linkCountByWordId.get(w.id) ?? 0,
-					/** Curated `testSentenceIds` length (may differ from link count if lists are stale). */
+					/** First-class generated cloze rows available for practice. */
+					testSentenceCount: clozeCountByWordId.get(w.id) ?? 0,
+					/** Curated legacy `testSentenceIds` length. */
 					curatedTestSentenceCount: w.testSentenceIds.length,
 				}
 				if (!includeDev) return base
