@@ -372,7 +372,12 @@ export const adminLanguagesRoute = new Hono()
 			const generated = await tx.generatedCloze.deleteMany({ where: { languageId: id } })
 			const words = await tx.word.updateMany({
 				where: { languageId: id },
-				data: { testSentenceIds: [], aiSynonyms: [] },
+				data: {
+					testSentenceIds: [],
+					aiSynonyms: [],
+					clozeUnusableReason: null,
+					clozeUnusableDetail: null,
+				},
 			})
 			const sentenceWords = await tx.sentenceWord.updateMany({
 				where: { sentence: { languageId: id } },

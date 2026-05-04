@@ -148,6 +148,22 @@ enum CurriculumSource {
   HERMIT_DAVE
 }
 
+/// Why a word row cannot host generated clozes (primary generator or validator).
+enum ClozeUnusableReason {
+  ARCHAIC
+  SELDOM_USED
+  INAPPROPRIATE_LANGUAGE
+  BAD_INPUT
+  /// INPUT UNIT JSON.pos does not match how the token is used in the language (clear errors only, e.g. adverb labeled VERB).
+  POS_MISMATCH
+  NOT_FEASIBLE_SURFACE_FORM
+  /// Curriculum text is a proper name / not suitable as a general vocabulary target.
+  PROPER_NOUN
+  /// Target is English or another non-target language (bad list row, stray gloss, etc.).
+  INCORRECT_LANGUAGE
+  OTHER
+}
+
 // ─── Words ──────────────────────────────────────────────
 
 model Word {
@@ -169,6 +185,10 @@ model Word {
   isAbbreviation  Boolean      @default(false)
   /// Whether this word is presented in vocabulary tests. False for function-word POS types.
   isTestable      Boolean      @default(true)
+  /// Structured reason when cloze generation marks the unit non-testable (see worker logs); null when testable or not set.
+  clozeUnusableReason ClozeUnusableReason?
+  /// Free-text nuance for `clozeUnusableReason` (required in prompts when code is OTHER).
+  clozeUnusableDetail String?
   /// Short learner-facing gloss (1–3 words), filled by WORDS_GLOSS_CLEANUP after common-curriculum Kaikki.
   gloss           String?
   cefrLevel       CefrLevel?

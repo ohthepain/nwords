@@ -42,6 +42,7 @@ type ClozePromptTestFields = {
   tags: string;
   candidatesPerUnit: string;
   selectedPerUnit: string;
+  runValidator: boolean;
 };
 
 function defaultClozePromptTestFields(): ClozePromptTestFields {
@@ -54,6 +55,7 @@ function defaultClozePromptTestFields(): ClozePromptTestFields {
     tags: "",
     candidatesPerUnit: "10",
     selectedPerUnit: "5",
+    runValidator: false,
   };
 }
 
@@ -63,10 +65,13 @@ type ClozePromptPreviewResult = {
   systemPrompt?: string;
   userPrompt?: string;
   unitJson?: object;
-  candidates?: object[];
+  rawLlmCandidates?: object[];
+  candidatePreviewRows?: Array<{ llmRaw: object; afterValidation: object | null }>;
   usableCandidates?: object[];
   selectedCandidates?: object[];
   summary?: { returned: number; usable: number; selected: number };
+  unitRejection?: { code: string; explanation: string } | null;
+  validator?: { verdict: string; explanation: string; reasonCode?: string } | null;
 };
 
 type LanguageAdminRow = {
@@ -456,6 +461,7 @@ const previewClozeGenerationPrompt = createServerFn({ method: "POST" })
       tags?: string[];
       candidatesPerUnit?: number;
       selectedPerUnit?: number;
+      runValidator?: boolean;
     }) => data,
   )
   .handler(async ({ data }) => {
@@ -474,6 +480,7 @@ const previewClozeGenerationPrompt = createServerFn({ method: "POST" })
       tags: data.tags ?? [],
       candidatesPerUnit: data.candidatesPerUnit ?? 10,
       selectedPerUnit: data.selectedPerUnit ?? 5,
+      runValidator: data.runValidator ?? false,
     };
     const jsonBody = JSON.stringify(payload);
     const res = await app.fetch(
@@ -914,6 +921,7 @@ function AdminLanguagesPage() {
             .filter(Boolean),
           candidatesPerUnit: cPer,
           selectedPerUnit: sPer,
+          runValidator: t.runValidator,
         },
       });
       setClozePromptPreviewByLang((m) => ({ ...m, [langId]: out }));
@@ -1641,7 +1649,12 @@ function AdminLanguagesPage() {
                           Runs a single LLM call with the same system prompt, user prompt, and JSON schema as{" "}
                           <span className="font-mono">Generate clozes</span>. Optional fields mirror a real row&apos;s{" "}
                           <span className="font-mono">curriculumUnit</span> (gloss → definitions, tags, rank, unit
-                          type). Nothing is written to the database.
+                          type). Nothing is written to the database. Each returned row shows{" "}
+                          <span className="font-mono">llmRaw</span> (what the model returned, same as stored{" "}
+                          <span className="font-mono">sourceCandidates</span>) and{" "}
+                          <span className="font-mono">afterValidation</span> (the same normalization the batch job
+                          applies before scoring — includes filling blanks when the model put{" "}
+                          <span className="font-mono">____</span> in <span className="font-mono">sentence</span>).
                         </p>
                         <div className="flex flex-wrap items-end gap-2 gap-y-2">
                           <div className="flex flex-col gap-0.5 min-w-[8rem] flex-1">
@@ -1801,15 +1814,28 @@ function AdminLanguagesPage() {
                             className="h-7 rounded border border-input bg-background px-2 text-xs font-mono focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                           />
                         </div>
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          className="h-7 text-[11px] px-2 font-mono"
-                          disabled={clozePromptPreviewLoading === lang.id || generatingClozes === lang.id}
-                          onClick={() => void handlePreviewClozePrompt(lang.id)}
-                        >
-                          {clozePromptPreviewLoading === lang.id ? "Running…" : "Run prompt preview"}
-                        </Button>
+                        <div className="flex flex-wrap items-center gap-3">
+                          <label className="inline-flex items-center gap-1.5 text-[11px] font-mono text-muted-foreground cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={getClozePromptTest(lang.id).runValidator}
+                              onChange={(e) =>
+                                patchClozePromptTest(lang.id, { runValidator: e.target.checked })
+                              }
+                              className="rounded border-input"
+                            />
+                            Run validator if short (2nd LLM)
+                          </label>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            className="h-7 text-[11px] px-2 font-mono"
+                            disabled={clozePromptPreviewLoading === lang.id || generatingClozes === lang.id}
+                            onClick={() => void handlePreviewClozePrompt(lang.id)}
+                          >
+                            {clozePromptPreviewLoading === lang.id ? "Running…" : "Run prompt preview"}
+                          </Button>
+                        </div>
                         {clozePromptPreviewByLang[lang.id]?.summary ? (
                           <div className="rounded border border-border/70 bg-background/80 p-2 space-y-2 text-[11px]">
                             <p className="font-mono text-muted-foreground tabular-nums">
@@ -1817,6 +1843,27 @@ function AdminLanguagesPage() {
                               {clozePromptPreviewByLang[lang.id].summary?.usable ?? "—"} usable; selection would keep{" "}
                               {clozePromptPreviewByLang[lang.id].summary?.selected ?? "—"}.
                             </p>
+                            {clozePromptPreviewByLang[lang.id].unitRejection ? (
+                              <p className="text-[11px] font-mono text-amber-700 dark:text-amber-400">
+                                Unit rejection:{" "}
+                                <span className="font-semibold">
+                                  {clozePromptPreviewByLang[lang.id].unitRejection?.code}
+                                </span>
+                                — {clozePromptPreviewByLang[lang.id].unitRejection?.explanation}
+                              </p>
+                            ) : null}
+                            {clozePromptPreviewByLang[lang.id].validator ? (
+                              <p className="text-[11px] font-mono text-muted-foreground">
+                                Validator:{" "}
+                                <span className="text-foreground">
+                                  {clozePromptPreviewByLang[lang.id].validator?.verdict}
+                                </span>
+                                {clozePromptPreviewByLang[lang.id].validator?.reasonCode
+                                  ? ` (${clozePromptPreviewByLang[lang.id].validator?.reasonCode})`
+                                  : ""}
+                                — {clozePromptPreviewByLang[lang.id].validator?.explanation}
+                              </p>
+                            ) : null}
                             <details className="group">
                               <summary className="cursor-pointer font-mono text-[10px] text-muted-foreground uppercase tracking-[0.12em]">
                                 System + user prompts
@@ -1835,10 +1882,18 @@ function AdminLanguagesPage() {
                             </details>
                             <details className="group">
                               <summary className="cursor-pointer font-mono text-[10px] text-muted-foreground uppercase tracking-[0.12em]">
-                                Raw candidates
+                                Returned rows (LLM raw + afterValidation)
                               </summary>
                               <pre className="mt-1 max-h-64 overflow-auto rounded bg-muted/40 p-2 text-[10px] leading-snug whitespace-pre-wrap break-words">
-                                {JSON.stringify(clozePromptPreviewByLang[lang.id].candidates, null, 2)}
+                                {JSON.stringify(clozePromptPreviewByLang[lang.id].candidatePreviewRows, null, 2)}
+                              </pre>
+                            </details>
+                            <details className="group">
+                              <summary className="cursor-pointer font-mono text-[10px] text-muted-foreground uppercase tracking-[0.12em]">
+                                LLM raw only (sourceCandidates-shaped)
+                              </summary>
+                              <pre className="mt-1 max-h-48 overflow-auto rounded bg-muted/40 p-2 text-[10px] leading-snug whitespace-pre-wrap break-words">
+                                {JSON.stringify(clozePromptPreviewByLang[lang.id].rawLlmCandidates, null, 2)}
                               </pre>
                             </details>
                             <details className="group">

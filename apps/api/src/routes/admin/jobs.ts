@@ -1150,6 +1150,7 @@ export const adminJobsRoute = new Hono()
 				form: z.record(z.string(), z.unknown()).nullable().optional(),
 				candidatesPerUnit: z.number().int().min(5).max(20).optional().default(10),
 				selectedPerUnit: z.number().int().min(1).max(10).optional().default(5),
+				runValidator: z.boolean().optional().default(false),
 			}),
 		),
 		async (c) => {
@@ -1182,6 +1183,7 @@ export const adminJobsRoute = new Hono()
 					form: body.form ?? null,
 					candidatesPerUnit: body.candidatesPerUnit,
 					selectedPerUnit: body.selectedPerUnit,
+					runValidator: body.runValidator,
 				})
 				return c.json({
 					languageCode: language.code,
@@ -1189,11 +1191,14 @@ export const adminJobsRoute = new Hono()
 					unitJson: preview.unitJson,
 					systemPrompt: preview.systemPrompt,
 					userPrompt: preview.userPrompt,
-					candidates: preview.candidates,
+					rawLlmCandidates: preview.rawLlmCandidates,
+					unitRejection: preview.unitRejection,
+					candidatePreviewRows: preview.candidatePreviewRows,
 					usableCandidates: preview.usableCandidates,
 					selectedCandidates: preview.selectedCandidates,
+					validator: preview.validator,
 					summary: {
-						returned: preview.candidates.length,
+						returned: preview.rawLlmCandidates.length,
 						usable: preview.usableCandidates.length,
 						selected: preview.selectedCandidates.length,
 					},

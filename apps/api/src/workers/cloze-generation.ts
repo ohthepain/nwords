@@ -1,5 +1,5 @@
 import type { Prisma } from "@nwords/db";
-import { prisma } from "@nwords/db";
+import { ClozeUnusableReason, prisma } from "@nwords/db";
 import { type LanguageModel, Output, generateText } from "ai";
 import type PgBoss from "pg-boss";
 import { z } from "zod";
@@ -23,6 +23,15 @@ const DEFAULT_CANDIDATES_PER_UNIT = 10;
 const DEFAULT_SELECTED_PER_UNIT = 5;
 const CLOZE_PROGRESS_METADATA_INTERVAL = 10;
 
+/** After the first call, retry this many times when: (1) parsed empty `candidates` with no rejection, or (2) only `NOT_FEASIBLE_SURFACE_FORM` rejection (often model confusion, e.g. common words). Other rejection codes return immediately. */
+const CLOZE_EMPTY_CANDIDATES_MAX_RETRIES = 5;
+const CLOZE_EMPTY_CANDIDATES_RETRY_BASE_MS = 1500;
+
+/** Full primary generation attempts: first try plus further rounds when the validator asks to retry. */
+const CLOZE_GENERATION_MAX_ROUNDS = 3;
+
+const CLOZE_DETAIL_MAX_LEN = 4000;
+
 const difficultySchema = z.enum(["easy", "medium", "hard"]);
 
 const clozeCandidateSchema = z.object({
@@ -40,11 +49,46 @@ const clozeCandidateSchema = z.object({
   selectionReason: z.string(),
 });
 
+const clozeUnitRejectionSchema = z.object({
+  code: z.nativeEnum(ClozeUnusableReason),
+  explanation: z.string().min(1),
+});
+
 const clozeGenerationSchema = z.object({
   candidates: z.array(clozeCandidateSchema),
+  /** Required key for OpenAI strict `response_format`; use null when returning candidates. */
+  unitRejection: clozeUnitRejectionSchema.nullable(),
+});
+
+const clozeValidatorVerdictSchema = z.enum(["RETRY_GENERATION", "FINALIZE_NOT_TESTABLE"]);
+
+const clozeValidatorSchema = z.object({
+  verdict: clozeValidatorVerdictSchema,
+  explanation: z.string().min(1),
+  /** Required key for strict JSON schema; use null when verdict is RETRY_GENERATION. */
+  reasonCode: z.nativeEnum(ClozeUnusableReason).nullable(),
 });
 
 type ClozeCandidate = z.infer<typeof clozeCandidateSchema>;
+type ClozeGenerationModelOutput = z.infer<typeof clozeGenerationSchema>;
+export type ClozeUnitRejection = z.infer<typeof clozeUnitRejectionSchema>;
+export type ClozeValidatorOutput = z.infer<typeof clozeValidatorSchema>;
+
+/** If the model returns both rejection and candidates, treat as mistake and ignore rejection. */
+function normalizePrimaryGenerationOutput(output: ClozeGenerationModelOutput): {
+  candidates: ClozeCandidate[];
+  unitRejection: ClozeUnitRejection | null;
+} {
+  const candidates = output.candidates;
+  const raw = output.unitRejection;
+  if (raw && candidates.length > 0) {
+    return { candidates, unitRejection: null };
+  }
+  if (raw && candidates.length === 0) {
+    return { candidates, unitRejection: raw };
+  }
+  return { candidates, unitRejection: null };
+}
 
 function clozeGenerationLlmConcurrency(): number {
   const raw = Number(process.env.CLOZE_GENERATION_LLM_CONCURRENCY);
@@ -85,8 +129,14 @@ function normalizeText(value: string): string {
   return value.normalize("NFC").trim().replace(/\s+/g, " ");
 }
 
+/** Models often wrap the target in fake Markdown bold (__word__). Strip before blank normalization. */
+function stripMarkdownBoldUnderscores(value: string): string {
+  return value.replace(/__([\p{L}\p{N}]+)__/gu, "$1");
+}
+
 function normalizeBlank(value: string): string {
-  return normalizeText(value).replace(/_{1,}/g, "____");
+  const stripped = stripMarkdownBoldUnderscores(normalizeText(value));
+  return stripped.replace(/_{1,}/g, "____");
 }
 
 function wordCount(text: string): number {
@@ -274,10 +324,28 @@ function selectBestClozes(usable: ClozeCandidate[], selectedPerUnit: number): Cl
     .sort((a, b) => order[a.difficulty] - order[b.difficulty] || candidateScore(b) - candidateScore(a));
 }
 
-function summarizeRejectedCandidates(candidates: ClozeCandidate[], usableCount: number): string {
+function countAnswerMatchesButMissingSurfaceForm(candidates: ClozeCandidate[], targetText: string): number {
+  const target = normalizeText(targetText);
+  if (!target || splitUnitParts(target).length >= 2) return 0;
+  let n = 0;
+  for (const c of candidates) {
+    if (normalizedAnswerKey(c.answer) !== normalizedAnswerKey(target)) continue;
+    const sentence = normalizeBlank(c.sentence);
+    if (fallbackClozeFromAnswer(sentence, normalizeText(c.answer)) === null) n++;
+  }
+  return n;
+}
+
+function summarizeRejectedCandidates(
+  candidates: ClozeCandidate[],
+  usableCount: number,
+  targetLemma: string,
+): string {
   return JSON.stringify({
     returned: candidates.length,
     usable: usableCount,
+    rowsAnswerOkButSentenceLacksExactSurface:
+      countAnswerMatchesButMissingSurfaceForm(candidates, targetLemma),
     sample: candidates.slice(0, 3).map((candidate) => ({
       sentence: candidate.sentence,
       cloze: candidate.cloze,
@@ -312,6 +380,8 @@ function buildSystemPrompt(languageName: string): string {
 
 Generate sentence candidates for modern everyday spoken ${languageName}.
 
+Each request is one curriculum row: INPUT UNIT JSON.text is the exact surface form the product chose for that row (spelling, tense, voice, agreement — already decided). You do not pick or invent a different inflection; other forms are separate curriculum entries the learner meets on their own schedule.
+
 Goals:
 - Prefer high-frequency conversational sentence shapes.
 - Avoid literary, formal, archaic, translated, or textbook-sounding phrasing.
@@ -320,22 +390,30 @@ Goals:
 - Each sentence should introduce only one new concept; surrounding words should be common.
 
 Rules:
-- Return exactly the requested number of candidates.
+- You will be asked for up to N candidate(s). Return ONLY rows that fully satisfy every rule here — never pad with invalid or inconsistent clozes. Fewer valid rows (including none) is better than rows where the sentence uses a different surface form than INPUT UNIT JSON.text.
 - Each candidate must use these fields exactly:
-  - sentence: the full sentence with the answer visible and no blanks.
+  - sentence: the full sentence with the answer visible and no blanks — never "____", underscores-as-blank, or Markdown emphasis here; put the blank only in cloze.
   - cloze: the same sentence with only the answer replaced by "____".
-  - answer: the exact text removed from cloze.
+  - answer: the exact text removed from cloze (must equal INPUT UNIT JSON.text).
 - alternatives: always return [].
 - Most sentences should be 5-12 words. For very common function words or pronouns, 2-4 words is acceptable when the cloze is still unambiguous.
-- Include at least 2 questions, at least 2 statements, and at least 1 multi-sentence candidate.
+- When you return more than one candidate, vary questions, statements, and multi-sentence shapes when it does not break the exact-surface-form rule.
 - Use "____" for blanks in cloze only, never in sentence.
+- Do not wrap words in fake Markdown emphasis (e.g. __word__); write plain ${languageName} text only.
 - The blank must be unambiguous and must not remove surrounding words.
-- The visible sentence must contain the exact learning unit text, not a lemma, synonym, or different inflection.
-- VERB: cloze the main verb.
-- PARTICLE/PREPOSITION: cloze the particle or preposition.
-- SPLIT: cloze the fixed parts only. For "ser ... ut", sentence may be "Du ser pigg ut.", cloze must be "Du ____ pigg ____.", and answer must be "ser ... ut".
-- FIXED_EXPR: cloze the full expression.
-- NOUN: prefer object position.
+- The visible sentence must literally contain INPUT UNIT JSON.text as written — not a lemma, synonym, or any other inflection. You are not generating "the verb" in abstract; you are placing this exact token in natural context.
+- If you cannot produce natural ${languageName} sentences that contain that exact string as a real word, omit those candidates (or return an empty list) instead of substituting another form and copying the target into "answer".
+- WORD (including verbs as surface forms): blank only that exact token in the sentence — never a different person, tense, or voice than INPUT UNIT JSON.text.
+- PARTICLE/PREPOSITION: blank the particle or preposition that matches INPUT UNIT JSON.text.
+- SPLIT: blank the fixed parts only. For "ser ... ut", sentence may be "Du ser pigg ut.", cloze must be "Du ____ pigg ____.", and answer must be "ser ... ut".
+- FIXED_EXPR: blank the full expression given as INPUT UNIT JSON.text.
+- NOUN: prefer object position when it fits naturally.
+
+If you cannot produce valid candidates under these rules (exact surface form, natural ${languageName}, appropriate for a general learner — not a personal name, not a stray English/other-language token, not only archaic or offensive material, not broken curriculum JSON), do not invent fake rows. Instead return unitRejection:
+- unitRejection.code must be one of: ARCHAIC, SELDOM_USED, INAPPROPRIATE_LANGUAGE, BAD_INPUT (curriculum row is malformed or inconsistent), POS_MISMATCH (INPUT UNIT JSON.pos is clearly wrong for this token in ${languageName} — e.g. an adverb labeled VERB; use only for obvious errors, not borderline grammar), NOT_FEASIBLE_SURFACE_FORM (only if the exact token genuinely cannot appear as a real ${languageName} word in natural prose — not for "hard to think of" or common words like everyday nouns; misuse this and output will be retried), PROPER_NOUN (name / unsuitable as general vocab), INCORRECT_LANGUAGE (target is not ${languageName}), OTHER.
+- unitRejection.explanation: one or two short sentences (required; for OTHER be specific).
+- When you return unitRejection, candidates must be an empty array [].
+- If you return any valid candidates, set unitRejection to null. Never return both a non-null unitRejection and non-empty candidates.
 
 Score every candidate:
 - naturalness 0-5
@@ -347,19 +425,182 @@ Score every candidate:
 Return JSON only.`;
 }
 
-function buildPrompt(unitJson: unknown, candidatesPerUnit: number): string {
+function buildPrompt(unitJson: unknown, candidatesPerUnit: number, languageName: string): string {
   return `INPUT UNIT JSON:
 ${JSON.stringify(unitJson, null, 2)}
 
-Generate ${candidatesPerUnit} candidate clozes for this unit.
+Generate up to ${candidatesPerUnit} candidate clozes for this unit. Each returned row must be fully valid.
 
 CRITICAL:
+- INPUT UNIT JSON.text is the exact string this curriculum row tests (tense/voice/etc. are already chosen; do not substitute another form).
 - The "answer" field must be exactly INPUT UNIT JSON.text.
-- The full "sentence" must contain that exact text form. Do not use another inflection.
+- The full "sentence" must contain that exact same text as a real token (whole word boundaries), not a related form with the same lemma.
+- Example: text "hämtas" requires the substring "hämtas" in the sentence. A sentence with only "hämta" and answer "hämtas" is INVALID — that would be a different curriculum row.
 - Return alternatives as [] because only the exact learning unit is accepted.
 - Do not generate clozes for another useful word in the sentence.
 - If INPUT UNIT JSON.text is "skulle", answer must be "skulle", not a nearby verb like "åka".
-- If INPUT UNIT JSON.text is "då", answer must be "då", not a connector like "så".`;
+- If INPUT UNIT JSON.text is "då", answer must be "då", not a connector like "så".
+- If INPUT UNIT JSON.pos is clearly wrong for this surface form in ${languageName} (you are sure the token is not that part of speech in normal use), return candidates: [] and unitRejection with code POS_MISMATCH — not NOT_FEASIBLE_SURFACE_FORM. Do not use POS_MISMATCH when POS could plausibly be argued; only clear curriculum mistakes.
+- If you cannot comply otherwise, return candidates: [] and a non-null unitRejection with code + explanation instead of padding invalid rows. Otherwise set unitRejection to null.`;
+}
+
+function buildClozeValidatorSystemPrompt(languageName: string): string {
+  return `You validate cloze-generation attempts for a ${languageName} learning app.
+
+The generator was asked for sentences where INPUT UNIT JSON.text appears exactly as a token; answers must match that string; cloze uses "____" for the blank.
+
+Your job: decide whether the shortfall (too few usable rows after deterministic validation) is likely a bad model run / fixable inconsistency (RETRY_GENERATION) or the unit is genuinely unsuitable / bad input (FINALIZE_NOT_TESTABLE).
+
+For FINALIZE_NOT_TESTABLE, set reasonCode to one of: ARCHAIC, SELDOM_USED, INAPPROPRIATE_LANGUAGE, BAD_INPUT, POS_MISMATCH, NOT_FEASIBLE_SURFACE_FORM, PROPER_NOUN, INCORRECT_LANGUAGE, OTHER — matching the root cause. explanation must be concise.
+
+For RETRY_GENERATION, set reasonCode to null; explanation should say what looks wrong (e.g. systematic wrong inflection in sentences, obvious flake).
+
+Return JSON only.`;
+}
+
+function buildClozeValidatorUserPrompt(parts: {
+  unitJson: unknown;
+  targetLemma: string;
+  candidatesJson: string;
+  returned: number;
+  usable: number;
+  selected: number;
+  selectedPerUnit: number;
+  candidateSummaryJson: string;
+}): string {
+  return `INPUT UNIT JSON:
+${JSON.stringify(parts.unitJson, null, 2)}
+
+targetLemma (expected answer surface): ${JSON.stringify(parts.targetLemma)}
+
+Counts: returned=${parts.returned}, usableAfterValidation=${parts.usable}, selectedBest=${parts.selected}, requiredSelected=${parts.selectedPerUnit}
+
+Summary: ${parts.candidateSummaryJson}
+
+Raw candidate rows JSON from the generator:
+${parts.candidatesJson}
+
+Verdict: RETRY_GENERATION if another generation attempt could reasonably fix this. FINALIZE_NOT_TESTABLE if the unit or input is the real problem.`;
+}
+
+async function runClozeValidatorLlm(options: {
+  model: LanguageModel;
+  languageName: string;
+  unitJson: unknown;
+  targetLemma: string;
+  candidates: ClozeCandidate[];
+  usableCount: number;
+  selectedCount: number;
+  selectedPerUnit: number;
+  candidateSummaryJson: string;
+}): Promise<ClozeValidatorOutput> {
+  const {
+    model,
+    languageName,
+    unitJson,
+    targetLemma,
+    candidates,
+    usableCount,
+    selectedCount,
+    selectedPerUnit,
+    candidateSummaryJson,
+  } = options;
+
+  const { output } = await generateText({
+    model,
+    output: Output.object({ schema: clozeValidatorSchema }),
+    system: buildClozeValidatorSystemPrompt(languageName),
+    prompt: buildClozeValidatorUserPrompt({
+      unitJson,
+      targetLemma,
+      candidatesJson: JSON.stringify(candidates, null, 2),
+      returned: candidates.length,
+      usable: usableCount,
+      selected: selectedCount,
+      selectedPerUnit,
+      candidateSummaryJson,
+    }),
+  });
+  return output;
+}
+
+async function markWordNonTestableForCloze(
+  wordId: string,
+  reason: ClozeUnusableReason,
+  detail: string,
+): Promise<void> {
+  const trimmed = detail.trim().slice(0, CLOZE_DETAIL_MAX_LEN);
+  await prisma.$transaction([
+    prisma.generatedCloze.deleteMany({ where: { wordId } }),
+    prisma.word.update({
+      where: { id: wordId },
+      data: {
+        isTestable: false,
+        testSentenceIds: [],
+        aiSynonyms: [],
+        clozeUnusableReason: reason,
+        clozeUnusableDetail: trimmed || null,
+      },
+    }),
+  ]);
+}
+
+async function generateClozeLlmStructuredOutput(options: {
+  model: LanguageModel;
+  system: string;
+  prompt: string;
+  onEmptyCandidatesRetry?: (info: {
+    attempt: number;
+    finishReason: string;
+    cause: "empty_candidates" | "not_feasible_rejection";
+  }) => void | Promise<void>;
+}) {
+  const { model, system, prompt, onEmptyCandidatesRetry } = options;
+  let lastResult!: Awaited<ReturnType<typeof generateText>>;
+  for (let attempt = 0; attempt <= CLOZE_EMPTY_CANDIDATES_MAX_RETRIES; attempt++) {
+    lastResult = await generateText({
+      model,
+      output: Output.object({ schema: clozeGenerationSchema }),
+      system,
+      prompt,
+    });
+    const out = lastResult.output;
+    if (out.candidates.length > 0) {
+      return lastResult;
+    }
+
+    if (out.unitRejection == null) {
+      if (attempt < CLOZE_EMPTY_CANDIDATES_MAX_RETRIES) {
+        await onEmptyCandidatesRetry?.({
+          attempt: attempt + 1,
+          finishReason: lastResult.finishReason,
+          cause: "empty_candidates",
+        });
+        await new Promise<void>((resolve) =>
+          setTimeout(resolve, CLOZE_EMPTY_CANDIDATES_RETRY_BASE_MS * (attempt + 1)),
+        );
+      }
+      continue;
+    }
+
+    if (out.unitRejection.code === ClozeUnusableReason.NOT_FEASIBLE_SURFACE_FORM) {
+      if (attempt < CLOZE_EMPTY_CANDIDATES_MAX_RETRIES) {
+        await onEmptyCandidatesRetry?.({
+          attempt: attempt + 1,
+          finishReason: lastResult.finishReason,
+          cause: "not_feasible_rejection",
+        });
+        await new Promise<void>((resolve) =>
+          setTimeout(resolve, CLOZE_EMPTY_CANDIDATES_RETRY_BASE_MS * (attempt + 1)),
+        );
+        continue;
+      }
+      return lastResult;
+    }
+
+    return lastResult;
+  }
+  return lastResult;
 }
 
 async function generatedClozeCountsByWordId(wordIds: string[]): Promise<Map<string, number>> {
@@ -378,7 +619,12 @@ async function resetClozeMaterial(languageId: string, jobId: string) {
     prisma.generatedCloze.deleteMany({ where: { languageId } }),
     prisma.word.updateMany({
       where: { languageId },
-      data: { testSentenceIds: [], aiSynonyms: [] },
+      data: {
+        testSentenceIds: [],
+        aiSynonyms: [],
+        clozeUnusableReason: null,
+        clozeUnusableDetail: null,
+      },
     }),
     prisma.sentenceWord.updateMany({
       where: { sentence: { languageId } },
@@ -522,38 +768,102 @@ export async function processClozeGenerationJob(job: PgBoss.Job<ClozeGenerationJ
           definitions: word.definitions as Prisma.JsonValue,
           curriculumUnit: (word.curriculumUnit ?? null) as Prisma.JsonValue | null,
         });
-        const { output } = await generateText({
-          model,
-          output: Output.object({ schema: clozeGenerationSchema }),
-          system: buildSystemPrompt(language.name),
-          prompt: buildPrompt(unitJson, candidatesPerUnit),
-        });
 
-        const usableCandidates = normalizeCandidates(output.candidates, word.lemma);
-        const selected = selectBestClozes(usableCandidates, selectedPerUnit);
-        if (selected.length < selectedPerUnit) {
+        let successOutput: ClozeGenerationModelOutput | null = null;
+        let successSelected: ClozeCandidate[] = [];
+
+        wordLoop: for (let round = 0; round < CLOZE_GENERATION_MAX_ROUNDS; round++) {
+          const { output: rawOutput } = await generateClozeLlmStructuredOutput({
+            model,
+            system: buildSystemPrompt(language.name),
+            prompt: buildPrompt(unitJson, candidatesPerUnit, language.name),
+            onEmptyCandidatesRetry: async ({ attempt, finishReason, cause }) => {
+              const msg =
+                cause === "not_feasible_rejection"
+                  ? `NOT_FEASIBLE_SURFACE_FORM (often model confusion); retry ${attempt}/${CLOZE_EMPTY_CANDIDATES_MAX_RETRIES}…`
+                  : `empty LLM candidate list (finish: ${finishReason}), retry ${attempt}/${CLOZE_EMPTY_CANDIDATES_MAX_RETRIES}…`;
+              await appendJobLog(jobId, "out", `"${word.lemma} (${word.pos})": ${msg}`);
+            },
+          });
+
+          if (rawOutput.unitRejection != null && rawOutput.candidates.length > 0) {
+            await appendJobLog(
+              jobId,
+              "out",
+              `"${word.lemma} (${word.pos})": LLM returned unitRejection with non-empty candidates — ignoring rejection.`,
+            );
+          }
+
+          const { candidates, unitRejection } = normalizePrimaryGenerationOutput(rawOutput);
+
+          if (unitRejection != null) {
+            errorThisWord = 1;
+            const explain = unitRejection.explanation.trim();
+            await markWordNonTestableForCloze(word.id, unitRejection.code, explain);
+            markedNonTestableThisRun += 1;
+            await appendJobLog(
+              jobId,
+              "out",
+              `"${word.lemma} (${word.pos})": unit rejected by generator — ${unitRejection.code}: ${explain}`,
+            );
+            break wordLoop;
+          }
+
+          const usableCandidates = normalizeCandidates(candidates, word.lemma);
+          const selected = selectBestClozes(usableCandidates, selectedPerUnit);
+
+          if (selected.length >= selectedPerUnit) {
+            successOutput = rawOutput;
+            successSelected = selected;
+            break wordLoop;
+          }
+
+          const isLastRound = round === CLOZE_GENERATION_MAX_ROUNDS - 1;
+          const summaryJson = summarizeRejectedCandidates(candidates, usableCandidates.length, word.lemma);
+          const validator = await runClozeValidatorLlm({
+            model,
+            languageName: language.name,
+            unitJson,
+            targetLemma: word.lemma,
+            candidates,
+            usableCount: usableCandidates.length,
+            selectedCount: selected.length,
+            selectedPerUnit,
+            candidateSummaryJson: summaryJson,
+          });
+
+          if (validator.verdict === "RETRY_GENERATION" && !isLastRound) {
+            await appendJobLog(
+              jobId,
+              "out",
+              `"${word.lemma} (${word.pos})": validator → RETRY_GENERATION (round ${round + 1}/${CLOZE_GENERATION_MAX_ROUNDS}): ${validator.explanation.trim()}`,
+            );
+            continue;
+          }
+
           errorThisWord = 1;
-          await prisma.$transaction([
-            prisma.generatedCloze.deleteMany({ where: { wordId: word.id } }),
-            prisma.word.update({
-              where: { id: word.id },
-              data: {
-                isTestable: false,
-                testSentenceIds: [],
-                aiSynonyms: [],
-              },
-            }),
-          ]);
+          const exhausted = isLastRound && validator.verdict === "RETRY_GENERATION";
+          const reasonCode =
+            validator.verdict === "FINALIZE_NOT_TESTABLE"
+              ? (validator.reasonCode ?? ClozeUnusableReason.OTHER)
+              : ClozeUnusableReason.OTHER;
+          const detail = exhausted
+            ? `${validator.explanation.trim()} (exhausted ${CLOZE_GENERATION_MAX_ROUNDS} generation round(s))`
+            : validator.explanation.trim();
+          await markWordNonTestableForCloze(word.id, reasonCode, detail);
           markedNonTestableThisRun += 1;
           await appendJobLog(
             jobId,
             "out",
-            `"${word.lemma} (${word.pos})": only ${selected.length}/${selectedPerUnit} usable cloze(s) after validation — marked non-testable. Candidate summary: ${summarizeRejectedCandidates(output.candidates, usableCandidates.length)}`,
+            `"${word.lemma} (${word.pos})": ${validator.verdict} — ${reasonCode}: ${detail}. Candidate summary: ${summaryJson}`,
           );
-        } else {
+          break wordLoop;
+        }
+
+        if (successOutput && successSelected.length >= selectedPerUnit) {
           await prisma.$transaction([
             prisma.generatedCloze.deleteMany({ where: { wordId: word.id } }),
-            ...selected.map((candidate, index) =>
+            ...successSelected.map((candidate, index) =>
               prisma.generatedCloze.create({
                 data: {
                   languageId,
@@ -565,7 +875,7 @@ export async function processClozeGenerationJob(job: PgBoss.Job<ClozeGenerationJ
                   difficulty: candidate.difficulty,
                   tags: candidate.tags,
                   sortOrder: index + 1,
-                  sourceCandidates: output.candidates as Prisma.InputJsonValue,
+                  sourceCandidates: successOutput.candidates as Prisma.InputJsonValue,
                   selectionReason: candidate.selectionReason,
                 },
               }),
@@ -575,13 +885,15 @@ export async function processClozeGenerationJob(job: PgBoss.Job<ClozeGenerationJ
               data: {
                 isTestable: true,
                 aiSynonyms: [],
+                clozeUnusableReason: null,
+                clozeUnusableDetail: null,
               },
             }),
           ]);
 
-          generatedThisRun += selected.length;
+          generatedThisRun += successSelected.length;
           if (word.effectiveRank <= 50 || generatedThisRun % 100 === 0) {
-            await appendJobLog(jobId, "out", `"${word.lemma}": stored ${selected.length} cloze(s).`);
+            await appendJobLog(jobId, "out", `"${word.lemma}": stored ${successSelected.length} cloze(s).`);
           }
         }
       } catch (err) {
@@ -676,7 +988,7 @@ export async function processClozeGenerationJob(job: PgBoss.Job<ClozeGenerationJ
   }
 }
 
-/** Admin-only: run one LLM call with the same prompts/schema as batch cloze generation (no DB writes). */
+/** Admin-only: run one primary LLM call (and optional validator) with the same prompts/schemas as batch cloze generation (no DB writes). */
 export async function runClozeGenerationPromptPreview(options: {
   model: LanguageModel;
   languageName: string;
@@ -689,16 +1001,33 @@ export async function runClozeGenerationPromptPreview(options: {
   form: Record<string, unknown> | null;
   candidatesPerUnit: number;
   selectedPerUnit: number;
+  /** Extra LLM call when selection falls short and there is no primary unitRejection. */
+  runValidator?: boolean;
 }): Promise<{
   unitJson: ReturnType<typeof buildUnitJson>;
   systemPrompt: string;
   userPrompt: string;
-  candidates: ClozeCandidate[];
+  rawLlmCandidates: ClozeCandidate[];
+  unitRejection: ClozeUnitRejection | null;
+  candidatePreviewRows: Array<{ llmRaw: ClozeCandidate; afterValidation: ClozeCandidate | null }>;
   usableCandidates: ClozeCandidate[];
   selectedCandidates: ClozeCandidate[];
+  validator: ClozeValidatorOutput | null;
 }> {
-  const { model, languageName, lemma, pos, unitType, gloss, rank, tags, form, candidatesPerUnit, selectedPerUnit } =
-    options;
+  const {
+    model,
+    languageName,
+    lemma,
+    pos,
+    unitType,
+    gloss,
+    rank,
+    tags,
+    form,
+    candidatesPerUnit,
+    selectedPerUnit,
+    runValidator = false,
+  } = options;
 
   const trimmedGloss = gloss.trim();
   const definitions = (trimmedGloss ? [trimmedGloss] : []) as unknown as Prisma.JsonValue;
@@ -716,24 +1045,54 @@ export async function runClozeGenerationPromptPreview(options: {
     curriculumUnit,
   });
   const systemPrompt = buildSystemPrompt(languageName);
-  const userPrompt = buildPrompt(unitJson, candidatesPerUnit);
+  const userPrompt = buildPrompt(unitJson, candidatesPerUnit, languageName);
 
-  const { output } = await generateText({
+  const { output } = await generateClozeLlmStructuredOutput({
     model,
-    output: Output.object({ schema: clozeGenerationSchema }),
     system: systemPrompt,
     prompt: userPrompt,
   });
 
-  const usableCandidates = normalizeCandidates(output.candidates, lemma);
+  const { candidates, unitRejection } = normalizePrimaryGenerationOutput(output);
+
+  const candidatePreviewRows = candidates.map((llmRaw: ClozeCandidate) => ({
+    llmRaw,
+    afterValidation: normalizeCandidate(llmRaw, lemma),
+  }));
+  const usableCandidates = candidatePreviewRows
+    .map((row: { llmRaw: ClozeCandidate; afterValidation: ClozeCandidate | null }) => row.afterValidation)
+    .filter((c: ClozeCandidate | null): c is ClozeCandidate => c !== null);
   const selectedCandidates = selectBestClozes(usableCandidates, selectedPerUnit);
+
+  let validator: ClozeValidatorOutput | null = null;
+  if (
+    runValidator &&
+    unitRejection == null &&
+    selectedCandidates.length < selectedPerUnit
+  ) {
+    const summaryJson = summarizeRejectedCandidates(candidates, usableCandidates.length, lemma);
+    validator = await runClozeValidatorLlm({
+      model,
+      languageName,
+      unitJson,
+      targetLemma: lemma,
+      candidates,
+      usableCount: usableCandidates.length,
+      selectedCount: selectedCandidates.length,
+      selectedPerUnit,
+      candidateSummaryJson: summaryJson,
+    });
+  }
 
   return {
     unitJson,
     systemPrompt,
     userPrompt,
-    candidates: output.candidates,
+    rawLlmCandidates: candidates,
+    unitRejection,
+    candidatePreviewRows,
     usableCandidates,
     selectedCandidates,
+    validator,
   };
 }

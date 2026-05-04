@@ -84,6 +84,8 @@ const searchWords = createServerFn({ method: "POST" })
 			cefrLevel: CefrLevel | null
 			isOffensive: boolean
 			isTestable: boolean
+			clozeUnusableReason: string | null
+			clozeUnusableDetail: string | null
 			language: { code: string }
 			_count: { sentenceWords: number }
 		}) {
@@ -104,6 +106,8 @@ const searchWords = createServerFn({ method: "POST" })
 				cefrLevel: w.cefrLevel ?? cefrLevelForFrequencyRank(w.effectiveRank),
 				isOffensive: w.isOffensive,
 				isTestable: w.isTestable,
+				clozeUnusableReason: w.clozeUnusableReason,
+				clozeUnusableDetail: w.clozeUnusableDetail,
 				langCode: w.language.code,
 				sentenceCount: w._count.sentenceWords,
 			}
@@ -332,6 +336,9 @@ type AdminWordRow = {
 	cefrLevel: string | null
 	isOffensive: boolean
 	isTestable: boolean
+	/** Set when cloze generation marks the row non-testable with a structured reason. */
+	clozeUnusableReason: string | null
+	clozeUnusableDetail: string | null
 	langCode: string
 	sentenceCount: number
 }
@@ -1035,7 +1042,14 @@ function AdminWordsPage() {
 											{word.id}
 										</span>
 										<span className="min-w-0 flex items-center gap-2">
-											<span className="text-sm font-medium font-mono group-hover:underline underline-offset-2 decoration-foreground/60 truncate text-left">
+											<span
+												className="text-sm font-medium font-mono group-hover:underline underline-offset-2 decoration-foreground/60 truncate text-left"
+												title={
+													word.clozeUnusableReason
+														? `Cloze: ${word.clozeUnusableReason}${word.clozeUnusableDetail ? ` — ${word.clozeUnusableDetail}` : ""}`
+														: undefined
+												}
+											>
 												{word.lemma}
 											</span>
 											<span

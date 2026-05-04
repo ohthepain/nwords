@@ -209,8 +209,16 @@ export function WordDetailDialog(props: WordDetailDialogProps) {
 						<StatCard label="Language" value={word.langCode} />
 						<StatCard label="Offensive" value={word.isOffensive ? "Yes" : "No"} />
 						<StatCard label="Testable" value={word.isTestable ? "Yes" : "No"} />
+						{word.clozeUnusableReason ? (
+							<StatCard label="Cloze reason" value={word.clozeUnusableReason} />
+						) : null}
 					</div>
 				)}
+				{!showVocabStats && word.clozeUnusableDetail ? (
+					<p className="text-xs text-muted-foreground border-t border-border pt-2 mt-1">
+						{word.clozeUnusableDetail}
+					</p>
+				) : null}
 				{onExcludeFromTests && (
 					<div className="pt-1 space-y-1">
 						<Button

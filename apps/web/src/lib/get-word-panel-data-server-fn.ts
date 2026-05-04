@@ -17,6 +17,9 @@ export type WordPanelWord = {
 	cefrLevel: string | null
 	isOffensive: boolean
 	isTestable: boolean
+	/** From cloze generation / validator when non-testable. */
+	clozeUnusableReason?: string | null
+	clozeUnusableDetail?: string | null
 	langCode: string
 	sentenceCount: number
 }
@@ -56,6 +59,8 @@ export const getWordPanelData = createServerFn({ method: "POST" })
 			cefrLevel: cefrLevel ?? null,
 			isOffensive: word.isOffensive,
 			isTestable: word.isTestable,
+			clozeUnusableReason: word.clozeUnusableReason,
+			clozeUnusableDetail: word.clozeUnusableDetail,
 			langCode: word.language.code,
 			sentenceCount: word._count.sentenceWords,
 		}

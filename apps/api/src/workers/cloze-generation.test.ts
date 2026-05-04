@@ -48,4 +48,29 @@ describe("normalizeCandidate", () => {
 		expect(normalized?.answer).toBe("ser ... ut")
 		expect(normalized?.alternatives).toEqual([])
 	})
+
+	it("strips fake Markdown __word__ around the target so underscore runs are not mistaken for blanks", () => {
+		const normalized = normalizeCandidate(
+			{
+				sentence: "Jag hoppas att vi __lever__ länge.",
+				cloze: "Jag hoppas att vi ____ länge.",
+				answer: "lever",
+				alternatives: [],
+				difficulty: "easy",
+				tags: [],
+				naturalness: 5,
+				usefulness: 5,
+				modernness: 5,
+				fun: 0,
+				risk: 0,
+				selectionReason: "test",
+			},
+			"lever",
+		)
+
+		expect(normalized).not.toBeNull()
+		expect(normalized?.sentence).toBe("Jag hoppas att vi lever länge.")
+		expect(normalized?.cloze).toBe("Jag hoppas att vi ____ länge.")
+		expect(normalized?.answer).toBe("lever")
+	})
 })

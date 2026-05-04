@@ -41,6 +41,17 @@ function sortedMergedJobLines(lines: PersistedJobLogLine[]): PersistedJobLogLine
 	return [...lines].sort((a, b) => a.t.localeCompare(b.t))
 }
 
+/** Keys must not use array index — new lines interleave by timestamp and would reshuffle indices, remounting rows and jumping scroll. */
+function stableLineKeys(lines: PersistedJobLogLine[]): string[] {
+	const seen = new Map<string, number>()
+	return lines.map((l) => {
+		const base = JSON.stringify([l.t, l.s, l.m])
+		const n = (seen.get(base) ?? 0) + 1
+		seen.set(base, n)
+		return `${base}#${n}`
+	})
+}
+
 type VocabCleanupPreview = {
 	dryRun?: boolean
 	/** Legacy jobs only (frequency-removal era). */
@@ -183,6 +194,7 @@ export function JobOutputViewer({
 	const summaryError = detail ? jobMetadataError(detail.metadata) : null
 	const vocabPreview = detail ? parseVocabCleanupPreview(detail.metadata) : null
 	const showPreviewTab = vocabPreview !== null
+	const lineKeys = stableLineKeys(shownLines)
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: shownLines/tab/summaryError are intentional triggers to auto-scroll on content change
 	useLayoutEffect(() => {
@@ -456,7 +468,7 @@ export function JobOutputViewer({
 								) : (
 									shownLines.map((l, i) => (
 										<span
-											key={`${l.t}-${l.s}-${i}`}
+											key={lineKeys[i]}
 											className={`block ${l.s === "err" ? "text-destructive" : ""}`}
 										>
 											<span className="text-muted-foreground">{formatLogTime(l.t)}</span>
