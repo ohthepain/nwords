@@ -5,7 +5,7 @@ import { cefrLevelForFrequencyRank, collectFirstNUniqueEffectiveRanks } from "@n
 import { createFileRoute } from "@tanstack/react-router"
 import { createServerFn } from "@tanstack/react-start"
 import { getRequest } from "@tanstack/react-start/server"
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
@@ -44,12 +44,13 @@ const searchWords = createServerFn({ method: "POST" })
 			matchMode: "starts_with" | "contains" | "ends_with" | "exact"
 			pos?: string
 			source?: "ALL" | CurriculumSource
+			testability?: "all" | "testable" | "not_testable"
 			limit: number
 			page?: number
 		}) => data,
 	)
 	.handler(async ({ data }) => {
-		const { languageId, query, matchMode, pos, source } = data
+		const { languageId, query, matchMode, pos, source, testability = "all" } = data
 		const limit = Math.min(Math.max(Math.trunc(data.limit), 1), 500)
 		const page = Math.max(Math.trunc(data.page ?? 1), 1)
 		const offset = (page - 1) * limit
@@ -58,6 +59,12 @@ const searchWords = createServerFn({ method: "POST" })
 			pos && pos !== "ALL" ? { pos: pos as "NOUN" | "VERB" | "ADJECTIVE" | "ADVERB" } : {}
 		const sourceWhere =
 			source && source !== "ALL" ? { curriculumSource: source as CurriculumSource } : {}
+		const testabilityWhere =
+			testability === "testable"
+				? { isTestable: true }
+				: testability === "not_testable"
+					? { isTestable: false }
+					: {}
 
 		const wordInclude = {
 			language: { select: { code: true } },
@@ -80,6 +87,10 @@ const searchWords = createServerFn({ method: "POST" })
 			language: { code: string }
 			_count: { sentenceWords: number }
 		}) {
+			const defsRaw = w.definitions
+			const definitions = Array.isArray(defsRaw)
+				? defsRaw.filter((x): x is string => typeof x === "string")
+				: []
 			return {
 				id: w.id,
 				lemma: w.lemma,
@@ -89,7 +100,7 @@ const searchWords = createServerFn({ method: "POST" })
 				positionAdjust: w.positionAdjust,
 				effectiveRank: w.effectiveRank,
 				curriculumSource: w.curriculumSource,
-				definitions: w.definitions as string[],
+				definitions,
 				cefrLevel: w.cefrLevel ?? cefrLevelForFrequencyRank(w.effectiveRank),
 				isOffensive: w.isOffensive,
 				isTestable: w.isTestable,
@@ -100,7 +111,7 @@ const searchWords = createServerFn({ method: "POST" })
 
 		/** Empty pattern = browse: prefer lemmas with frequency rank so you can verify import without guessing a search. */
 		if (!query.trim()) {
-			const baseWhere = { languageId, ...posWhere, ...sourceWhere }
+			const baseWhere = { languageId, ...posWhere, ...sourceWhere, ...testabilityWhere }
 			const [totalWords, rankedWords] = await Promise.all([
 				prisma.word.count({ where: baseWhere }),
 				prisma.word.count({ where: { ...baseWhere, effectiveRank: { gt: 0 } } }),
@@ -169,7 +180,7 @@ const searchWords = createServerFn({ method: "POST" })
 		const idMatchIds = uuidLike
 			? (
 					await prisma.$queryRaw<{ id: string }[]>(
-						Prisma.sql`SELECT id FROM "Word" WHERE "languageId" = ${languageId}::uuid AND id::text ILIKE ${`${q}%`} LIMIT 100`,
+						Prisma.sql`SELECT id FROM "word" WHERE "languageId" = ${languageId}::uuid AND id::text ILIKE ${`${q}%`} LIMIT 100`,
 					)
 				).map((r) => r.id)
 			: []
@@ -182,8 +193,9 @@ const searchWords = createServerFn({ method: "POST" })
 						OR: [lemmaWhere, { id: { in: idMatchIds } }],
 						...posWhere,
 						...sourceWhere,
+						...testabilityWhere,
 					}
-				: { languageId, ...lemmaWhere, ...posWhere, ...sourceWhere }
+				: { languageId, ...lemmaWhere, ...posWhere, ...sourceWhere, ...testabilityWhere }
 
 		const [rankGroups, unrankedTotal, rankedMatches] = await Promise.all([
 			prisma.word.groupBy({
@@ -230,14 +242,20 @@ const searchWords = createServerFn({ method: "POST" })
 
 // ─── Route ───────────────────────────────────────────────
 
-function parseLanguageIdSearch(raw: Record<string, unknown>): { languageId?: string } {
+function parseAdminWordsSearch(raw: Record<string, unknown>): {
+	languageId?: string
+	testability?: "all" | "testable" | "not_testable"
+} {
+	const out: { languageId?: string; testability?: "all" | "testable" | "not_testable" } = {}
 	const v = raw.languageId
-	if (typeof v !== "string" || !v.trim()) return {}
-	return { languageId: v.trim() }
+	if (typeof v === "string" && v.trim()) out.languageId = v.trim()
+	const t = raw.testability
+	if (t === "testable" || t === "not_testable") out.testability = t
+	return out
 }
 
 export const Route = createFileRoute("/_authed/_admin/admin/words")({
-	validateSearch: parseLanguageIdSearch,
+	validateSearch: parseAdminWordsSearch,
 	loader: () => loadAdminWordsPage(),
 	component: AdminWordsPage,
 })
@@ -248,6 +266,8 @@ const POS_OPTIONS = ["ALL", "NOUN", "VERB", "ADJECTIVE", "ADVERB"] as const
 const SOURCE_OPTIONS = [
 	{ value: "ALL", label: "All sources" },
 	{ value: "KAIKKI", label: "Kaikki" },
+	{ value: "COMMON", label: "Frequency seed (Common words list)" },
+	{ value: "HERMIT_DAVE", label: "HermitDave frequency lemmas" },
 	{ value: "AI_CURRICULUM", label: "AI curriculum" },
 ] as const
 const MATCH_MODES = [
@@ -255,6 +275,12 @@ const MATCH_MODES = [
 	{ value: "contains", label: "Contains" },
 	{ value: "ends_with", label: "Ends with" },
 	{ value: "exact", label: "Is exactly" },
+] as const
+
+const TESTABILITY_OPTIONS = [
+	{ value: "all" as const, label: "All" },
+	{ value: "testable" as const, label: "Testable" },
+	{ value: "not_testable" as const, label: "Not testable" },
 ] as const
 
 const WORDS_PAGE_SIZE = 100
@@ -311,9 +337,10 @@ type AdminWordRow = {
 }
 
 function AdminWordsPage() {
-	const { languageId: languageIdFromSearch } = Route.useSearch()
+	const { languageId: languageIdFromSearch, testability: testabilityFromSearch } = Route.useSearch()
 	const { languages, defaultTargetLanguageId } = Route.useLoaderData()
 	const { nativeLanguage } = Route.useRouteContext()
+	const navigate = Route.useNavigate()
 
 	function resolveLanguageId(searchId: string | undefined): string {
 		if (searchId && languages.some((l) => l.id === searchId)) return searchId
@@ -324,22 +351,20 @@ function AdminWordsPage() {
 	}
 
 	const [languageId, setLanguageId] = useState(() => resolveLanguageId(languageIdFromSearch))
-
-	useEffect(() => {
-		if (languageIdFromSearch && languages.some((l) => l.id === languageIdFromSearch)) {
-			setLanguageId(languageIdFromSearch)
-		}
-	}, [languageIdFromSearch, languages])
 	const [query, setQuery] = useState("")
 	const [matchMode, setMatchMode] = useState<"starts_with" | "contains" | "ends_with" | "exact">(
 		"starts_with",
 	)
 	const [pos, setPos] = useState("ALL")
 	const [source, setSource] = useState<(typeof SOURCE_OPTIONS)[number]["value"]>("ALL")
+	const [testability, setTestability] = useState<"all" | "testable" | "not_testable">(
+		() => testabilityFromSearch ?? "all",
+	)
 	const [page, setPage] = useState(1)
-	const lastFilterKeyRef = useRef(`${languageId}:${pos}:${source}`)
+	const lastFilterKeyRef = useRef(`${languageId}:${pos}:${source}:${testability}`)
 	const [results, setResults] = useState<Awaited<ReturnType<typeof searchWords>> | null>(null)
 	const [searching, setSearching] = useState(false)
+	const [searchError, setSearchError] = useState<string | null>(null)
 
 	const [selectedWord, setSelectedWord] = useState<AdminWordRow | null>(null)
 	const [sentences, setSentences] = useState<WordSentence[]>([])
@@ -352,6 +377,94 @@ function AdminWordsPage() {
 	const positionAdjustImportInputRef = useRef<HTMLInputElement>(null)
 
 	const [promptWordlistMessage, setPromptWordlistMessage] = useState<string | null>(null)
+
+	useEffect(() => {
+		if (languageIdFromSearch && languages.some((l) => l.id === languageIdFromSearch)) {
+			setLanguageId(languageIdFromSearch)
+		}
+	}, [languageIdFromSearch, languages])
+
+	useEffect(() => {
+		if (testabilityFromSearch) setTestability(testabilityFromSearch)
+	}, [testabilityFromSearch])
+
+	const syncWordsSearchToUrl = useCallback(() => {
+		if (!languageId) return
+		void navigate({
+			to: "/admin/words",
+			search: {
+				languageId,
+				testability: testability === "all" ? undefined : testability,
+			},
+			replace: true,
+		})
+	}, [languageId, testability, navigate])
+
+	useEffect(() => {
+		syncWordsSearchToUrl()
+	}, [syncWordsSearchToUrl])
+
+	/** Prevent Prisma UUID errors if the dropdown still holds an id removed from DB. */
+	useEffect(() => {
+		if (languages.length === 0) {
+			if (languageId) setLanguageId("")
+			return
+		}
+		if (languageId && languages.some((l) => l.id === languageId)) return
+		const next =
+			languageIdFromSearch && languages.some((l) => l.id === languageIdFromSearch)
+				? languageIdFromSearch
+				: defaultTargetLanguageId && languages.some((l) => l.id === defaultTargetLanguageId)
+					? defaultTargetLanguageId
+					: (languages[0]?.id ?? "")
+		setLanguageId(next)
+	}, [defaultTargetLanguageId, languageId, languageIdFromSearch, languages])
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reload on language/POS/page change only; query/matchMode submitted explicitly
+	useEffect(() => {
+		if (!languageId) {
+			setResults(null)
+			setSearching(false)
+			return
+		}
+		const filterKey = `${languageId}:${pos}:${source}:${testability}`
+		const filtersChanged = lastFilterKeyRef.current !== filterKey
+		lastFilterKeyRef.current = filterKey
+		if (filtersChanged && page !== 1) {
+			setPage(1)
+			return
+		}
+		let cancelled = false
+		setSearching(true)
+		setSearchError(null)
+		searchWords({
+			data: {
+				languageId,
+				query,
+				matchMode,
+				pos,
+				source,
+				testability,
+				limit: WORDS_PAGE_SIZE,
+				page,
+			},
+		})
+			.then((data) => {
+				if (!cancelled) setResults(data)
+			})
+			.catch((e: unknown) => {
+				if (!cancelled) {
+					setResults(null)
+					setSearchError(e instanceof Error ? e.message : String(e))
+				}
+			})
+			.finally(() => {
+				if (!cancelled) setSearching(false)
+			})
+		return () => {
+			cancelled = true
+		}
+	}, [languageId, pos, source, testability, page])
 
 	async function exportSynonyms() {
 		setSynonymIoMessage(null)
@@ -546,11 +659,24 @@ function AdminWordsPage() {
 			return
 		}
 		setSearching(true)
+		setSearchError(null)
 		try {
 			const data = await searchWords({
-				data: { languageId, query, matchMode, pos, source, limit: WORDS_PAGE_SIZE, page: nextPage },
+				data: {
+					languageId,
+					query,
+					matchMode,
+					pos,
+					source,
+					testability,
+					limit: WORDS_PAGE_SIZE,
+					page: nextPage,
+				},
 			})
 			setResults(data)
+		} catch (e) {
+			setResults(null)
+			setSearchError(e instanceof Error ? e.message : String(e))
 		} finally {
 			setSearching(false)
 		}
@@ -564,36 +690,6 @@ function AdminWordsPage() {
 			setPage(1)
 		}
 	}
-
-	// biome-ignore lint/correctness/useExhaustiveDependencies: reload on language/POS/page change only; query/matchMode submitted explicitly
-	useEffect(() => {
-		if (!languageId) {
-			setResults(null)
-			setSearching(false)
-			return
-		}
-		const filterKey = `${languageId}:${pos}:${source}`
-		const filtersChanged = lastFilterKeyRef.current !== filterKey
-		lastFilterKeyRef.current = filterKey
-		if (filtersChanged && page !== 1) {
-			setPage(1)
-			return
-		}
-		let cancelled = false
-		setSearching(true)
-		searchWords({
-			data: { languageId, query, matchMode, pos, source, limit: WORDS_PAGE_SIZE, page },
-		})
-			.then((data) => {
-				if (!cancelled) setResults(data)
-			})
-			.finally(() => {
-				if (!cancelled) setSearching(false)
-			})
-		return () => {
-			cancelled = true
-		}
-	}, [languageId, pos, source, page])
 
 	const resultPage = results?.page ?? page
 	const resultLimit = results?.limit ?? WORDS_PAGE_SIZE
@@ -712,7 +808,7 @@ function AdminWordsPage() {
 
 			{/* Search form */}
 			<form onSubmit={handleSearch} className="space-y-4">
-				<div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+				<div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
 					<div className="space-y-1.5">
 						<Label htmlFor="word-lang" className="text-xs">
 							Language
@@ -784,6 +880,25 @@ function AdminWordsPage() {
 						</select>
 					</div>
 					<div className="space-y-1.5">
+						<Label htmlFor="word-testability" className="text-xs">
+							Testability
+						</Label>
+						<select
+							id="word-testability"
+							value={testability}
+							onChange={(e) =>
+								setTestability(e.target.value as (typeof TESTABILITY_OPTIONS)[number]["value"])
+							}
+							className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+						>
+							{TESTABILITY_OPTIONS.map((o) => (
+								<option key={o.value} value={o.value}>
+									{o.label}
+								</option>
+							))}
+						</select>
+					</div>
+					<div className="space-y-1.5">
 						<Label htmlFor="word-query" className="text-xs">
 							Pattern
 						</Label>
@@ -802,6 +917,15 @@ function AdminWordsPage() {
 					</div>
 				</div>
 			</form>
+
+			{searchError ? (
+				<div
+					className="text-sm text-destructive border border-destructive/35 bg-destructive/10 rounded-md px-3 py-2"
+					role="alert"
+				>
+					{searchError}
+				</div>
+			) : null}
 
 			<div className="flex flex-wrap items-center gap-2 border border-border rounded-lg px-3 py-2.5 bg-muted/20">
 				<strong className="text-foreground/90">Prompt wordlist</strong>
@@ -867,7 +991,7 @@ function AdminWordsPage() {
 							{results.mode === "search" ? (
 								<>No words found matching "{query}"</>
 							) : (
-								<>No words for this language and POS filter.</>
+								<>No words for this language and filters.</>
 							)}
 						</div>
 					) : (
@@ -918,11 +1042,21 @@ function AdminWordsPage() {
 												className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full shrink-0 ${
 													word.curriculumSource === "AI_CURRICULUM"
 														? "bg-brand/15 text-brand"
-														: "bg-muted text-muted-foreground"
+														: word.curriculumSource === "COMMON"
+															? "bg-known/15 text-known"
+															: word.curriculumSource === "HERMIT_DAVE"
+																? "bg-orange-500/15 text-orange-400"
+																: "bg-muted text-muted-foreground"
 												}`}
 												title={`Source: ${word.curriculumSource}`}
 											>
-												{word.curriculumSource === "AI_CURRICULUM" ? "ai" : "kaikki"}
+												{word.curriculumSource === "AI_CURRICULUM"
+													? "ai"
+													: word.curriculumSource === "COMMON"
+														? "freq"
+														: word.curriculumSource === "HERMIT_DAVE"
+															? "hd"
+															: "kai"}
 											</span>
 										</span>
 										<span

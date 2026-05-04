@@ -342,7 +342,7 @@ export function JobOutputViewer({
 									<span>Homograph groups: {vocabPreview.senseGroupsAdjusted.toLocaleString()}</span>
 								) : null}
 							</div>
-							{(vocabPreview.wouldRemoveTotal > 0 || vocabPreview.wouldRemove.length > 0) ? (
+							{vocabPreview.wouldRemoveTotal > 0 || vocabPreview.wouldRemove.length > 0 ? (
 								<div>
 									<p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-2">
 										Removals (legacy job; {vocabPreview.wouldRemoveTotal.toLocaleString()} total,
@@ -380,8 +380,8 @@ export function JobOutputViewer({
 							) : null}
 							<div>
 								<p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-2">
-									Order changes ({vocabPreview.wouldRenumberTotal.toLocaleString()} rows moved; sample{" "}
-									{vocabPreview.wouldRenumber.length})
+									Order changes ({vocabPreview.wouldRenumberTotal.toLocaleString()} rows moved;
+									sample {vocabPreview.wouldRenumber.length})
 								</p>
 								<div className="overflow-x-auto rounded border border-border/80">
 									<table className="w-full text-left text-[11px] font-mono">
@@ -417,58 +417,59 @@ export function JobOutputViewer({
 						</div>
 					) : (
 						<>
-					<pre
-						ref={preRef}
-						className="flex-1 min-h-[200px] overflow-auto rounded-md border border-border/80 bg-muted/30 px-3 py-2 text-[11px] font-mono leading-relaxed text-foreground whitespace-pre-wrap break-all"
-					>
-						{shownLines.length === 0 ? (
-							<span className="text-muted-foreground space-y-2 block">
-								{tab === "out" ? (
-									<>
-										<span className="block">
-											No lines yet. Progress and error messages appear here (merged by time) as the
-											worker runs.
-										</span>
-										{detail &&
-										(detail.status === "RUNNING" || detail.status === "PENDING") &&
-										(detail.processedItems > 0 || detail.errorCount > 0) ? (
-											<span className="block mt-2 text-foreground/85">
-												Latest job row: {detail.processedItems.toLocaleString()} processed
-												{detail.totalItems > 0
-													? ` · ${detail.totalItems.toLocaleString()} total`
-													: ""}
-												{detail.errorCount > 0
-													? ` · ${detail.errorCount.toLocaleString()} errors`
-													: ""}
-												. If this stays empty while counts move, metadata merges were racing (update
-												deployed — or run only one ingest worker process via{" "}
-												<span className="font-mono">DISABLE_INGEST_WORKERS</span> on the app that
-												should not host workers).
-											</span>
-										) : null}
-									</>
-								) : summaryError ? (
-									"No additional stderr-style lines; see metadata.error above if present."
+							<pre
+								ref={preRef}
+								className="flex-1 min-h-[200px] overflow-auto rounded-md border border-border/80 bg-muted/30 px-3 py-2 text-[11px] font-mono leading-relaxed text-foreground whitespace-pre-wrap break-all"
+							>
+								{shownLines.length === 0 ? (
+									<span className="text-muted-foreground space-y-2 block">
+										{tab === "out" ? (
+											<>
+												<span className="block">
+													No lines yet. Progress and error messages appear here (merged by time) as
+													the worker runs.
+												</span>
+												{detail &&
+												(detail.status === "RUNNING" || detail.status === "PENDING") &&
+												(detail.processedItems > 0 || detail.errorCount > 0) ? (
+													<span className="block mt-2 text-foreground/85">
+														Latest job row: {detail.processedItems.toLocaleString()} processed
+														{detail.totalItems > 0
+															? ` · ${detail.totalItems.toLocaleString()} total`
+															: ""}
+														{detail.errorCount > 0
+															? ` · ${detail.errorCount.toLocaleString()} errors`
+															: ""}
+														. If this stays empty while counts move, metadata merges were racing
+														(update deployed — or run only one ingest worker process via{" "}
+														<span className="font-mono">DISABLE_INGEST_WORKERS</span> on the app
+														that should not host workers).
+													</span>
+												) : null}
+											</>
+										) : summaryError ? (
+											"No additional stderr-style lines; see metadata.error above if present."
+										) : (
+											"No error lines yet."
+										)}
+									</span>
 								) : (
-									"No error lines yet."
+									shownLines.map((l, i) => (
+										<span
+											key={`${l.t}-${l.s}-${i}`}
+											className={`block ${l.s === "err" ? "text-destructive" : ""}`}
+										>
+											<span className="text-muted-foreground">{formatLogTime(l.t)}</span>
+											{l.s === "err" ? <span className="font-semibold"> [err]</span> : null} {l.m}
+										</span>
+									))
 								)}
-							</span>
-						) : (
-							shownLines.map((l, i) => (
-								<span
-									key={`${l.t}-${l.s}-${i}`}
-									className={`block ${l.s === "err" ? "text-destructive" : ""}`}
-								>
-									<span className="text-muted-foreground">{formatLogTime(l.t)}</span>
-									{l.s === "err" ? <span className="font-semibold"> [err]</span> : null} {l.m}
-								</span>
-							))
-						)}
-					</pre>
-					<p className="text-[10px] text-muted-foreground mt-2 px-1 shrink-0">
-						Output tab merges stdout and stderr by timestamp (stderr in red). Refreshes every 2s
-						while this dialog is open. Server logs also appear in the API terminal during local dev.
-					</p>
+							</pre>
+							<p className="text-[10px] text-muted-foreground mt-2 px-1 shrink-0">
+								Output tab merges stdout and stderr by timestamp (stderr in red). Refreshes every 2s
+								while this dialog is open. Server logs also appear in the API terminal during local
+								dev.
+							</p>
 						</>
 					)}
 				</div>

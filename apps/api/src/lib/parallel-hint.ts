@@ -301,7 +301,6 @@ async function loadGeneratedClozeCandidates(
 			sentence: true,
 			cloze: true,
 			answer: true,
-			alternatives: true,
 			sortOrder: true,
 		},
 	})
@@ -312,7 +311,7 @@ async function loadGeneratedClozeCandidates(
 		aiClozePriority: 100 - row.sortOrder,
 		promptText: normalizeGeneratedPrompt(row.cloze),
 		answer: row.answer,
-		alternatives: row.alternatives,
+		alternatives: [],
 	}))
 }
 

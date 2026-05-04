@@ -7,6 +7,12 @@ import { isIngestionJobCancelled, tryMarkIngestionJobRunning } from "../lib/inge
 import type { KaikkiIngestMode } from "../lib/ingestion-urls"
 import { appendJobLog } from "../lib/job-logs"
 import { updateIngestionProgress } from "../lib/job-progress"
+import type { KaikkiEntry } from "../lib/kaikki-entry"
+import {
+	kaikkiSenseHasAbbreviationTag,
+	mapKaikkiPos,
+	normalizeKaikkiLemma,
+} from "../lib/kaikki-entry"
 import { nodeReadableFromWeb } from "../lib/node-streams"
 
 /**
@@ -16,44 +22,6 @@ import { nodeReadableFromWeb } from "../lib/node-streams"
  *
  * Must run after kaikki import so that Word rows exist for the FK.
  */
-
-const POS_MAP: Record<string, string> = {
-	noun: "NOUN",
-	verb: "VERB",
-	adj: "ADJECTIVE",
-	adv: "ADVERB",
-	adjective: "ADJECTIVE",
-	adverb: "ADVERB",
-	pron: "PRONOUN",
-	pronoun: "PRONOUN",
-	det: "DETERMINER",
-	determiner: "DETERMINER",
-	prep: "PREPOSITION",
-	preposition: "PREPOSITION",
-	prep_phrase: "PREPOSITION",
-	conj: "CONJUNCTION",
-	conjunction: "CONJUNCTION",
-	particle: "PARTICLE",
-	intj: "INTERJECTION",
-	interjection: "INTERJECTION",
-	num: "NUMERAL",
-	numeral: "NUMERAL",
-	name: "PROPER_NOUN",
-	proper_noun: "PROPER_NOUN",
-}
-
-interface KaikkiEntry {
-	word: string
-	pos: string
-	senses?: Array<{
-		tags?: string[]
-		raw_tags?: string[]
-	}>
-	forms?: Array<{
-		form: string
-		tags?: string[]
-	}>
-}
 
 export interface WordFormsJobData {
 	jobId: string
@@ -91,26 +59,6 @@ async function* linesFromUrl(url: string): AsyncGenerator<string> {
 
 /** Max forms we store per lemma — caps pathological cases (agglutinative langs). */
 const MAX_FORMS_PER_WORD = 200
-
-/** Same set as kaikki worker — skip forms for abbreviation-only dictionary rows. */
-const ABBREVIATION_SENSE_TAGS = new Set([
-	"abbreviation",
-	"abbrev",
-	"initialism",
-	"acronym",
-	"clipping",
-	"shortening",
-])
-
-function senseHasAbbreviationTag(sense: {
-	tags?: string[]
-	raw_tags?: string[]
-}): boolean {
-	for (const t of [...(sense.tags ?? []), ...(sense.raw_tags ?? [])]) {
-		if (ABBREVIATION_SENSE_TAGS.has(t.toLowerCase())) return true
-	}
-	return false
-}
 
 export async function processWordFormsJob(job: PgBoss.Job<WordFormsJobData>) {
 	const { jobId, languageId, filePath, downloadUrl, kaikkiMode } = job.data
@@ -190,20 +138,20 @@ export async function processWordFormsJob(job: PgBoss.Job<WordFormsJobData>) {
 		try {
 			const entry: KaikkiEntry = JSON.parse(line)
 
-			const mappedPos = POS_MAP[entry.pos?.toLowerCase() ?? ""]
+			const mappedPos = mapKaikkiPos(entry.pos ?? "")
 			if (!mappedPos) {
 				skipped++
 				return true
 			}
 
-			const lemma = entry.word?.trim()?.toLowerCase()
+			const lemma = normalizeKaikkiLemma(entry.word)
 			if (!lemma) {
 				skipped++
 				return true
 			}
 
 			const senses = entry.senses ?? []
-			if (senses.length > 0 && senses.every((s) => senseHasAbbreviationTag(s))) {
+			if (senses.length > 0 && senses.every((s) => kaikkiSenseHasAbbreviationTag(s))) {
 				skipped++
 				return true
 			}

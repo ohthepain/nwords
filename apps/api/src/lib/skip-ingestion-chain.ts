@@ -1,12 +1,13 @@
 import type { Prisma } from "@nwords/db"
 import { prisma } from "@nwords/db"
-import { chainVocabUnitsLlmFromCommonWordsJob } from "./ai-vocab-pipeline"
+import { chainCommonCurriculumKaikkiFromCommonWordsJob } from "./ai-vocab-pipeline"
 import { appendJobLog, snapshotJobMetadata } from "./job-logs"
 import {
 	chainFrequencyFromKaikki,
 	chainTatoebaFromFrequency,
 	chainWordFormsFromTatoeba,
 } from "./pipeline-chain"
+import { chainWordsGlossCleanup } from "./words-gloss-pipeline"
 
 function asMetaRecord(metadata: unknown): Record<string, unknown> {
 	if (metadata !== null && typeof metadata === "object" && !Array.isArray(metadata)) {
@@ -95,13 +96,22 @@ export async function skipIngestionJobAndContinuePipeline(
 				m.topLemmas.every((x): x is string => typeof x === "string") &&
 				m.topLemmas.length > 0
 			) {
-				await chainVocabUnitsLlmFromCommonWordsJob(languageId, jobId)
+				await chainCommonCurriculumKaikkiFromCommonWordsJob(languageId, jobId)
 			}
 			break
 		}
 		case "VOCAB_UNITS_LLM":
 			break
 		case "VOCAB_CLEANUP":
+			break
+		case "WORDS_GLOSS_CLEANUP":
+			break
+		case "CURRICULUM_TESTABILITY_TRIM":
+			break
+		case "COMMON_CURRICULUM_KAIKKI":
+			await chainWordsGlossCleanup(languageId)
+			break
+		case "HERMIT_DAVE_COMMON_LEMMAS":
 			break
 		default:
 			break

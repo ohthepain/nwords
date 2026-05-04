@@ -1,3 +1,4 @@
+import type { CurriculumSource } from "@nwords/db"
 import { prisma } from "@nwords/db"
 
 export function normalizeCommonLemma(input: string): string {
@@ -71,9 +72,85 @@ export async function syncLanguageCommonLemmasFromList(
 				languageId,
 				lemma,
 				sortOrder,
+				curriculumSource: "COMMON" as CurriculumSource,
 			})),
 		})
 	})
+}
+
+/** Stats for HermitDave-style append jobs. */
+export type AppendCommonLemmaStats = {
+	added: number
+	skippedAlreadyInDb: number
+	skippedDuplicateInCandidates: number
+}
+
+/**
+ * Append lemmas in candidate order after existing rows. Skips lemmas already present (normalized)
+ * or duplicated inside `candidateLemmas`. Does not reorder or remove existing entries.
+ */
+export async function appendCommonLemmasNotAlreadyPresent(
+	languageId: string,
+	candidateLemmas: string[],
+	opts?: { sourceForNewRows?: CurriculumSource },
+): Promise<AppendCommonLemmaStats> {
+	const sourceForNewRows = opts?.sourceForNewRows ?? "HERMIT_DAVE"
+	let skippedAlreadyInDb = 0
+	let skippedDuplicateInCandidates = 0
+	const candidatesSeen = new Set<string>()
+	const normalizedOrder: string[] = []
+	for (const raw of candidateLemmas) {
+		const lemma = normalizeCommonLemma(raw)
+		if (!lemma) continue
+		if (candidatesSeen.has(lemma)) {
+			skippedDuplicateInCandidates++
+			continue
+		}
+		candidatesSeen.add(lemma)
+		normalizedOrder.push(lemma)
+	}
+
+	let added = 0
+	await prisma.$transaction(async (tx) => {
+		const existing = await tx.languageCommonLemma.findMany({
+			where: { languageId },
+			select: { lemma: true },
+		})
+		const inDb = new Set(existing.map((r) => normalizeCommonLemma(r.lemma)))
+
+		const agg = await tx.languageCommonLemma.aggregate({
+			where: { languageId },
+			_max: { sortOrder: true },
+		})
+		let sortOrder = (agg._max.sortOrder ?? -1) + 1
+		const rows: {
+			languageId: string
+			lemma: string
+			sortOrder: number
+			curriculumSource: CurriculumSource
+		}[] = []
+
+		for (const lemma of normalizedOrder) {
+			if (inDb.has(lemma)) {
+				skippedAlreadyInDb++
+				continue
+			}
+			inDb.add(lemma)
+			rows.push({
+				languageId,
+				lemma,
+				sortOrder: sortOrder++,
+				curriculumSource: sourceForNewRows,
+			})
+		}
+
+		added = rows.length
+		if (rows.length > 0) {
+			await tx.languageCommonLemma.createMany({ data: rows })
+		}
+	})
+
+	return { added, skippedAlreadyInDb, skippedDuplicateInCandidates }
 }
 
 /**

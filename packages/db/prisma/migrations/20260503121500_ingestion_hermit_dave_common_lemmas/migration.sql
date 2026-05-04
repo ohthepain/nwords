@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "IngestionType" ADD VALUE 'HERMIT_DAVE_COMMON_LEMMAS';

@@ -4,7 +4,7 @@ import { INGEST_QUEUE } from "./ingestion-queues"
 import { resolveVocabLlmSeed } from "./language-common-lemmas"
 
 export type AiVocabPipelineOptions = {
-	/** Top frequency lemmas seed (default 200). */
+	/** Top frequency lemmas seed (default 300). */
 	commonWordLimit?: number
 	/** Total learning units the LLM must output (default 2000). */
 	unitCount?: number
@@ -16,10 +16,10 @@ export type AiVocabPipelineOptions = {
 
 /**
  * Delete terminal ingestion rows and cancel RUNNING for this language (same hygiene as Kaikki pipeline),
- * then enqueue **`COMMON_WORDS_TOP` only** — review `topLemmas` in job metadata, then call
- * {@link enqueueVocabUnitsLlmFromCommonWords} (or admin **LLM vocabulary**) to run `VOCAB_UNITS_LLM`.
+ * then enqueue COMMON_WORDS_TOP — review lemmas in metadata, then run common-curriculum (Kaikki) or optional LLM.
+ * {@link enqueueCommonCurriculumKaikkiFromCommonWords}; {@link enqueueVocabUnitsLlmFromCommonWords} for LLM only.
  *
- * Set `chainPipeline: true` on the job row / boss payload only when you want an immediate hand-off (rare).
+ * With `chainPipeline: true`, COMMON_WORDS_TOP hands off automatically to `COMMON_CURRICULUM_KAIKKI`.
  */
 export async function enqueueAiVocabPipeline(
 	languageId: string,
@@ -39,7 +39,7 @@ export async function enqueueAiVocabPipeline(
 		data: { status: "CANCELLED", completedAt: new Date() },
 	})
 
-	const commonWordLimit = options.commonWordLimit ?? 200
+	const commonWordLimit = options.commonWordLimit ?? 300
 	const unitCount = options.unitCount ?? 2000
 	const glossLanguageName = options.glossLanguageName ?? "English"
 	const glossLanguageCode = options.glossLanguageCode ?? "en"
@@ -136,4 +136,98 @@ export async function chainVocabUnitsLlmFromCommonWordsJob(
 	return startVocabUnitsLlmFromSeed(languageId, {
 		forceCommonWordsJobId: completedCommonWordsJobId,
 	})
+}
+
+async function startCommonCurriculumKaikkiFromSeed(
+	languageId: string,
+	opts?: { forceCommonWordsJobId?: string },
+): Promise<{ jobId: string }> {
+	const seed = await resolveVocabLlmSeed(languageId, opts)
+	const lang = await prisma.language.findUnique({ where: { id: languageId } })
+	if (!lang) throw new Error(`Language ${languageId} not found`)
+
+	const job = await prisma.ingestionJob.create({
+		data: {
+			type: "COMMON_CURRICULUM_KAIKKI",
+			languageId,
+			metadata: {
+				requiredWords: seed.requiredWords,
+				unitCount: seed.unitCount,
+				glossLanguageName: seed.glossLanguageName,
+				glossLanguageCode: seed.glossLanguageCode,
+				languageCode: lang.code,
+				languageName: lang.name,
+				...(opts?.forceCommonWordsJobId
+					? { forceCommonWordsJobId: opts.forceCommonWordsJobId }
+					: {}),
+				...(seed.chainedFromJobId ? { chainedFromCommonWordsJobId: seed.chainedFromJobId } : {}),
+			},
+		},
+	})
+
+	await sendIngestJob(INGEST_QUEUE.COMMON_CURRICULUM_KAIKKI, {
+		jobId: job.id,
+		languageId,
+		...(opts?.forceCommonWordsJobId ? { forceCommonWordsJobId: opts.forceCommonWordsJobId } : {}),
+	})
+
+	return { jobId: job.id }
+}
+
+/** Build `COMMON` curriculum words from curated common lemmas via Kaikki (inflection-aware). */
+export async function enqueueCommonCurriculumKaikkiFromCommonWords(
+	languageId: string,
+	completedCommonWordsJobId?: string,
+): Promise<{ jobId: string }> {
+	if (completedCommonWordsJobId) {
+		return startCommonCurriculumKaikkiFromSeed(languageId, {
+			forceCommonWordsJobId: completedCommonWordsJobId,
+		})
+	}
+	return startCommonCurriculumKaikkiFromSeed(languageId)
+}
+
+/** Chain target after {@link COMMON_WORDS_TOP} completes when `chainPipeline` is true. */
+export async function chainCommonCurriculumKaikkiFromCommonWordsJob(
+	languageId: string,
+	completedCommonWordsJobId: string,
+): Promise<{ jobId: string }> {
+	return startCommonCurriculumKaikkiFromSeed(languageId, {
+		forceCommonWordsJobId: completedCommonWordsJobId,
+	})
+}
+
+/** Manual step: append top-N HermitDave frequency lemmas into `language_common_lemma` (skips existing). */
+export async function enqueueHermitDaveCommonLemmasJob(
+	languageId: string,
+	options?: { scanLimit?: number },
+): Promise<{ jobId: string }> {
+	const scanLimitRaw = options?.scanLimit ?? 2000
+	const scanLimit =
+		Number.isFinite(scanLimitRaw) && scanLimitRaw > 0
+			? Math.min(Math.floor(scanLimitRaw), 25_000)
+			: 2000
+
+	const lang = await prisma.language.findUnique({ where: { id: languageId } })
+	if (!lang) throw new Error(`Language ${languageId} not found`)
+
+	const job = await prisma.ingestionJob.create({
+		data: {
+			type: "HERMIT_DAVE_COMMON_LEMMAS",
+			languageId,
+			metadata: {
+				scanLimit,
+				languageCode: lang.code,
+				languageName: lang.name,
+			},
+		},
+	})
+
+	await sendIngestJob(INGEST_QUEUE.HERMIT_DAVE_COMMON_LEMMAS, {
+		jobId: job.id,
+		languageId,
+		scanLimit,
+	})
+
+	return { jobId: job.id }
 }

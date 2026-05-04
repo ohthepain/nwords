@@ -91,3 +91,38 @@ export async function fetchTopFrequencyLemmas(
 			}
 		: null
 }
+
+/**
+ * HermitDave / FrequencyWords only (no BNPD fallback). Same line format as bulk frequency import (`word count`).
+ */
+export async function fetchHermitDaveFrequencyLemmasOnly(
+	iso639_1: string,
+	limit: number,
+): Promise<TopFrequencyLemmasResult | null> {
+	if (limit <= 0) return null
+
+	const hermit = await resolveHermitDaveFrequencyUrl(iso639_1)
+	if (!hermit) return null
+
+	const lemmas: string[] = []
+	for await (const line of linesFromUrl(hermit.downloadUrl)) {
+		const trimmed = line.trim()
+		if (!trimmed || trimmed.startsWith("#")) continue
+		const m = trimmed.match(/^(.+?)\s+(\d+)$/)
+		if (!m) continue
+		const lemma = m[1].trim()
+		if (!lemma) continue
+		lemmas.push(lemma)
+		if (lemmas.length >= limit) {
+			return {
+				lemmas,
+				format: "hermitdave",
+				source: hermit.source,
+				downloadUrl: hermit.downloadUrl,
+			}
+		}
+	}
+	return lemmas.length > 0
+		? { lemmas, format: "hermitdave", source: hermit.source, downloadUrl: hermit.downloadUrl }
+		: null
+}

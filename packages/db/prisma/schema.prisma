@@ -122,12 +122,14 @@ model Language {
   @@map("language")
 }
 
-/// Curated frequency seed list per language (admin-editable). LLM vocabulary uses this when non-empty; otherwise falls back to the latest completed COMMON_WORDS_TOP job.
+/// Curated frequency seed list per language (admin-editable). Filled by COMMON_WORDS_TOP and optional HERMIT_DAVE_COMMON_LEMMAS append. LLM vocabulary uses this when non-empty; otherwise falls back to the latest completed COMMON_WORDS_TOP job.
 model LanguageCommonLemma {
   id         String   @id @default(uuid()) @db.Uuid
   languageId String   @db.Uuid
   language   Language @relation(fields: [languageId], references: [id], onDelete: Cascade)
   lemma      String
+  /// COMMON_WORDS_TOP + admin edits; HERMIT_DAVE only for lemmas first added by HermitDave append job.
+  curriculumSource CurriculumSource @default(COMMON)
   /// Order for the LLM required-words list (0 = first).
   sortOrder  Int
   createdAt  DateTime @default(now())
@@ -140,6 +142,10 @@ model LanguageCommonLemma {
 enum CurriculumSource {
   KAIKKI
   AI_CURRICULUM
+  /// Frequency-seeded lemma row (`COMMON_WORDS_TOP` / admin curated list pointer).
+  COMMON
+  /// Lemma first appended from HermitDave frequency rankings (does not downgrade existing COMMON rows).
+  HERMIT_DAVE
 }
 
 // ─── Words ──────────────────────────────────────────────
@@ -151,9 +157,10 @@ model Word {
   lemma           String
   pos             PartOfSpeech
   alternatePos    PartOfSpeech[] @default([])
-  /// Kaikki dictionary vs AI-generated curriculum (`VOCAB_UNITS_LLM` job).
+  /// Kaikki bulk import (`KAIKKI`), AI curriculum (`AI_CURRICULUM`), HermitDave frequency lemma (`HERMIT_DAVE`),
+  /// frequency common-words list (`COMMON`). Common curriculum Kaikki expansion promotions use `KAIKKI`; bases use `COMMON` or `HERMIT_DAVE`.
   curriculumSource CurriculumSource @default(KAIKKI)
-  /// Structured AI unit payload (`unitType`, `form`, `tags`, etc.) when `curriculumSource` is AI.
+  /// Structured unit payload (`unitType`, `form`, `tags`, etc.). COMMON_CURRICULUM_KAIKKI rows tag `common-frequency` in `tags`.
   curriculumUnit   Json?
   rank            Int
   definitions     Json
@@ -162,6 +169,8 @@ model Word {
   isAbbreviation  Boolean      @default(false)
   /// Whether this word is presented in vocabulary tests. False for function-word POS types.
   isTestable      Boolean      @default(true)
+  /// Short learner-facing gloss (1–3 words), filled by WORDS_GLOSS_CLEANUP after common-curriculum Kaikki.
+  gloss           String?
   cefrLevel       CefrLevel?
   /// Admin-set offset added to `rank` when computing `effectiveRank`. Default 0 = no shift.
   positionAdjust  Int          @default(0)
@@ -575,8 +584,15 @@ enum IngestionType {
   CLOZE_QUALITY_ASSESSMENT
   CLOZE_GENERATION
   COMMON_WORDS_TOP
+  /// Append top-N lemmas from HermitDave frequency files into `language_common_lemma`, skipping lemmas already listed.
+  HERMIT_DAVE_COMMON_LEMMAS
+  COMMON_CURRICULUM_KAIKKI
   VOCAB_UNITS_LLM
   VOCAB_CLEANUP
+  /// Normalize glosses and testability for common-curriculum words (after COMMON_CURRICULUM_KAIKKI).
+  WORDS_GLOSS_CLEANUP
+  /// LLM trim: scoped curriculum rows → mark peripheral senses/forms untestable (batch LLM; manual step).
+  CURRICULUM_TESTABILITY_TRIM
 }
 
 enum IngestionStatus {

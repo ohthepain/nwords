@@ -182,7 +182,7 @@ export const Route = createFileRoute("/practice")({
 })
 
 function normalizeAnswer(s: string): string {
-	return s.trim().toLowerCase()
+	return s.normalize("NFC").replace(/…/g, "...").trim().replace(/\s+/g, " ").toLowerCase()
 }
 
 function clozeQuestionReportKey(q: NextQuestion): string {

@@ -8,6 +8,13 @@ import { isIngestionJobCancelled, tryMarkIngestionJobRunning } from "../lib/inge
 import type { KaikkiIngestMode } from "../lib/ingestion-urls"
 import { appendJobLog } from "../lib/job-logs"
 import { updateIngestionProgress } from "../lib/job-progress"
+import type { KaikkiEntry } from "../lib/kaikki-entry"
+import {
+	extractKaikkiGlossDefinitions,
+	kaikkiEntryHasOffensiveSense,
+	mapKaikkiPos,
+	normalizeKaikkiLemma,
+} from "../lib/kaikki-entry"
 import { nodeReadableFromWeb } from "../lib/node-streams"
 import { chainFrequencyFromKaikki } from "../lib/pipeline-chain"
 
@@ -18,66 +25,8 @@ import { chainFrequencyFromKaikki } from "../lib/pipeline-chain"
  * POS filter still applied on each line.
  */
 
-const POS_MAP: Record<string, string> = {
-	noun: "NOUN",
-	verb: "VERB",
-	adj: "ADJECTIVE",
-	adv: "ADVERB",
-	adjective: "ADJECTIVE",
-	adverb: "ADVERB",
-	pron: "PRONOUN",
-	pronoun: "PRONOUN",
-	det: "DETERMINER",
-	determiner: "DETERMINER",
-	prep: "PREPOSITION",
-	preposition: "PREPOSITION",
-	prep_phrase: "PREPOSITION",
-	conj: "CONJUNCTION",
-	conjunction: "CONJUNCTION",
-	particle: "PARTICLE",
-	intj: "INTERJECTION",
-	interjection: "INTERJECTION",
-	num: "NUMERAL",
-	numeral: "NUMERAL",
-	name: "PROPER_NOUN",
-	proper_noun: "PROPER_NOUN",
-}
-
 /** POS types where the user is tested on vocabulary. */
 const TESTABLE_POS = new Set(["NOUN", "VERB", "ADJECTIVE", "ADVERB"])
-
-const OFFENSIVE_TAGS = new Set(["vulgar", "offensive", "slur", "derogatory", "pejorative"])
-
-/** Skip these Wiktionary sense tags so lemmas like "GDP" are not ranked or tested. */
-const ABBREVIATION_SENSE_TAGS = new Set([
-	"abbreviation",
-	"abbrev",
-	"initialism",
-	"acronym",
-	"clipping",
-	"shortening",
-])
-
-function senseHasAbbreviationTag(sense: {
-	tags?: string[]
-	raw_tags?: string[]
-}): boolean {
-	for (const t of [...(sense.tags ?? []), ...(sense.raw_tags ?? [])]) {
-		if (ABBREVIATION_SENSE_TAGS.has(t.toLowerCase())) return true
-	}
-	return false
-}
-
-interface KaikkiEntry {
-	word: string
-	pos: string
-	lang?: string
-	senses?: Array<{
-		glosses?: string[]
-		tags?: string[]
-		raw_tags?: string[]
-	}>
-}
 
 export interface KaikkiJobData {
 	jobId: string
@@ -183,39 +132,24 @@ export async function processKaikkiJob(job: PgBoss.Job<KaikkiJobData>) {
 		try {
 			const entry: KaikkiEntry = JSON.parse(line)
 
-			const mappedPos = POS_MAP[entry.pos?.toLowerCase() ?? ""]
+			const mappedPos = mapKaikkiPos(entry.pos ?? "")
 			if (!mappedPos) {
 				skipped++
 				return true
 			}
 
-			const lemma = entry.word?.trim()?.toLowerCase()
+			const lemma = normalizeKaikkiLemma(entry.word)
 			if (!lemma) {
 				skipped++
 				return true
 			}
 
-			const definitions: string[] = []
-			let isOffensive = false
-
-			for (const sense of entry.senses ?? []) {
-				const tags = [...(sense.tags ?? []), ...(sense.raw_tags ?? [])]
-				if (tags.some((t) => OFFENSIVE_TAGS.has(t.toLowerCase()))) {
-					isOffensive = true
-				}
-			}
-
-			if (isOffensive) {
+			if (kaikkiEntryHasOffensiveSense(entry)) {
 				skipped++
 				return true
 			}
 
-			for (const sense of entry.senses ?? []) {
-				if (senseHasAbbreviationTag(sense)) continue
-				if (sense.glosses) {
-					definitions.push(...sense.glosses)
-				}
-			}
+			const definitions = extractKaikkiGlossDefinitions(entry)
 
 			if (definitions.length === 0) {
 				skipped++

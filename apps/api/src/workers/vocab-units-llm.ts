@@ -7,6 +7,7 @@ import { z } from "zod"
 import { createModel } from "../lib/ai"
 import type { AiCurriculumUnitJson } from "../lib/ai-curriculum-definition"
 import { getAiConfig } from "../lib/app-settings"
+import { plannedFormRank, selectCurriculumFormCandidates } from "../lib/curriculum-form-selection"
 import { isIngestionJobCancelled, tryMarkIngestionJobRunning } from "../lib/ingestion-job-cancel"
 import { appendJobLog, snapshotJobMetadata } from "../lib/job-logs"
 import { updateIngestionProgress } from "../lib/job-progress"
@@ -278,6 +279,15 @@ function curriculumUnitKey(u: z.infer<typeof unitSchema>): string {
 	return `${normalizeCurriculumText(u.text)}\0${mapDesignPos(u.pos)}`
 }
 
+function dbCurriculumUnitKey(text: string, pos: PartOfSpeech): string {
+	return `${normalizeCurriculumText(text)}\0${pos}`
+}
+
+function isKaikkiPromotedFormUnit(curriculumUnit: Prisma.JsonValue | null): boolean {
+	const unit = asMetaRecord(curriculumUnit)
+	return unit.formSource === "KAIKKI" && typeof unit.baseLemma === "string"
+}
+
 function designPosFromDb(pos: PartOfSpeech): VocabCandidateUnit["pos"] {
 	switch (pos) {
 		case "VERB":
@@ -490,6 +500,7 @@ export async function processVocabUnitsLlmJob(job: PgBoss.Job<VocabUnitsLlmJobDa
 
 		const allUnits: VocabUnit[] = []
 		const acceptedKeys = new Set<string>()
+		const acceptedBaseDbKeys = new Set<string>()
 		const missingRequired = new Set(
 			requiredWords.map((w) => normalizeCurriculumText(w)).filter((w) => w.length > 0),
 		)
@@ -510,6 +521,7 @@ export async function processVocabUnitsLlmJob(job: PgBoss.Job<VocabUnitsLlmJobDa
 		})
 
 		for (const word of existingWords) {
+			if (isKaikkiPromotedFormUnit(word.curriculumUnit)) continue
 			const unit = existingAiWordToUnit(word)
 			if (!unit.text) continue
 			const rejectReason = rejectReasonForUnit(unit)
@@ -522,6 +534,7 @@ export async function processVocabUnitsLlmJob(job: PgBoss.Job<VocabUnitsLlmJobDa
 
 			allUnits.push(unit)
 			acceptedKeys.add(key)
+			acceptedBaseDbKeys.add(dbCurriculumUnitKey(unit.text, word.pos))
 			keptIds.push(word.id)
 			missingRequired.delete(unit.text)
 		}
@@ -653,6 +666,7 @@ export async function processVocabUnitsLlmJob(job: PgBoss.Job<VocabUnitsLlmJobDa
 				keptIds.push(id)
 				allUnits.push(unit)
 				acceptedKeys.add(key)
+				acceptedBaseDbKeys.add(dbCurriculumUnitKey(unit.text, mapDesignPos(unit.pos)))
 				missingRequired.delete(text)
 				acceptedThisChunk++
 			}
@@ -678,7 +692,112 @@ export async function processVocabUnitsLlmJob(job: PgBoss.Job<VocabUnitsLlmJobDa
 		await appendJobLog(
 			jobId,
 			"out",
-			`Candidate generation complete — accepted ${allUnits.length} unique unit(s); pruning stale AI curriculum rows…`,
+			`Candidate generation complete — accepted ${allUnits.length} unique base unit(s); promoting Kaikki inflections…`,
+		)
+
+		const baseKeptIds = [...new Set(keptIds)]
+		const promotedIds: string[] = []
+		const sortKeyById = new Map<string, number>()
+		for (const [index, id] of baseKeptIds.entries()) {
+			sortKeyById.set(id, index + 1)
+		}
+
+		const baseWords = await prisma.word.findMany({
+			where: {
+				languageId,
+				curriculumSource: "AI_CURRICULUM",
+				id: { in: baseKeptIds },
+			},
+			orderBy: [{ rank: "asc" }, { id: "asc" }],
+			select: {
+				id: true,
+				lemma: true,
+				pos: true,
+				rank: true,
+				definitions: true,
+				curriculumUnit: true,
+				forms: {
+					select: {
+						form: true,
+						tags: true,
+					},
+				},
+			},
+		})
+
+		const promotedDbKeys = new Set<string>()
+		for (const baseWord of baseWords) {
+			if (await isIngestionJobCancelled(jobId)) return
+			const baseUnit = asMetaRecord(baseWord.curriculumUnit)
+			const baseTags = Array.isArray(baseUnit.tags)
+				? baseUnit.tags.filter((x): x is string => typeof x === "string")
+				: []
+			const formCandidates = selectCurriculumFormCandidates(baseWord, baseWord.forms)
+			for (const form of formCandidates) {
+				const targetKey = dbCurriculumUnitKey(form.form, form.pos)
+				if (acceptedBaseDbKeys.has(targetKey) || promotedDbKeys.has(targetKey)) continue
+				promotedDbKeys.add(targetKey)
+
+				const rank = plannedFormRank(baseWord.rank, form)
+				const cefr = cefrLevelForFrequencyRank(rank)
+				const curriculumUnit: AiCurriculumUnitJson = {
+					unitType: "WORD",
+					form: {
+						key: form.formKey,
+						baseLemma: form.baseLemma,
+						tags: form.formTags,
+					},
+					baseLemma: form.baseLemma,
+					formKey: form.formKey,
+					formTags: form.formTags,
+					formSource: "KAIKKI",
+					tags: [...baseTags, `form:${form.formKey}`],
+					lang: language.code,
+				}
+
+				const promoted = await prisma.word.upsert({
+					where: {
+						languageId_lemma_pos: { languageId, lemma: form.form, pos: form.pos },
+					},
+					create: {
+						languageId,
+						lemma: form.form,
+						pos: form.pos,
+						curriculumSource: "AI_CURRICULUM",
+						curriculumUnit: curriculumUnit as Prisma.InputJsonValue,
+						rank,
+						effectiveRank: rank,
+						definitions: baseWord.definitions as Prisma.InputJsonValue,
+						isAbbreviation: false,
+						isTestable: TESTABLE_POS.has(form.pos),
+						isOffensive: false,
+						alternatePos: [],
+						testSentenceIds: [],
+						aiSynonyms: [],
+						...(cefr ? { cefrLevel: cefr } : {}),
+					},
+					update: {
+						curriculumSource: "AI_CURRICULUM",
+						curriculumUnit: curriculumUnit as Prisma.InputJsonValue,
+						rank,
+						effectiveRank: rank,
+						definitions: baseWord.definitions as Prisma.InputJsonValue,
+						isAbbreviation: false,
+						isTestable: TESTABLE_POS.has(form.pos),
+						aiSynonyms: [],
+						...(cefr ? { cefrLevel: cefr } : { cefrLevel: null }),
+					},
+				})
+				promotedIds.push(promoted.id)
+				sortKeyById.set(promoted.id, rank + promotedIds.length * 1e-6)
+			}
+		}
+
+		keptIds.push(...promotedIds)
+		await appendJobLog(
+			jobId,
+			"out",
+			`Promoted ${promotedIds.length.toLocaleString()} Kaikki inflected form unit(s); pruning stale AI curriculum rows…`,
 		)
 
 		const del = await prisma.word.deleteMany({
@@ -694,6 +813,48 @@ export async function processVocabUnitsLlmJob(job: PgBoss.Job<VocabUnitsLlmJobDa
 			`Removed ${del.count} prior AI curriculum word row(s) not present in this run.`,
 		)
 
+		const finalRows = await prisma.word.findMany({
+			where: {
+				languageId,
+				curriculumSource: "AI_CURRICULUM",
+				id: { in: keptIds },
+			},
+			select: { id: true, rank: true, lemma: true },
+		})
+		const finalOrder = finalRows.sort((a, b) => {
+			const ka = sortKeyById.get(a.id) ?? a.rank
+			const kb = sortKeyById.get(b.id) ?? b.rank
+			if (ka !== kb) return ka - kb
+			return a.lemma.localeCompare(b.lemma) || a.id.localeCompare(b.id)
+		})
+		const rankUpdates: ReturnType<typeof prisma.word.update>[] = []
+		for (let i = 0; i < finalOrder.length; i++) {
+			const row = finalOrder[i]
+			const newRank = i + 1
+			if (row.rank === newRank) continue
+			const cefr = cefrLevelForFrequencyRank(newRank)
+			rankUpdates.push(
+				prisma.word.update({
+					where: { id: row.id },
+					data: {
+						rank: newRank,
+						effectiveRank: newRank,
+						positionAdjust: 0,
+						cefrLevel: cefr ?? null,
+					},
+				}),
+			)
+		}
+		for (let i = 0; i < rankUpdates.length; i += 150) {
+			if (await isIngestionJobCancelled(jobId)) return
+			await prisma.$transaction(rankUpdates.slice(i, i + 150))
+		}
+		await appendJobLog(
+			jobId,
+			"out",
+			`Applied dense rank plan to ${finalOrder.length.toLocaleString()} AI curriculum unit(s); ${rankUpdates.length.toLocaleString()} rank(s) changed.`,
+		)
+
 		await resolveWordOrder(languageId)
 
 		const prev = await snapshotJobMetadata(jobId)
@@ -706,7 +867,9 @@ export async function processVocabUnitsLlmJob(job: PgBoss.Job<VocabUnitsLlmJobDa
 				completedAt: new Date(),
 				metadata: {
 					...prev,
-					unitsUpserted: allUnits.length,
+					baseUnitsUpserted: allUnits.length,
+					promotedFormUnits: promotedIds.length,
+					unitsUpserted: finalOrder.length,
 					aiCurriculumDeletedOrphans: del.count,
 					rejectedSentenceLikeMultiwordUnits: rejectedBadMultiword,
 				} as Prisma.InputJsonValue,

@@ -1,6 +1,7 @@
 import { app } from "@nwords/api"
 import { auth } from "@nwords/auth/server"
 import { prisma } from "@nwords/db"
+import type { CurriculumSource } from "@nwords/db"
 import { Link, createFileRoute } from "@tanstack/react-router"
 import { createServerFn } from "@tanstack/react-start"
 import { getRequest } from "@tanstack/react-start/server"
@@ -39,7 +40,7 @@ const loadAdminCommonWordsPage = createServerFn({ method: "GET" }).handler(async
 	return { languages, defaultTargetLanguageId }
 })
 
-type LemmaRow = { id: string; lemma: string; sortOrder: number }
+type LemmaRow = { id: string; lemma: string; sortOrder: number; curriculumSource: CurriculumSource }
 
 const loadCommonLemmas = createServerFn({ method: "POST" })
 	.inputValidator((data: { languageId: string }) => data)
@@ -47,7 +48,7 @@ const loadCommonLemmas = createServerFn({ method: "POST" })
 		return prisma.languageCommonLemma.findMany({
 			where: { languageId: data.languageId },
 			orderBy: { sortOrder: "asc" },
-			select: { id: true, lemma: true, sortOrder: true },
+			select: { id: true, lemma: true, sortOrder: true, curriculumSource: true },
 		})
 	})
 
@@ -69,7 +70,12 @@ const addCommonLemmaViaApi = createServerFn({ method: "POST" })
 		if (!res.ok) {
 			throw new Error(body.error ?? `Add failed (${res.status})`)
 		}
-		return body as { id: string; lemma: string; sortOrder: number }
+		return body as {
+			id: string
+			lemma: string
+			sortOrder: number
+			curriculumSource: CurriculumSource
+		}
 	})
 
 const deleteCommonLemmaViaApi = createServerFn({ method: "POST" })
@@ -155,9 +161,15 @@ function AdminCommonWordsPage() {
 			const row = await addCommonLemmaViaApi({ data: { languageId, lemma: newLemma } })
 			setNewLemma("")
 			setLemmas((prev) =>
-				[...prev, { id: row.id, lemma: row.lemma, sortOrder: row.sortOrder }].sort(
-					(a, b) => a.sortOrder - b.sortOrder,
-				),
+				[
+					...prev,
+					{
+						id: row.id,
+						lemma: row.lemma,
+						sortOrder: row.sortOrder,
+						curriculumSource: row.curriculumSource,
+					},
+				].sort((a, b) => a.sortOrder - b.sortOrder),
 			)
 		} catch (err) {
 			setAddError(err instanceof Error ? err.message : String(err))
@@ -280,6 +292,12 @@ function AdminCommonWordsPage() {
 									{row.sortOrder + 1}
 								</span>
 								<span className="text-sm font-medium flex-1 min-w-0 truncate">{row.lemma}</span>
+								<span
+									className="text-[10px] font-mono text-muted-foreground shrink-0 w-16 text-right"
+									title="Curriculum source for this seed row"
+								>
+									{row.curriculumSource === "HERMIT_DAVE" ? "hermit" : "common"}
+								</span>
 								<Button
 									type="button"
 									variant="ghost"

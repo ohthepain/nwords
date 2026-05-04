@@ -160,8 +160,7 @@ export async function processVocabCleanupJob(job: PgBoss.Job<VocabCleanupJobData
 		for (const [_gkey, list] of groups) {
 			if (list.length < 2) continue
 			senseGroupsAdjusted++
-			const primary =
-				[...list].sort((a, b) => comparePrimary(a, b, commonLemmaRank))[0] ?? list[0]
+			const primary = [...list].sort((a, b) => comparePrimary(a, b, commonLemmaRank))[0] ?? list[0]
 			const secondaries = list
 				.filter((x) => x.id !== primary.id)
 				.sort((a, b) => comparePrimary(a, b, commonLemmaRank))

@@ -44,8 +44,12 @@ export const JOB_TYPE_LABELS: Record<string, string> = {
 	CLOZE_QUALITY_ASSESSMENT: "Cloze Quality Assessment",
 	CLOZE_GENERATION: "Cloze Generation",
 	COMMON_WORDS_TOP: "Common words (frequency top-N)",
+	HERMIT_DAVE_COMMON_LEMMAS: "HermitDave common lemmas (append)",
+	COMMON_CURRICULUM_KAIKKI: "Common curriculum (Kaikki word forms)",
 	VOCAB_UNITS_LLM: "Vocabulary units (LLM)",
 	VOCAB_CLEANUP: "Vocabulary cleanup",
+	WORDS_GLOSS_CLEANUP: "Words gloss cleanup",
+	CURRICULUM_TESTABILITY_TRIM: "Curriculum testability trim",
 }
 
 export const STATUS_STYLES: Record<string, string> = {

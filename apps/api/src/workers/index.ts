@@ -4,12 +4,18 @@ import type { ClozeGenerationJobData } from "./cloze-generation"
 import { processClozeGenerationJob } from "./cloze-generation"
 import type { ClozeQualityJobData } from "./cloze-quality"
 import { processClozeQualityJob } from "./cloze-quality"
+import type { CommonCurriculumKaikkiJobData } from "./common-curriculum-kaikki"
+import { processCommonCurriculumKaikkiJob } from "./common-curriculum-kaikki"
 import type { CommonWordsTopJobData } from "./common-words-top"
 import { processCommonWordsTopJob } from "./common-words-top"
+import type { CurriculumTestabilityTrimJobData } from "./curriculum-testability-trim"
+import { processCurriculumTestabilityTrimJob } from "./curriculum-testability-trim"
 import type { FixedExpressionsJobData } from "./fixed-expressions"
 import { processFixedExpressionsJob } from "./fixed-expressions"
 import type { FrequencyJobData } from "./frequency"
 import { processFrequencyJob } from "./frequency"
+import type { HermitDaveCommonLemmasJobData } from "./hermit-dave-common-lemmas"
+import { processHermitDaveCommonLemmasJob } from "./hermit-dave-common-lemmas"
 import type { KaikkiJobData } from "./kaikki"
 import { processKaikkiJob } from "./kaikki"
 import type { TatoebaJobData } from "./tatoeba"
@@ -20,6 +26,8 @@ import type { VocabUnitsLlmJobData } from "./vocab-units-llm"
 import { processVocabUnitsLlmJob } from "./vocab-units-llm"
 import type { WordFormsJobData } from "./word-forms"
 import { processWordFormsJob } from "./word-forms"
+import type { WordsGlossCleanupJobData } from "./words-gloss-cleanup"
+import { processWordsGlossCleanupJob } from "./words-gloss-cleanup"
 
 export { INGEST_QUEUE as QUEUE }
 
@@ -60,14 +68,26 @@ export async function registerIngestWorkers(boss: PgBoss) {
 	await boss.work(INGEST_QUEUE.COMMON_WORDS_TOP, opts, async ([job]) =>
 		processCommonWordsTopJob(job as PgBoss.Job<CommonWordsTopJobData>),
 	)
+	await boss.work(INGEST_QUEUE.HERMIT_DAVE_COMMON_LEMMAS, opts, async ([job]) =>
+		processHermitDaveCommonLemmasJob(job as PgBoss.Job<HermitDaveCommonLemmasJobData>),
+	)
+	await boss.work(INGEST_QUEUE.COMMON_CURRICULUM_KAIKKI, opts, async ([job]) =>
+		processCommonCurriculumKaikkiJob(job as PgBoss.Job<CommonCurriculumKaikkiJobData>),
+	)
 	await boss.work(INGEST_QUEUE.VOCAB_UNITS_LLM, opts, async ([job]) =>
 		processVocabUnitsLlmJob(job as PgBoss.Job<VocabUnitsLlmJobData>),
 	)
 	await boss.work(INGEST_QUEUE.VOCAB_CLEANUP, opts, async ([job]) =>
 		processVocabCleanupJob(job as PgBoss.Job<VocabCleanupJobData>),
 	)
+	await boss.work(INGEST_QUEUE.WORDS_GLOSS_CLEANUP, opts, async ([job]) =>
+		processWordsGlossCleanupJob(job as PgBoss.Job<WordsGlossCleanupJobData>),
+	)
+	await boss.work(INGEST_QUEUE.CURRICULUM_TESTABILITY_TRIM, opts, async ([job]) =>
+		processCurriculumTestabilityTrimJob(job as PgBoss.Job<CurriculumTestabilityTrimJobData>),
+	)
 
 	console.log(
-		"[workers] Registered: kaikki, frequency, tatoeba, word-forms, fixed-expressions, cloze-quality, cloze-generation, common-words-top, vocab-units-llm, vocab-cleanup",
+		"[workers] Registered: kaikki, frequency, tatoeba, word-forms, fixed-expressions, cloze-quality, cloze-generation, common-words-top, hermit-dave-common-lemmas, common-curriculum-kaikki, vocab-units-llm, vocab-cleanup, words-gloss-cleanup, curriculum-testability-trim",
 	)
 }

@@ -1,7 +1,7 @@
 import type { Prisma } from "@nwords/db"
 import { prisma } from "@nwords/db"
 import type PgBoss from "pg-boss"
-import { chainVocabUnitsLlmFromCommonWordsJob } from "../lib/ai-vocab-pipeline"
+import { chainCommonCurriculumKaikkiFromCommonWordsJob } from "../lib/ai-vocab-pipeline"
 import { fetchTopFrequencyLemmas } from "../lib/fetch-top-frequency-lemmas"
 import { isIngestionJobCancelled, tryMarkIngestionJobRunning } from "../lib/ingestion-job-cancel"
 import { appendJobLog, snapshotJobMetadata } from "../lib/job-logs"
@@ -43,7 +43,7 @@ export async function processCommonWordsTopJob(job: PgBoss.Job<CommonWordsTopJob
 			? limitArg
 			: typeof fileMeta.limit === "number" && fileMeta.limit > 0
 				? fileMeta.limit
-				: 200
+				: 300
 	const unitCount =
 		typeof unitCountArg === "number" && unitCountArg > 0
 			? unitCountArg
@@ -135,12 +135,12 @@ export async function processCommonWordsTopJob(job: PgBoss.Job<CommonWordsTopJob
 		await appendJobLog(
 			jobId,
 			"out",
-			"Common words: complete — review `topLemmas` in job metadata / output, then run LLM vocabulary when ready.",
+			"Common words: complete — review `topLemmas` in job metadata / output, then run common-curriculum (Kaikki) or LLM vocabulary when ready.",
 		)
 
 		if (chainPipeline) {
-			await appendJobLog(jobId, "out", "Chaining to VOCAB_UNITS_LLM (chainPipeline=true)…")
-			await chainVocabUnitsLlmFromCommonWordsJob(languageId, jobId)
+			await appendJobLog(jobId, "out", "Chaining to COMMON_CURRICULUM_KAIKKI (chainPipeline=true)…")
+			await chainCommonCurriculumKaikkiFromCommonWordsJob(languageId, jobId)
 		}
 	} catch (err) {
 		console.error("[common-words-top] Fatal error:", err)

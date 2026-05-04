@@ -8,8 +8,8 @@ import { appendJobLog, snapshotJobMetadata } from "../lib/job-logs"
 import { updateIngestionProgress } from "../lib/job-progress"
 import { nodeReadableFromWeb, readLinesFromReadable } from "../lib/node-streams"
 import { chainTatoebaFromFrequency } from "../lib/pipeline-chain"
-import { isLegacyVocabPipeline } from "../lib/vocab-pipeline-env"
 import { resolveWordOrder } from "../lib/resolve-word-order"
+import { isLegacyVocabPipeline } from "../lib/vocab-pipeline-env"
 
 /**
  * Frequency list importer: TSV/CSV (rank ↔ lemma) or bnpd/freqListsLemmatized (lemma first, rank = line #).

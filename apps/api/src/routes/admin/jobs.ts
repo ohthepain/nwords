@@ -4,18 +4,37 @@ import { zValidator } from "@hono/zod-validator"
 import { type Prisma, prisma } from "@nwords/db"
 import { Hono } from "hono"
 import { z } from "zod"
+import { createModel } from "../../lib/ai"
 import {
 	enqueueAiVocabPipeline,
+	enqueueCommonCurriculumKaikkiFromCommonWords,
 	enqueueVocabUnitsLlmFromCommonWords,
 } from "../../lib/ai-vocab-pipeline"
+import { getAiConfig } from "../../lib/app-settings"
 import { sendIngestJob } from "../../lib/boss"
 import { INGEST_QUEUE } from "../../lib/ingestion-queues"
 import { jobMetadataForRetry } from "../../lib/job-logs"
 import { skipIngestionJobAndContinuePipeline } from "../../lib/skip-ingestion-chain"
 import { adminMiddleware } from "../../middleware/admin"
 import { authMiddleware } from "../../middleware/auth"
+import { runClozeGenerationPromptPreview } from "../../workers/cloze-generation"
 
 const UPLOAD_DIR = path.join(process.cwd(), "uploads")
+
+const adminPartOfSpeechSchema = z.enum([
+	"NOUN",
+	"VERB",
+	"ADJECTIVE",
+	"ADVERB",
+	"PRONOUN",
+	"DETERMINER",
+	"PREPOSITION",
+	"CONJUNCTION",
+	"PARTICLE",
+	"INTERJECTION",
+	"NUMERAL",
+	"PROPER_NOUN",
+])
 
 const TYPE_TO_QUEUE: Record<string, string> = {
 	KAIKKI_WORDS: INGEST_QUEUE.KAIKKI,
@@ -26,8 +45,12 @@ const TYPE_TO_QUEUE: Record<string, string> = {
 	CLOZE_QUALITY_ASSESSMENT: INGEST_QUEUE.CLOZE_QUALITY,
 	CLOZE_GENERATION: INGEST_QUEUE.CLOZE_GENERATION,
 	COMMON_WORDS_TOP: INGEST_QUEUE.COMMON_WORDS_TOP,
+	COMMON_CURRICULUM_KAIKKI: INGEST_QUEUE.COMMON_CURRICULUM_KAIKKI,
 	VOCAB_UNITS_LLM: INGEST_QUEUE.VOCAB_UNITS_LLM,
 	VOCAB_CLEANUP: INGEST_QUEUE.VOCAB_CLEANUP,
+	WORDS_GLOSS_CLEANUP: INGEST_QUEUE.WORDS_GLOSS_CLEANUP,
+	CURRICULUM_TESTABILITY_TRIM: INGEST_QUEUE.CURRICULUM_TESTABILITY_TRIM,
+	HERMIT_DAVE_COMMON_LEMMAS: INGEST_QUEUE.HERMIT_DAVE_COMMON_LEMMAS,
 }
 
 type RetryPlan =
@@ -248,7 +271,7 @@ async function planRetryFromJob(job: {
 			}
 		}
 		case "COMMON_WORDS_TOP": {
-			const limit = typeof meta.limit === "number" && meta.limit > 0 ? meta.limit : 200
+			const limit = typeof meta.limit === "number" && meta.limit > 0 ? meta.limit : 300
 			const unitCount =
 				typeof meta.unitCount === "number" && meta.unitCount > 0 ? meta.unitCount : 2000
 			const glossLanguageName =
@@ -265,6 +288,30 @@ async function planRetryFromJob(job: {
 					glossLanguageName,
 					glossLanguageCode,
 					chainPipeline: meta.chainPipeline === true,
+				},
+			}
+		}
+		case "COMMON_CURRICULUM_KAIKKI": {
+			return {
+				ok: true,
+				queue: INGEST_QUEUE.COMMON_CURRICULUM_KAIKKI,
+				payload: {
+					languageId: job.languageId,
+					...(typeof meta.forceCommonWordsJobId === "string"
+						? { forceCommonWordsJobId: meta.forceCommonWordsJobId }
+						: {}),
+				},
+			}
+		}
+		case "HERMIT_DAVE_COMMON_LEMMAS": {
+			const scanLimit =
+				typeof meta.scanLimit === "number" && meta.scanLimit > 0 ? meta.scanLimit : 2000
+			return {
+				ok: true,
+				queue: INGEST_QUEUE.HERMIT_DAVE_COMMON_LEMMAS,
+				payload: {
+					languageId: job.languageId,
+					scanLimit,
 				},
 			}
 		}
@@ -304,6 +351,26 @@ async function planRetryFromJob(job: {
 					languageId: job.languageId,
 					dryRun: meta.dryRun === true,
 					...(typeof meta.senseOffset === "number" ? { senseOffset: meta.senseOffset } : {}),
+				},
+			}
+		}
+		case "WORDS_GLOSS_CLEANUP": {
+			return {
+				ok: true,
+				queue: INGEST_QUEUE.WORDS_GLOSS_CLEANUP,
+				payload: {
+					languageId: job.languageId,
+				},
+			}
+		}
+		case "CURRICULUM_TESTABILITY_TRIM": {
+			return {
+				ok: true,
+				queue: INGEST_QUEUE.CURRICULUM_TESTABILITY_TRIM,
+				payload: {
+					languageId: job.languageId,
+					dryRun: meta.dryRun === true,
+					...(typeof meta.batchSize === "number" ? { batchSize: meta.batchSize } : {}),
 				},
 			}
 		}
@@ -434,8 +501,12 @@ export const adminJobsRoute = new Hono()
 						"CLOZE_QUALITY_ASSESSMENT",
 						"CLOZE_GENERATION",
 						"COMMON_WORDS_TOP",
+						"HERMIT_DAVE_COMMON_LEMMAS",
+						"COMMON_CURRICULUM_KAIKKI",
 						"VOCAB_UNITS_LLM",
 						"VOCAB_CLEANUP",
+						"WORDS_GLOSS_CLEANUP",
+						"CURRICULUM_TESTABILITY_TRIM",
 					])
 					.optional(),
 				limit: z.coerce.number().min(1).max(100).default(20),
@@ -647,7 +718,7 @@ export const adminJobsRoute = new Hono()
 		},
 	)
 
-	/** AI step 1: enqueue `COMMON_WORDS_TOP` only (review `topLemmas`, then `POST …/vocab-units-llm/from-common-words`). */
+	/** AI step 1: enqueue `COMMON_WORDS_TOP` (review lemmas, then `POST …/common-curriculum-kaikki/from-common-words` or LLM vocab). */
 	.post(
 		"/ai-vocab-pipeline",
 		zValidator(
@@ -705,7 +776,7 @@ export const adminJobsRoute = new Hono()
 				return c.json({ error: "Language not found" }, 404)
 			}
 
-			const limit = body.limit ?? 200
+			const limit = body.limit ?? 300
 			const unitCount = body.unitCount ?? 2000
 			const glossLanguageName = body.glossLanguageName ?? "English"
 			const glossLanguageCode = body.glossLanguageCode ?? "en"
@@ -742,6 +813,38 @@ export const adminJobsRoute = new Hono()
 	)
 
 	.post(
+		"/common-curriculum-kaikki/from-common-words",
+		zValidator(
+			"json",
+			z.object({
+				languageId: z.string().uuid(),
+				commonWordsJobId: z.string().uuid().optional(),
+			}),
+		),
+		async (c) => {
+			const body = c.req.valid("json")
+			const language = await prisma.language.findUnique({ where: { id: body.languageId } })
+			if (!language) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+
+			try {
+				const out = await enqueueCommonCurriculumKaikkiFromCommonWords(
+					body.languageId,
+					body.commonWordsJobId,
+				)
+				const jobCreated = await prisma.ingestionJob.findUnique({ where: { id: out.jobId } })
+				if (!jobCreated) {
+					return c.json({ error: "Job row missing after enqueue" }, 500)
+				}
+				return c.json(serializeJob(jobCreated), 201)
+			} catch (e) {
+				return c.json({ error: e instanceof Error ? e.message : String(e) }, 400)
+			}
+		},
+	)
+
+	.post(
 		"/vocab-units-llm/from-common-words",
 		zValidator(
 			"json",
@@ -774,6 +877,7 @@ export const adminJobsRoute = new Hono()
 	)
 
 	.post(
+		"/vocab-units-llm",
 		zValidator(
 			"json",
 			z.object({
@@ -858,6 +962,83 @@ export const adminJobsRoute = new Hono()
 				languageId: body.languageId,
 				dryRun,
 				...(body.senseOffset !== undefined ? { senseOffset: body.senseOffset } : {}),
+			})
+
+			return c.json(serializeJob(job), 201)
+		},
+	)
+
+	.post(
+		"/words-gloss-cleanup",
+		zValidator(
+			"json",
+			z.object({
+				languageId: z.string().uuid(),
+			}),
+		),
+		async (c) => {
+			const body = c.req.valid("json")
+			const language = await prisma.language.findUnique({ where: { id: body.languageId } })
+			if (!language) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+
+			const job = await prisma.ingestionJob.create({
+				data: {
+					type: "WORDS_GLOSS_CLEANUP",
+					languageId: body.languageId,
+					metadata: {
+						languageCode: language.code,
+						languageName: language.name,
+					},
+				},
+			})
+
+			await sendIngestJob(INGEST_QUEUE.WORDS_GLOSS_CLEANUP, {
+				jobId: job.id,
+				languageId: body.languageId,
+			})
+
+			return c.json(serializeJob(job), 201)
+		},
+	)
+
+	.post(
+		"/curriculum-testability-trim",
+		zValidator(
+			"json",
+			z.object({
+				languageId: z.string().uuid(),
+				dryRun: z.boolean().optional(),
+				batchSize: z.number().int().min(10).max(200).optional(),
+			}),
+		),
+		async (c) => {
+			const body = c.req.valid("json")
+			const language = await prisma.language.findUnique({ where: { id: body.languageId } })
+			if (!language) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+
+			const dryRun = body.dryRun === true
+			const job = await prisma.ingestionJob.create({
+				data: {
+					type: "CURRICULUM_TESTABILITY_TRIM",
+					languageId: body.languageId,
+					metadata: {
+						dryRun,
+						languageCode: language.code,
+						languageName: language.name,
+						...(body.batchSize !== undefined ? { batchSize: body.batchSize } : {}),
+					},
+				},
+			})
+
+			await sendIngestJob(INGEST_QUEUE.CURRICULUM_TESTABILITY_TRIM, {
+				jobId: job.id,
+				languageId: body.languageId,
+				dryRun,
+				...(body.batchSize !== undefined ? { batchSize: body.batchSize } : {}),
 			})
 
 			return c.json(serializeJob(job), 201)
@@ -951,5 +1132,75 @@ export const adminJobsRoute = new Hono()
 			})
 
 			return c.json(serializeJob(job), 201)
+		},
+	)
+
+	.post(
+		"/cloze-generation-prompt-preview",
+		zValidator(
+			"json",
+			z.object({
+				languageId: z.string().uuid(),
+				lemma: z.string().min(1).max(200),
+				pos: adminPartOfSpeechSchema,
+				unitType: z.enum(["WORD", "PARTICLE", "FIXED_EXPR", "SPLIT"]),
+				gloss: z.string().max(500).optional().default(""),
+				rank: z.number().int().min(0).max(1_000_000).optional().default(100),
+				tags: z.array(z.string()).max(20).optional().default([]),
+				form: z.record(z.string(), z.unknown()).nullable().optional(),
+				candidatesPerUnit: z.number().int().min(5).max(20).optional().default(10),
+				selectedPerUnit: z.number().int().min(1).max(10).optional().default(5),
+			}),
+		),
+		async (c) => {
+			const body = c.req.valid("json")
+
+			const language = await prisma.language.findUnique({ where: { id: body.languageId } })
+			if (!language) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+
+			const aiConfig = await getAiConfig()
+			if (!aiConfig) {
+				return c.json(
+					{ error: "AI is not configured. Set provider, model, and API key in admin settings." },
+					503,
+				)
+			}
+
+			try {
+				const model = createModel(aiConfig)
+				const preview = await runClozeGenerationPromptPreview({
+					model,
+					languageName: language.name,
+					lemma: body.lemma.trim(),
+					pos: body.pos,
+					unitType: body.unitType,
+					gloss: body.gloss,
+					rank: body.rank,
+					tags: body.tags,
+					form: body.form ?? null,
+					candidatesPerUnit: body.candidatesPerUnit,
+					selectedPerUnit: body.selectedPerUnit,
+				})
+				return c.json({
+					languageCode: language.code,
+					languageName: language.name,
+					unitJson: preview.unitJson,
+					systemPrompt: preview.systemPrompt,
+					userPrompt: preview.userPrompt,
+					candidates: preview.candidates,
+					usableCandidates: preview.usableCandidates,
+					selectedCandidates: preview.selectedCandidates,
+					summary: {
+						returned: preview.candidates.length,
+						usable: preview.usableCandidates.length,
+						selected: preview.selectedCandidates.length,
+					},
+				})
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err)
+				return c.json({ error: message }, 500)
+			}
 		},
 	)

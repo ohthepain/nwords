@@ -4,9 +4,15 @@ import { Hono } from "hono"
 import { z } from "zod"
 import {
 	enqueueAiVocabPipeline,
+	enqueueCommonCurriculumKaikkiFromCommonWords,
+	enqueueHermitDaveCommonLemmasJob,
 	enqueueVocabUnitsLlmFromCommonWords,
 } from "../../lib/ai-vocab-pipeline"
 import { sendIngestJob } from "../../lib/boss"
+import {
+	COMMON_CURRICULUM_FREQUENCY_TAG,
+	pgJsonArrayContainsScalar,
+} from "../../lib/common-curriculum-tags"
 import { INGEST_QUEUE } from "../../lib/ingestion-queues"
 import { normalizeCommonLemma } from "../../lib/language-common-lemmas"
 import { enqueueLanguageIngestionPipeline } from "../../lib/language-pipeline"
@@ -19,7 +25,8 @@ export const adminLanguagesRoute = new Hono()
 
 	// List all languages with word/sentence counts
 	.get("/", async (c) => {
-		const [languages, wordSourceCounts] = await Promise.all([
+		const commonFreqContain = pgJsonArrayContainsScalar(COMMON_CURRICULUM_FREQUENCY_TAG)
+		const [languages, wordSourceCounts, commonCurriculumCohortRows] = await Promise.all([
 			prisma.language.findMany({
 				orderBy: { name: "asc" },
 				include: {
@@ -32,11 +39,26 @@ export const adminLanguagesRoute = new Hono()
 				by: ["languageId", "curriculumSource"],
 				_count: { _all: true },
 			}),
+			prisma.$queryRawUnsafe(
+				`SELECT w."languageId"::text AS "languageId", COUNT(*)::bigint AS c
+				FROM "word" w
+				WHERE
+					w."curriculumSource" IN ('COMMON', 'HERMIT_DAVE')
+					OR (
+						w."curriculumSource" = 'KAIKKI'
+						AND w."curriculumUnit" IS NOT NULL
+						AND COALESCE(w."curriculumUnit"::jsonb->'tags', '[]'::jsonb) @> ${commonFreqContain}
+					)
+				GROUP BY w."languageId"`,
+			) as Promise<Array<{ languageId: string; c: bigint }>>,
 		])
 		const aiWordCountsByLanguageId = new Map(
 			wordSourceCounts
 				.filter((row) => row.curriculumSource === "AI_CURRICULUM")
 				.map((row) => [row.languageId, row._count._all]),
+		)
+		const commonWordCountsByLanguageId = new Map(
+			commonCurriculumCohortRows.map((row) => [row.languageId, Number(row.c)]),
 		)
 
 		return c.json({
@@ -48,6 +70,7 @@ export const adminLanguagesRoute = new Hono()
 				enabled: l.enabled,
 				wordCount: l._count.words,
 				aiWordCount: aiWordCountsByLanguageId.get(l.id) ?? 0,
+				commonWordCount: commonWordCountsByLanguageId.get(l.id) ?? 0,
 				sentenceCount: l._count.sentences,
 				createdAt: l.createdAt.toISOString(),
 			})),
@@ -171,6 +194,70 @@ export const adminLanguagesRoute = new Hono()
 		},
 	)
 
+	/** Build COMMON curriculum (`COMMON_CURRICULUM_KAIKKI`) from curated common lemmas (latest or pinned common-words job). */
+	.post(
+		"/:id/run-common-curriculum-from-common-words",
+		zValidator(
+			"json",
+			z.object({
+				commonWordsJobId: z.string().uuid().optional(),
+			}),
+		),
+		async (c) => {
+			const { id } = c.req.param()
+			const body = c.req.valid("json")
+			const lang = await prisma.language.findUnique({ where: { id } })
+			if (!lang) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+
+			try {
+				const out = await enqueueCommonCurriculumKaikkiFromCommonWords(id, body.commonWordsJobId)
+				return c.json({
+					id: lang.id,
+					code: lang.code,
+					name: lang.name,
+					pipelineJobId: out.jobId,
+				})
+			} catch (e) {
+				return c.json({ error: e instanceof Error ? e.message : String(e) }, 400)
+			}
+		},
+	)
+
+	/** HermitDave: append top-ranked lemmas into `language_common_lemma` (skips lemmas already listed). Separate manual step after Common words. */
+	.post(
+		"/:id/run-hermit-dave-common-lemmas",
+		zValidator(
+			"json",
+			z.object({
+				scanLimit: z.number().int().min(50).max(25_000).optional(),
+			}),
+		),
+		async (c) => {
+			const { id } = c.req.param()
+			const body = c.req.valid("json")
+			const lang = await prisma.language.findUnique({ where: { id } })
+			if (!lang) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+
+			try {
+				const out = await enqueueHermitDaveCommonLemmasJob(id, {
+					scanLimit: body.scanLimit,
+				})
+				return c.json({
+					id: lang.id,
+					code: lang.code,
+					name: lang.name,
+					pipelineJobId: out.jobId,
+				})
+			} catch (e) {
+				return c.json({ error: e instanceof Error ? e.message : String(e) }, 400)
+			}
+		},
+	)
+
 	/** Post-process AI curriculum words: homograph sense spacing + dense ranks. */
 	.post(
 		"/:id/run-vocab-cleanup",
@@ -208,6 +295,49 @@ export const adminLanguagesRoute = new Hono()
 				languageId: id,
 				dryRun,
 				...(body.senseOffset !== undefined ? { senseOffset: body.senseOffset } : {}),
+			})
+
+			return c.json({ id: lang.id, jobId: job.id }, 201)
+		},
+	)
+
+	/** LLM trim of scoped curriculum rows: mark peripheral senses/forms untestable (modern spoken defaults only). */
+	.post(
+		"/:id/run-curriculum-testability-trim",
+		zValidator(
+			"json",
+			z.object({
+				dryRun: z.boolean().optional(),
+				batchSize: z.number().int().min(10).max(200).optional(),
+			}),
+		),
+		async (c) => {
+			const { id } = c.req.param()
+			const body = c.req.valid("json")
+			const lang = await prisma.language.findUnique({ where: { id } })
+			if (!lang) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+
+			const dryRun = body.dryRun === true
+			const job = await prisma.ingestionJob.create({
+				data: {
+					type: "CURRICULUM_TESTABILITY_TRIM",
+					languageId: id,
+					metadata: {
+						dryRun,
+						languageCode: lang.code,
+						languageName: lang.name,
+						...(body.batchSize !== undefined ? { batchSize: body.batchSize } : {}),
+					},
+				},
+			})
+
+			await sendIngestJob(INGEST_QUEUE.CURRICULUM_TESTABILITY_TRIM, {
+				jobId: job.id,
+				languageId: id,
+				dryRun,
+				...(body.batchSize !== undefined ? { batchSize: body.batchSize } : {}),
 			})
 
 			return c.json({ id: lang.id, jobId: job.id }, 201)
@@ -289,6 +419,8 @@ export const adminLanguagesRoute = new Hono()
 						"CLOZE_GENERATION",
 						"VOCAB_UNITS_LLM",
 						"VOCAB_CLEANUP",
+						"WORDS_GLOSS_CLEANUP",
+						"CURRICULUM_TESTABILITY_TRIM",
 					],
 				},
 				status: { in: ["PENDING", "RUNNING"] },
@@ -308,7 +440,9 @@ export const adminLanguagesRoute = new Hono()
 			async (tx) => {
 				const generated = await tx.generatedCloze.deleteMany({ where: { languageId: id } })
 				const reports = await tx.clozeIssueReport.deleteMany({
-					where: { targetLanguageId: id },
+					where: {
+						word: { languageId: id },
+					},
 				})
 				const userKnowledge = await tx.userWordKnowledge.deleteMany({
 					where: { word: { languageId: id } },
@@ -318,6 +452,7 @@ export const adminLanguagesRoute = new Hono()
 				})
 				const wordForms = await tx.wordForm.deleteMany({ where: { languageId: id } })
 				const synonymPairs = await tx.wordSynonymPair.deleteMany({ where: { languageId: id } })
+				const commonLemmas = await tx.languageCommonLemma.deleteMany({ where: { languageId: id } })
 				const words = await tx.word.deleteMany({ where: { languageId: id } })
 				return {
 					wordsDeleted: words.count,
@@ -327,6 +462,7 @@ export const adminLanguagesRoute = new Hono()
 					sentenceWordsDeleted: sentenceWords.count,
 					wordFormsDeleted: wordForms.count,
 					synonymPairsDeleted: synonymPairs.count,
+					commonLemmasDeleted: commonLemmas.count,
 				}
 			},
 			{ timeout: 300_000 },
@@ -348,7 +484,7 @@ export const adminLanguagesRoute = new Hono()
 		const lemmas = await prisma.languageCommonLemma.findMany({
 			where: { languageId: id },
 			orderBy: { sortOrder: "asc" },
-			select: { id: true, lemma: true, sortOrder: true },
+			select: { id: true, lemma: true, sortOrder: true, curriculumSource: true },
 		})
 		return c.json({ language: lang, lemmas })
 	})
@@ -376,8 +512,8 @@ export const adminLanguagesRoute = new Hono()
 
 			try {
 				const row = await prisma.languageCommonLemma.create({
-					data: { languageId: id, lemma, sortOrder },
-					select: { id: true, lemma: true, sortOrder: true },
+					data: { languageId: id, lemma, sortOrder, curriculumSource: "COMMON" },
+					select: { id: true, lemma: true, sortOrder: true, curriculumSource: true },
 				})
 				return c.json(row, 201)
 			} catch (e) {
@@ -436,6 +572,79 @@ export const adminLanguagesRoute = new Hono()
 				wordsCleared: wordsReset.count,
 			}
 		})
+
+		return c.json({
+			id: lang.id,
+			code: lang.code,
+			name: lang.name,
+			...result,
+		})
+	})
+
+	/**
+	 * Delete every `sentence` row for this language and any `sentence_translation` involving those rows.
+	 * Tatoeba and AI corpus text is removed until you re-import. `sentence_word` rows cascade away.
+	 */
+	.post("/:id/clear-sentence-corpus", async (c) => {
+		const { id } = c.req.param()
+		const lang = await prisma.language.findUnique({ where: { id } })
+		if (!lang) {
+			return c.json({ error: "Language not found" }, 404)
+		}
+
+		const activeJob = await prisma.ingestionJob.findFirst({
+			where: {
+				languageId: id,
+				type: {
+					in: [
+						"KAIKKI_WORDS",
+						"FREQUENCY_LIST",
+						"TATOEBA_SENTENCES",
+						"WORD_FORMS",
+						"FIXED_EXPRESSIONS",
+						"CLOZE_QUALITY_ASSESSMENT",
+						"CLOZE_GENERATION",
+						"VOCAB_UNITS_LLM",
+						"VOCAB_CLEANUP",
+						"WORDS_GLOSS_CLEANUP",
+						"CURRICULUM_TESTABILITY_TRIM",
+					],
+				},
+				status: { in: ["PENDING", "RUNNING"] },
+			},
+			select: { id: true, type: true, status: true },
+		})
+		if (activeJob) {
+			return c.json(
+				{
+					error: `Cannot clear sentences while ${activeJob.type} job ${activeJob.id.slice(0, 8)} is ${activeJob.status}. Cancel or wait for it first.`,
+				},
+				409,
+			)
+		}
+
+		const result = await prisma.$transaction(
+			async (tx) => {
+				const translations = await tx.sentenceTranslation.deleteMany({
+					where: {
+						OR: [
+							{ originalSentence: { languageId: id } },
+							{ translatedSentence: { languageId: id } },
+						],
+					},
+				})
+				await tx.word.updateMany({
+					where: { languageId: id },
+					data: { testSentenceIds: [] },
+				})
+				const sentences = await tx.sentence.deleteMany({ where: { languageId: id } })
+				return {
+					sentenceTranslationsDeleted: translations.count,
+					sentencesDeleted: sentences.count,
+				}
+			},
+			{ timeout: 300_000 },
+		)
 
 		return c.json({
 			id: lang.id,
