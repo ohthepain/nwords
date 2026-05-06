@@ -344,6 +344,49 @@ export const adminLanguagesRoute = new Hono()
 		},
 	)
 
+	/** Re-run the cloze generation pipeline on scoped rows with `isTestable=false` (same as Generate clozes, subset only). Promotes rows only after usable clozes validate. */
+	.post(
+		"/:id/run-curriculum-testability-trim-retry",
+		zValidator(
+			"json",
+			z.object({
+				dryRun: z.boolean().optional(),
+				batchSize: z.number().int().min(10).max(200).optional(),
+			}),
+		),
+		async (c) => {
+			const { id } = c.req.param()
+			const body = c.req.valid("json")
+			const lang = await prisma.language.findUnique({ where: { id } })
+			if (!lang) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+
+			const dryRun = body.dryRun === true
+			const job = await prisma.ingestionJob.create({
+				data: {
+					type: "CURRICULUM_TESTABILITY_TRIM_RETRY",
+					languageId: id,
+					metadata: {
+						dryRun,
+						languageCode: lang.code,
+						languageName: lang.name,
+						...(body.batchSize !== undefined ? { batchSize: body.batchSize } : {}),
+					},
+				},
+			})
+
+			await sendIngestJob(INGEST_QUEUE.CURRICULUM_TESTABILITY_TRIM_RETRY, {
+				jobId: job.id,
+				languageId: id,
+				dryRun,
+				...(body.batchSize !== undefined ? { batchSize: body.batchSize } : {}),
+			})
+
+			return c.json({ id: lang.id, jobId: job.id }, 201)
+		},
+	)
+
 	.post("/:id/clear-generated-clozes", async (c) => {
 		const { id } = c.req.param()
 		const lang = await prisma.language.findUnique({ where: { id } })
@@ -426,6 +469,7 @@ export const adminLanguagesRoute = new Hono()
 						"VOCAB_CLEANUP",
 						"WORDS_GLOSS_CLEANUP",
 						"CURRICULUM_TESTABILITY_TRIM",
+						"CURRICULUM_TESTABILITY_TRIM_RETRY",
 					],
 				},
 				status: { in: ["PENDING", "RUNNING"] },
@@ -613,6 +657,7 @@ export const adminLanguagesRoute = new Hono()
 						"VOCAB_CLEANUP",
 						"WORDS_GLOSS_CLEANUP",
 						"CURRICULUM_TESTABILITY_TRIM",
+						"CURRICULUM_TESTABILITY_TRIM_RETRY",
 					],
 				},
 				status: { in: ["PENDING", "RUNNING"] },

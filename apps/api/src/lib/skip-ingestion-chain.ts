@@ -108,6 +108,8 @@ export async function skipIngestionJobAndContinuePipeline(
 			break
 		case "CURRICULUM_TESTABILITY_TRIM":
 			break
+		case "CURRICULUM_TESTABILITY_TRIM_RETRY":
+			break
 		case "COMMON_CURRICULUM_KAIKKI":
 			await chainWordsGlossCleanup(languageId)
 			break

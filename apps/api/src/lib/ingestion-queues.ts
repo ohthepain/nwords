@@ -14,4 +14,5 @@ export const INGEST_QUEUE = {
 	VOCAB_CLEANUP: "ingest:vocab-cleanup",
 	WORDS_GLOSS_CLEANUP: "ingest:words-gloss-cleanup",
 	CURRICULUM_TESTABILITY_TRIM: "ingest:curriculum-testability-trim",
+	CURRICULUM_TESTABILITY_TRIM_RETRY: "ingest:curriculum-testability-trim-retry",
 } as const

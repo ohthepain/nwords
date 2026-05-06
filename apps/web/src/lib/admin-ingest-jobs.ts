@@ -50,6 +50,7 @@ export const JOB_TYPE_LABELS: Record<string, string> = {
 	VOCAB_CLEANUP: "Vocabulary cleanup",
 	WORDS_GLOSS_CLEANUP: "Words gloss cleanup",
 	CURRICULUM_TESTABILITY_TRIM: "Curriculum testability trim",
+	CURRICULUM_TESTABILITY_TRIM_RETRY: "Re-check non-testable (cloze pipeline)",
 }
 
 export const STATUS_STYLES: Record<string, string> = {

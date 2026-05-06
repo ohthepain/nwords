@@ -1,101 +1,112 @@
-import type { Prisma } from "@nwords/db";
-import { prisma } from "@nwords/db";
-import { generateObject } from "ai";
-import type PgBoss from "pg-boss";
-import { z } from "zod";
-import { createModel } from "../lib/ai";
-import { getAiConfig } from "../lib/app-settings";
-import { COMMON_CURRICULUM_FREQUENCY_TAG, pgJsonArrayContainsScalar } from "../lib/common-curriculum-tags";
-import { isIngestionJobCancelled, tryMarkIngestionJobRunning } from "../lib/ingestion-job-cancel";
-import { appendJobLog, snapshotJobMetadata } from "../lib/job-logs";
-import { updateIngestionProgress } from "../lib/job-progress";
-import { normalizeCommonLemma } from "../lib/language-common-lemmas";
-import { extractDefinitionStrings } from "../lib/word-gloss-heuristics";
+import type { Prisma } from "@nwords/db"
+import { prisma } from "@nwords/db"
+import { generateObject } from "ai"
+import type PgBoss from "pg-boss"
+import { z } from "zod"
+import { createModel } from "../lib/ai"
+import { getAiConfig } from "../lib/app-settings"
+import {
+	COMMON_CURRICULUM_FREQUENCY_TAG,
+	pgJsonArrayContainsScalar,
+} from "../lib/common-curriculum-tags"
+import { isIngestionJobCancelled, tryMarkIngestionJobRunning } from "../lib/ingestion-job-cancel"
+import { appendJobLog, snapshotJobMetadata } from "../lib/job-logs"
+import { updateIngestionProgress } from "../lib/job-progress"
+import { normalizeCommonLemma } from "../lib/language-common-lemmas"
+import { extractDefinitionStrings } from "../lib/word-gloss-heuristics"
+import { countClozeScopedNonTestableWords, runClozeGenerationWorkload } from "./cloze-generation"
 
 export interface CurriculumTestabilityTrimJobData {
-  jobId: string;
-  languageId: string;
-  dryRun?: boolean;
-  /** Rows per LLM request (default 100). */
-  batchSize?: number;
+	jobId: string
+	languageId: string
+	dryRun?: boolean
+	/** Rows per LLM request (default 100). */
+	batchSize?: number
 }
 
-const TX_CHUNK = 400;
+/** Re-check non-testable: runs the same cloze pipeline as “Generate clozes” for scoped `isTestable=false` rows. */
+export type CurriculumTestabilityTrimRetryJobData = CurriculumTestabilityTrimJobData
+
+const TX_CHUNK = 400
 
 const trimBatchResponseSchema = z.object({
-  removeIds: z.array(z.string().uuid()),
-});
+	removeIds: z.array(z.string().uuid()),
+})
 
 function asMetaRecord(metadata: unknown): Record<string, unknown> {
-  if (metadata !== null && typeof metadata === "object" && !Array.isArray(metadata)) {
-    return { ...(metadata as Record<string, unknown>) };
-  }
-  return {};
+	if (metadata !== null && typeof metadata === "object" && !Array.isArray(metadata)) {
+		return { ...(metadata as Record<string, unknown>) }
+	}
+	return {}
 }
 
 function resolveBatchSize(jobMeta: Record<string, unknown>, explicit?: number): number {
-  if (typeof explicit === "number" && explicit >= 10 && explicit <= 200) return Math.floor(explicit);
-  const fromMeta = jobMeta.batchSize;
-  if (typeof fromMeta === "number" && fromMeta >= 10 && fromMeta <= 200) return Math.floor(fromMeta);
-  const raw = process.env.CURRICULUM_TESTABILITY_TRIM_BATCH_SIZE?.trim();
-  const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
-  if (Number.isFinite(n) && n >= 10 && n <= 200) return n;
-  return 100;
+	if (typeof explicit === "number" && explicit >= 10 && explicit <= 200) return Math.floor(explicit)
+	const fromMeta = jobMeta.batchSize
+	if (typeof fromMeta === "number" && fromMeta >= 10 && fromMeta <= 200) return Math.floor(fromMeta)
+	const raw = process.env.CURRICULUM_TESTABILITY_TRIM_BATCH_SIZE?.trim()
+	const n = raw ? Number.parseInt(raw, 10) : Number.NaN
+	if (Number.isFinite(n) && n >= 10 && n <= 200) return n
+	return 100
 }
 
 function trimLlmConcurrency(): number {
-  const raw = Number(process.env.CURRICULUM_TESTABILITY_TRIM_LLM_CONCURRENCY);
-  const n = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 4;
-  return Math.max(1, Math.min(12, n));
+	const raw = Number(process.env.CURRICULUM_TESTABILITY_TRIM_LLM_CONCURRENCY)
+	const n = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 4
+	return Math.max(1, Math.min(12, n))
 }
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
+	const out: T[][] = []
+	for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+	return out
 }
 
 function baseLemmaFromUnit(curriculumUnit: unknown): string | undefined {
-  if (curriculumUnit === null || typeof curriculumUnit !== "object" || Array.isArray(curriculumUnit)) {
-    return undefined;
-  }
-  const base = (curriculumUnit as Record<string, unknown>).baseLemma;
-  if (typeof base !== "string") return undefined;
-  const s = normalizeCommonLemma(base);
-  return s.length > 0 ? s : undefined;
+	if (
+		curriculumUnit === null ||
+		typeof curriculumUnit !== "object" ||
+		Array.isArray(curriculumUnit)
+	) {
+		return undefined
+	}
+	const base = (curriculumUnit as Record<string, unknown>).baseLemma
+	if (typeof base !== "string") return undefined
+	const s = normalizeCommonLemma(base)
+	return s.length > 0 ? s : undefined
 }
 
 function defsForPrompt(definitions: unknown): string[] {
-  return extractDefinitionStrings(definitions)
-    .slice(0, 4)
-    .map((d) => (d.length > 240 ? `${d.slice(0, 237)}...` : d));
+	return extractDefinitionStrings(definitions)
+		.slice(0, 4)
+		.map((d) => (d.length > 240 ? `${d.slice(0, 237)}...` : d))
 }
 
 async function runPool<T>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T) => Promise<void>,
-  shouldStop: () => Promise<boolean>,
+	items: T[],
+	concurrency: number,
+	fn: (item: T) => Promise<void>,
+	shouldStop: () => Promise<boolean>,
 ): Promise<void> {
-  let next = 0;
-  const runWorker = async () => {
-    for (;;) {
-      if (await shouldStop()) return;
-      const i = next++;
-      if (i >= items.length) return;
-      if (items[i] === undefined) {
-        console.error(`[curriculum-testability-trim] item ${i} is undefined`);
-        continue;
-      }
-      if (items[i] === null) {
-        console.error(`[curriculum-testability-trim] item ${i} is null`);
-        continue;
-      }
-      await fn(items[i]);
-    }
-  };
-  const workers = Math.max(1, Math.min(concurrency, Math.max(1, items.length)));
-  await Promise.all(Array.from({ length: workers }, () => runWorker()));
+	let next = 0
+	const runWorker = async () => {
+		for (;;) {
+			if (await shouldStop()) return
+			const i = next++
+			if (i >= items.length) return
+			if (items[i] === undefined) {
+				console.error(`[curriculum-testability-trim] item ${i} is undefined`)
+				continue
+			}
+			if (items[i] === null) {
+				console.error(`[curriculum-testability-trim] item ${i} is null`)
+				continue
+			}
+			await fn(items[i])
+		}
+	}
+	const workers = Math.max(1, Math.min(concurrency, Math.max(1, items.length)))
+	await Promise.all(Array.from({ length: workers }, () => runWorker()))
 }
 
 const TRIM_SYSTEM = `You are cleaning and normalizing vocabulary data for a language learning app.
@@ -176,115 +187,120 @@ Return ONLY structured data matching the schema:
 { "removeIds": string[] }
 
 Include only ids from the input. Use an empty array if nothing should be removed.
-`;
+`
 
 type ScopedRow = {
-  id: string;
-  lemma: string;
-  pos: string;
-  effectiveRank: number;
-  rank: number;
-  gloss: string | null;
-  definitions: unknown;
-  curriculumUnit: unknown;
-};
-
-const PREVIEW_CAP = 80;
-
-async function llmRemoveIdsForBatch(
-  model: ReturnType<typeof createModel>,
-  languageName: string,
-  languageCode: string,
-  batch: ScopedRow[],
-  batchIndex: number,
-  batchTotal: number,
-): Promise<string[]> {
-  const inputIdSet = new Set(batch.map((r) => r.id));
-  const payload = {
-    targetLanguage: languageName,
-    targetLanguageCode: languageCode,
-    batchIndex: batchIndex + 1,
-    batchTotal,
-    words: batch.map((r) => ({
-      id: r.id,
-      lemma: r.lemma,
-      baseLemma: baseLemmaFromUnit(r.curriculumUnit) ?? null,
-      pos: r.pos,
-      gloss: r.gloss,
-      definitions: defsForPrompt(r.definitions),
-      effectiveRank: r.effectiveRank,
-    })),
-  };
-
-  const prompt = `Batch ${batchIndex + 1}/${batchTotal}. INPUT JSON:\n${JSON.stringify(payload, null, 2)}\n\nReturn removeIds for rows to drop from testing.`;
-
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const { object } = await generateObject({
-      model,
-      schema: trimBatchResponseSchema,
-      system: TRIM_SYSTEM,
-      prompt: attempt === 0 ? prompt : `${prompt}\n\nRetry: removeIds must be a subset of the input ids only.`,
-    });
-    const filtered = object.removeIds.filter((id) => inputIdSet.has(id));
-    if (filtered.length === object.removeIds.length || attempt === 1) return filtered;
-  }
-
-  return [];
+	id: string
+	lemma: string
+	pos: string
+	effectiveRank: number
+	rank: number
+	gloss: string | null
+	definitions: unknown
+	curriculumUnit: unknown
 }
 
-export async function processCurriculumTestabilityTrimJob(job: PgBoss.Job<CurriculumTestabilityTrimJobData>) {
-  const { jobId, languageId } = job.data;
-  const row = await prisma.ingestionJob.findUnique({ where: { id: jobId } });
-  const fileMeta = asMetaRecord(row?.metadata);
+const PREVIEW_CAP = 80
 
-  const dryRun =
-    job.data.dryRun === true ||
-    fileMeta.dryRun === true ||
-    (typeof fileMeta.dryRun === "string" && fileMeta.dryRun === "true");
+async function llmRemoveIdsForBatch(
+	model: ReturnType<typeof createModel>,
+	languageName: string,
+	languageCode: string,
+	batch: ScopedRow[],
+	batchIndex: number,
+	batchTotal: number,
+): Promise<string[]> {
+	const inputIdSet = new Set(batch.map((r) => r.id))
+	const payload = {
+		targetLanguage: languageName,
+		targetLanguageCode: languageCode,
+		batchIndex: batchIndex + 1,
+		batchTotal,
+		words: batch.map((r) => ({
+			id: r.id,
+			lemma: r.lemma,
+			baseLemma: baseLemmaFromUnit(r.curriculumUnit) ?? null,
+			pos: r.pos,
+			gloss: r.gloss,
+			definitions: defsForPrompt(r.definitions),
+			effectiveRank: r.effectiveRank,
+		})),
+	}
 
-  const batchSize = resolveBatchSize(fileMeta, job.data.batchSize);
+	const prompt = `Batch ${batchIndex + 1}/${batchTotal}. INPUT JSON:\n${JSON.stringify(payload, null, 2)}\n\nReturn removeIds for rows to drop from testing.`
 
-  const started = await tryMarkIngestionJobRunning(jobId);
-  if (!started) {
-    const r = await prisma.ingestionJob.findUnique({
-      where: { id: jobId },
-      select: { status: true },
-    });
-    console.warn(
-      `[curriculum-testability-trim] skipped job ${jobId}: could not claim (status=${r?.status ?? "missing"})`,
-    );
-    return;
-  }
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const { object } = await generateObject({
+			model,
+			schema: trimBatchResponseSchema,
+			system: TRIM_SYSTEM,
+			prompt:
+				attempt === 0
+					? prompt
+					: `${prompt}\n\nRetry: removeIds must be a subset of the input ids only.`,
+		})
+		const filtered = object.removeIds.filter((id) => inputIdSet.has(id))
+		if (filtered.length === object.removeIds.length || attempt === 1) return filtered
+	}
 
-  let batchErrors = 0;
+	return []
+}
 
-  try {
-    const language = await prisma.language.findUnique({ where: { id: languageId } });
-    if (!language) throw new Error(`Language ${languageId} not found`);
+async function runCurriculumTestabilityTrimInner(
+	job: PgBoss.Job<CurriculumTestabilityTrimJobData>,
+): Promise<void> {
+	const { jobId, languageId } = job.data
+	const row = await prisma.ingestionJob.findUnique({ where: { id: jobId } })
+	const fileMeta = asMetaRecord(row?.metadata)
 
-    const aiConfig = await getAiConfig();
-    if (!aiConfig) {
-      throw new Error("AI is not configured. Set provider, model, and API key in admin settings.");
-    }
-    const model = createModel(aiConfig);
+	const dryRun =
+		job.data.dryRun === true ||
+		fileMeta.dryRun === true ||
+		(typeof fileMeta.dryRun === "string" && fileMeta.dryRun === "true")
 
-    await appendJobLog(
-      jobId,
-      "out",
-      `Curriculum testability trim (LLM): ${language.name} — ${dryRun ? "DRY RUN" : "apply"}; batch size ${batchSize}; concurrency ${trimLlmConcurrency()}.`,
-    );
+	const batchSize = resolveBatchSize(fileMeta, job.data.batchSize)
 
-    const commonFreqContain = pgJsonArrayContainsScalar(COMMON_CURRICULUM_FREQUENCY_TAG);
+	const started = await tryMarkIngestionJobRunning(jobId)
+	if (!started) {
+		const r = await prisma.ingestionJob.findUnique({
+			where: { id: jobId },
+			select: { status: true },
+		})
+		console.warn(
+			`[curriculum-testability-trim] skipped job ${jobId}: could not claim (status=${r?.status ?? "missing"})`,
+		)
+		return
+	}
 
-    const rows = (await prisma.$queryRawUnsafe(
-      `SELECT w.id, w.lemma, w.pos::text AS pos, w."effectiveRank", w.rank, w.gloss, w.definitions, w."curriculumUnit"
+	let batchErrors = 0
+
+	try {
+		const language = await prisma.language.findUnique({ where: { id: languageId } })
+		if (!language) throw new Error(`Language ${languageId} not found`)
+
+		const aiConfig = await getAiConfig()
+		if (!aiConfig) {
+			throw new Error("AI is not configured. Set provider, model, and API key in admin settings.")
+		}
+		const model = createModel(aiConfig)
+
+		await appendJobLog(
+			jobId,
+			"out",
+			`Curriculum testability trim (LLM): ${language.name} — ${dryRun ? "DRY RUN" : "apply"}; batch size ${batchSize}; concurrency ${trimLlmConcurrency()}.`,
+		)
+
+		const commonFreqContain = pgJsonArrayContainsScalar(COMMON_CURRICULUM_FREQUENCY_TAG)
+
+		const rows = (await prisma.$queryRawUnsafe(
+			`SELECT w.id, w.lemma, w.pos::text AS pos, w."effectiveRank", w.rank, w.gloss, w.definitions, w."curriculumUnit"
 			FROM word w
 			WHERE w."languageId" = $1::uuid
 			AND w.rank > 0
 			AND w."isAbbreviation" = false
 			AND w."isOffensive" = false
 			AND (
-				w."curriculumSource" IN ('COMMON', 'HERMIT_DAVE')
+				w."curriculumSource" IN ('AI_CURRICULUM', 'COMMON', 'HERMIT_DAVE')
 				OR (
 					w."curriculumSource" = 'KAIKKI'
 					AND w."curriculumUnit" IS NOT NULL
@@ -292,179 +308,291 @@ export async function processCurriculumTestabilityTrimJob(job: PgBoss.Job<Curric
 				)
 			)
 			ORDER BY w."effectiveRank" ASC, w.rank ASC`,
-      languageId,
-    )) as ScopedRow[];
+			languageId,
+		)) as ScopedRow[]
 
-    if (rows.length === 0) {
-      await appendJobLog(jobId, "out", "No scoped curriculum rows — nothing to trim.");
-      const metaPrev = await snapshotJobMetadata(jobId);
-      await prisma.ingestionJob.updateMany({
-        where: { id: jobId, status: "RUNNING" },
-        data: {
-          status: "COMPLETED",
-          processedItems: 0,
-          totalItems: 0,
-          completedAt: new Date(),
-          metadata: {
-            ...metaPrev,
-            dryRun,
-            batchSize,
-            curriculumTestabilityTrim: {
-              scopedRows: 0,
-              testableRows: 0,
-              batchesTotal: 0,
-              removeIdsCount: 0,
-              batchErrors: 0,
-              previewSample: [],
-            },
-          } as Prisma.InputJsonValue,
-        },
-      });
-      return;
-    }
+		if (rows.length === 0) {
+			await appendJobLog(jobId, "out", "No scoped curriculum rows — nothing to trim.")
+			const metaPrev = await snapshotJobMetadata(jobId)
+			await prisma.ingestionJob.updateMany({
+				where: { id: jobId, status: "RUNNING" },
+				data: {
+					status: "COMPLETED",
+					processedItems: 0,
+					totalItems: 0,
+					completedAt: new Date(),
+					metadata: {
+						...metaPrev,
+						dryRun,
+						batchSize,
+						curriculumTestabilityTrim: {
+							scopedRows: 0,
+							testableRows: 0,
+							batchesTotal: 0,
+							removeIdsCount: 0,
+							batchErrors: 0,
+							previewSample: [],
+						},
+					} as Prisma.InputJsonValue,
+				},
+			})
+			return
+		}
 
-    if (!dryRun) {
-      const ids = rows.map((r) => r.id);
-      await appendJobLog(
-        jobId,
-        "out",
-        `Setting ${ids.length.toLocaleString()} scoped row(s) to isTestable=true before LLM trim.`,
-      );
-      for (let i = 0; i < ids.length; i += TX_CHUNK) {
-        if (await isIngestionJobCancelled(jobId)) return;
-        const slice = ids.slice(i, i + TX_CHUNK);
-        await prisma.word.updateMany({
-          where: { id: { in: slice }, languageId },
-          data: { isTestable: true },
-        });
-      }
-    }
+		/** Dry run: do not touch DB; still evaluate all scoped rows as if deciding testability fresh. */
+		const rowsToProcess = rows
+		const batches = chunkArray(rowsToProcess, batchSize)
 
-    /** Dry run: do not reset DB; still evaluate all scoped rows as if starting from full testability. */
-    const rowsToProcess = rows;
-    const batches = chunkArray(rowsToProcess, batchSize);
+		await updateIngestionProgress(jobId, {
+			totalItems: rowsToProcess.length,
+			processedItems: 0,
+			errorCount: 0,
+		})
 
-    await updateIngestionProgress(jobId, {
-      totalItems: rowsToProcess.length,
-      processedItems: 0,
-      errorCount: 0,
-    });
+		await appendJobLog(
+			jobId,
+			"out",
+			`${dryRun ? "Dry run — " : ""}Scoped ${rows.length.toLocaleString()} row(s) → ${batches.length} LLM batch(es).`,
+		)
 
-    await appendJobLog(
-      jobId,
-      "out",
-      `${dryRun ? "Dry run — " : ""}Scoped ${rows.length.toLocaleString()} row(s) → ${batches.length} LLM batch(es).`,
-    );
+		const removeAccum = new Set<string>()
+		const concurrency = trimLlmConcurrency()
 
-    const removeAccum = new Set<string>();
-    const concurrency = trimLlmConcurrency();
+		const processBatch = async (batch: ScopedRow[], bi: number) => {
+			if (await isIngestionJobCancelled(jobId)) return
+			try {
+				const ids = await llmRemoveIdsForBatch(
+					model,
+					language.name,
+					language.code,
+					batch,
+					bi,
+					batches.length,
+				)
+				for (const id of ids) removeAccum.add(id)
+			} catch (err) {
+				batchErrors++
+				await appendJobLog(
+					jobId,
+					"err",
+					`Batch ${bi + 1}/${batches.length}: ${err instanceof Error ? err.message : String(err)}`,
+				)
+				await updateIngestionProgress(jobId, { errorDelta: 1 })
+			} finally {
+				await updateIngestionProgress(jobId, { processedDelta: batch.length })
+			}
+		}
 
-    const processBatch = async (batch: ScopedRow[], bi: number) => {
-      if (await isIngestionJobCancelled(jobId)) return;
-      try {
-        const ids = await llmRemoveIdsForBatch(model, language.name, language.code, batch, bi, batches.length);
-        for (const id of ids) removeAccum.add(id);
-      } catch (err) {
-        batchErrors++;
-        await appendJobLog(
-          jobId,
-          "err",
-          `Batch ${bi + 1}/${batches.length}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        await updateIngestionProgress(jobId, { errorDelta: 1 });
-      } finally {
-        await updateIngestionProgress(jobId, { processedDelta: batch.length });
-      }
-    };
+		await runPool(
+			batches.map((b, i) => [b, i] as const),
+			concurrency,
+			async ([batch, bi]) => processBatch(batch, bi),
+			() => isIngestionJobCancelled(jobId),
+		)
 
-    await runPool(
-      batches.map((b, i) => [b, i] as const),
-      concurrency,
-      async ([batch, bi]) => processBatch(batch, bi),
-      () => isIngestionJobCancelled(jobId),
-    );
+		if (await isIngestionJobCancelled(jobId)) return
 
-    if (await isIngestionJobCancelled(jobId)) return;
+		const rowIdSet = new Set(rows.map((r) => r.id))
+		const untestableTarget = [...removeAccum].filter((id) => rowIdSet.has(id))
 
-    const untestableTarget = [...removeAccum];
+		const previewSample = untestableTarget.slice(0, PREVIEW_CAP).map((id) => {
+			const r = rows.find((x) => x.id === id)
+			return r ? { id, lemma: r.lemma, pos: r.pos, effectiveRank: r.effectiveRank } : { id }
+		})
 
-    const previewSample = untestableTarget.slice(0, PREVIEW_CAP).map((id) => {
-      const r = rows.find((x) => x.id === id);
-      return r ? { id, lemma: r.lemma, pos: r.pos, effectiveRank: r.effectiveRank } : { id };
-    });
+		await appendJobLog(
+			jobId,
+			"out",
+			`LLM suggested ${untestableTarget.length.toLocaleString()} row(s) to mark untestable${batchErrors > 0 ? `; ${batchErrors} batch error(s)` : ""}.`,
+		)
 
-    await appendJobLog(
-      jobId,
-      "out",
-      `LLM suggested ${untestableTarget.length.toLocaleString()} row(s) to mark untestable${batchErrors > 0 ? `; ${batchErrors} batch error(s)` : ""}.`,
-    );
+		if (!dryRun && rows.length > 0) {
+			const rowIds = rows.map((r) => r.id)
+			const keepTestableIds = rowIds.filter((id) => !removeAccum.has(id))
+			const markUntestableIds = rowIds.filter((id) => removeAccum.has(id))
+			await appendJobLog(
+				jobId,
+				"out",
+				`Applying isTestable from LLM: ${keepTestableIds.length.toLocaleString()} true, ${markUntestableIds.length.toLocaleString()} false (of ${rowIds.length.toLocaleString()} row(s) in this job).`,
+			)
+			for (let i = 0; i < keepTestableIds.length; i += TX_CHUNK) {
+				if (await isIngestionJobCancelled(jobId)) return
+				const slice = keepTestableIds.slice(i, i + TX_CHUNK)
+				await prisma.word.updateMany({
+					where: { id: { in: slice }, languageId },
+					data: { isTestable: true },
+				})
+			}
+			for (let i = 0; i < markUntestableIds.length; i += TX_CHUNK) {
+				if (await isIngestionJobCancelled(jobId)) return
+				const slice = markUntestableIds.slice(i, i + TX_CHUNK)
+				await prisma.word.updateMany({
+					where: { id: { in: slice }, languageId },
+					data: { isTestable: false },
+				})
+			}
+		}
 
-    if (!dryRun && untestableTarget.length > 0) {
-      for (let i = 0; i < untestableTarget.length; i += TX_CHUNK) {
-        if (await isIngestionJobCancelled(jobId)) return;
-        const slice = untestableTarget.slice(i, i + TX_CHUNK);
-        await prisma.word.updateMany({
-          where: { id: { in: slice }, languageId },
-          data: { isTestable: false },
-        });
-      }
-    }
+		const metaPrev = await snapshotJobMetadata(jobId)
 
-    const metaPrev = await snapshotJobMetadata(jobId);
+		await prisma.ingestionJob.updateMany({
+			where: { id: jobId, status: "RUNNING" },
+			data: {
+				status: "COMPLETED",
+				processedItems: rowsToProcess.length,
+				totalItems: rowsToProcess.length,
+				completedAt: new Date(),
+				metadata: {
+					...metaPrev,
+					dryRun,
+					batchSize,
+					curriculumTestabilityTrim: {
+						scopedRows: rows.length,
+						testableRows: rowsToProcess.length,
+						batchesTotal: batches.length,
+						removeIdsCount: untestableTarget.length,
+						batchErrors,
+						previewSample,
+					},
+				} as Prisma.InputJsonValue,
+			},
+		})
 
-    await prisma.ingestionJob.updateMany({
-      where: { id: jobId, status: "RUNNING" },
-      data: {
-        status: "COMPLETED",
-        processedItems: rowsToProcess.length,
-        totalItems: rowsToProcess.length,
-        completedAt: new Date(),
-        metadata: {
-          ...metaPrev,
-          dryRun,
-          batchSize,
-          curriculumTestabilityTrim: {
-            scopedRows: rows.length,
-            testableRows: rowsToProcess.length,
-            batchesTotal: batches.length,
-            removeIdsCount: untestableTarget.length,
-            batchErrors,
-            previewSample,
-          },
-        } as Prisma.InputJsonValue,
-      },
-    });
+		await appendJobLog(
+			jobId,
+			"out",
+			dryRun
+				? "Dry run complete — no DB updates. See metadata curriculumTestabilityTrim."
+				: `Applied isTestable from LLM: ${(rows.length - untestableTarget.length).toLocaleString()} true, ${untestableTarget.length.toLocaleString()} false.`,
+		)
+	} catch (err) {
+		console.error("[curriculum-testability-trim] Fatal error:", err)
+		if (await isIngestionJobCancelled(jobId)) return
+		await appendJobLog(jobId, "err", String(err))
+		const snap = await prisma.ingestionJob.findUnique({
+			where: { id: jobId },
+			select: { metadata: true },
+		})
+		const meta = snap?.metadata
+		const prevMeta =
+			meta !== null && typeof meta === "object" && !Array.isArray(meta)
+				? { ...(meta as Record<string, unknown>) }
+				: {}
+		await prisma.ingestionJob.update({
+			where: { id: jobId },
+			data: {
+				status: "FAILED",
+				completedAt: new Date(),
+				metadata: {
+					...prevMeta,
+					error: err instanceof Error ? err.message : String(err),
+					curriculumTestabilityTrimBatchErrors: batchErrors,
+				} as Prisma.InputJsonValue,
+			},
+		})
+		throw err
+	}
+}
 
-    await appendJobLog(
-      jobId,
-      "out",
-      dryRun
-        ? "Dry run complete — no DB updates. See metadata curriculumTestabilityTrim."
-        : `Applied isTestable=false to ${untestableTarget.length.toLocaleString()} row(s).`,
-    );
-  } catch (err) {
-    console.error("[curriculum-testability-trim] Fatal error:", err);
-    if (await isIngestionJobCancelled(jobId)) return;
-    await appendJobLog(jobId, "err", String(err));
-    const snap = await prisma.ingestionJob.findUnique({
-      where: { id: jobId },
-      select: { metadata: true },
-    });
-    const meta = snap?.metadata;
-    const prevMeta =
-      meta !== null && typeof meta === "object" && !Array.isArray(meta) ? { ...(meta as Record<string, unknown>) } : {};
-    await prisma.ingestionJob.update({
-      where: { id: jobId },
-      data: {
-        status: "FAILED",
-        completedAt: new Date(),
-        metadata: {
-          ...prevMeta,
-          error: err instanceof Error ? err.message : String(err),
-          curriculumTestabilityTrimBatchErrors: batchErrors,
-        } as Prisma.InputJsonValue,
-      },
-    });
-    throw err;
-  }
+export async function processCurriculumTestabilityTrimJob(
+	job: PgBoss.Job<CurriculumTestabilityTrimJobData>,
+) {
+	await runCurriculumTestabilityTrimInner(job)
+}
+
+export async function processCurriculumTestabilityTrimRetryJob(
+	job: PgBoss.Job<CurriculumTestabilityTrimRetryJobData>,
+) {
+	const { jobId, languageId } = job.data
+	const snap = await prisma.ingestionJob.findUnique({ where: { id: jobId } })
+	const fileMeta = asMetaRecord(snap?.metadata)
+	const dryRun =
+		job.data.dryRun === true ||
+		fileMeta.dryRun === true ||
+		(typeof fileMeta.dryRun === "string" && fileMeta.dryRun === "true")
+
+	const started = await tryMarkIngestionJobRunning(jobId)
+	if (!started) {
+		const row = await prisma.ingestionJob.findUnique({
+			where: { id: jobId },
+			select: { status: true },
+		})
+		console.warn(
+			`[curriculum-testability-trim-retry] skipped job ${jobId}: could not claim (status=${row?.status ?? "missing"})`,
+		)
+		return
+	}
+
+	try {
+		const language = await prisma.language.findUnique({ where: { id: languageId } })
+		if (!language) throw new Error(`Language ${languageId} not found`)
+
+		await appendJobLog(
+			jobId,
+			"out",
+			dryRun
+				? `Dry run — non-testable re-check (cloze pipeline): ${language.name}…`
+				: `Non-testable re-check — full cloze generation for scoped rows (${language.name}): same pipeline as Generate clozes (unit gate → candidates → normalization → validator).`,
+		)
+
+		if (dryRun) {
+			const n = await countClozeScopedNonTestableWords(languageId)
+			await appendJobLog(
+				jobId,
+				"out",
+				`Dry run — would process ${n.toLocaleString()} non-testable curriculum-scoped row(s); no AI or DB cloze writes.`,
+			)
+			const metaPrev = await snapshotJobMetadata(jobId)
+			await prisma.ingestionJob.updateMany({
+				where: { id: jobId, status: "RUNNING" },
+				data: {
+					status: "COMPLETED",
+					processedItems: n,
+					totalItems: n,
+					completedAt: new Date(),
+					metadata: {
+						...metaPrev,
+						dryRun: true,
+						curriculumTestabilityTrimRetry: {
+							mode: "cloze_reverify_dry_run",
+							scopedNonTestableRows: n,
+						},
+					} as Prisma.InputJsonValue,
+				},
+			})
+			return
+		}
+
+		await runClozeGenerationWorkload({
+			jobId,
+			languageId,
+			resetExisting: false,
+			nonTestableScopedOnly: true,
+		})
+	} catch (err) {
+		console.error("[curriculum-testability-trim-retry] Fatal error:", err)
+		if (await isIngestionJobCancelled(jobId)) return
+		await appendJobLog(jobId, "err", String(err))
+		const metaSnap = await prisma.ingestionJob.findUnique({
+			where: { id: jobId },
+			select: { metadata: true },
+		})
+		const meta = metaSnap?.metadata
+		const prevMeta =
+			meta !== null && typeof meta === "object" && !Array.isArray(meta)
+				? { ...(meta as Record<string, unknown>) }
+				: {}
+		await prisma.ingestionJob.update({
+			where: { id: jobId },
+			data: {
+				status: "FAILED",
+				completedAt: new Date(),
+				metadata: {
+					...prevMeta,
+					error: err instanceof Error ? err.message : String(err),
+				} as Prisma.InputJsonValue,
+			},
+		})
+		throw err
+	}
 }

@@ -83,6 +83,7 @@ const searchWords = createServerFn({ method: "POST" })
 			definitions: unknown
 			cefrLevel: CefrLevel | null
 			isOffensive: boolean
+			isAbbreviation: boolean
 			isTestable: boolean
 			clozeUnusableReason: string | null
 			clozeUnusableDetail: string | null
@@ -105,6 +106,7 @@ const searchWords = createServerFn({ method: "POST" })
 				definitions,
 				cefrLevel: w.cefrLevel ?? cefrLevelForFrequencyRank(w.effectiveRank),
 				isOffensive: w.isOffensive,
+				isAbbreviation: w.isAbbreviation,
 				isTestable: w.isTestable,
 				clozeUnusableReason: w.clozeUnusableReason,
 				clozeUnusableDetail: w.clozeUnusableDetail,
@@ -112,6 +114,46 @@ const searchWords = createServerFn({ method: "POST" })
 				sentenceCount: w._count.sentenceWords,
 			}
 		}
+
+		// #region agent log
+		function dbgNonTestableClozeServer(context: string, mappedWords: ReturnType<typeof mapWordRow>[]): void {
+			const nt = mappedWords.filter((w) => !w.isTestable)
+			if (nt.length === 0) return
+			const withStructuredReason = nt.filter(
+				(w) => w.clozeUnusableReason != null && w.clozeUnusableReason !== "",
+			)
+			fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"X-Debug-Session-Id": "9f8a80",
+				},
+				body: JSON.stringify({
+					sessionId: "9f8a80",
+					runId: "post-fix",
+					hypothesisId: "ABC",
+					location: "words.tsx:searchWords",
+					message: "admin words non-testable cloze payload (server-after-map)",
+					data: {
+						context,
+						rowCount: mappedWords.length,
+						nonTestableCount: nt.length,
+						withStructuredClozeReasonCount: withStructuredReason.length,
+						samples: nt.slice(0, 8).map((w) => ({
+							lemma: w.lemma,
+							pos: w.pos,
+							isAbbreviation: w.isAbbreviation,
+							clozeUnusableReason: w.clozeUnusableReason,
+							clozeUnusableDetailLen: w.clozeUnusableDetail?.length ?? 0,
+							reasonJsType: typeof w.clozeUnusableReason,
+							inferredHint: nonTestableNoClozeTooltip(w),
+						})),
+					},
+					timestamp: Date.now(),
+				}),
+			}).catch(() => {})
+		}
+		// #endregion
 
 		/** Empty pattern = browse: prefer lemmas with frequency rank so you can verify import without guessing a search. */
 		if (!query.trim()) {
@@ -138,8 +180,10 @@ const searchWords = createServerFn({ method: "POST" })
 					}),
 				])
 				const uniqueRankSlots = rankGroups.length
+				const browseRankedWords = words.slice(offset, offset + limit).map(mapWordRow)
+				dbgNonTestableClozeServer("browse_ranked", browseRankedWords)
 				return {
-					words: words.slice(offset, offset + limit).map(mapWordRow),
+					words: browseRankedWords,
 					total: uniqueRankSlots,
 					page,
 					limit,
@@ -158,8 +202,10 @@ const searchWords = createServerFn({ method: "POST" })
 				}),
 				Promise.resolve(totalWords),
 			])
+			const browseUnrankedWords = words.map(mapWordRow)
+			dbgNonTestableClozeServer("browse_unranked", browseUnrankedWords)
 			return {
-				words: words.map(mapWordRow),
+				words: browseUnrankedWords,
 				total,
 				page,
 				limit,
@@ -235,8 +281,10 @@ const searchWords = createServerFn({ method: "POST" })
 					]
 				: rankedPage
 
+		const searchMapped = words.map(mapWordRow)
+		dbgNonTestableClozeServer("search", searchMapped)
 		return {
-			words: words.map(mapWordRow),
+			words: searchMapped,
 			total: rankedTotal + unrankedTotal,
 			page,
 			limit,
@@ -323,6 +371,9 @@ const POS_BADGE_STYLES: Record<string, string> = {
 	PROPER_NOUN: "bg-sky-500/15 text-sky-400",
 }
 
+/** Mirrors `TESTABLE_POS` in `apps/api/src/workers/kaikki.ts` (Kaikki import vocabulary-test policy). */
+const ADMIN_VOCAB_TEST_POS = new Set<string>(["NOUN", "VERB", "ADJECTIVE", "ADVERB"])
+
 type AdminWordRow = {
 	id: string
 	lemma: string
@@ -335,12 +386,49 @@ type AdminWordRow = {
 	definitions: string[]
 	cefrLevel: string | null
 	isOffensive: boolean
+	/** Abbreviation or title-only form flagged at ingest; forces non-testable with rank cleared on upserts. */
+	isAbbreviation: boolean
 	isTestable: boolean
 	/** Set when cloze generation marks the row non-testable with a structured reason. */
 	clozeUnusableReason: string | null
 	clozeUnusableDetail: string | null
 	langCode: string
 	sentenceCount: number
+}
+
+function nonTestableNoClozeTooltip(word: Pick<AdminWordRow, "pos" | "isAbbreviation">): string {
+	const posLabel = word.pos.toLowerCase().replaceAll("_", " ")
+	if (word.isAbbreviation) {
+		return `Non-testable (${posLabel}) — abbreviation/title-form entry flagged at import; excluded from vocab tests by policy.`
+	}
+	if (!ADMIN_VOCAB_TEST_POS.has(word.pos)) {
+		return `Non-testable (${posLabel}) — import rule keeps vocabulary tests to noun / verb / adjective / adverb only.`
+	}
+	return `Non-testable (${posLabel}) — excluded after import (curriculum trim, quality/gloss passes, cloze pipeline, cloze reports, manual admin exclusion, etc.). Cloze generator has not recorded a structured reason on this row.`
+}
+
+/** Native title tooltip on lemma hover — explains testability and cloze reason codes when present. */
+function adminWordLemmaTooltip(word: AdminWordRow): string {
+	const posLabel = word.pos.toLowerCase().replaceAll("_", " ")
+	const clozeHuman =
+		word.clozeUnusableReason != null && word.clozeUnusableReason !== ""
+			? `${word.clozeUnusableReason.replaceAll("_", " ")}${word.clozeUnusableDetail ? ` — ${word.clozeUnusableDetail}` : ""}`
+			: null
+
+	if (!word.isTestable) {
+		return clozeHuman != null
+			? `Non-testable — cloze generator: ${clozeHuman}`
+			: nonTestableNoClozeTooltip(word)
+	}
+
+	const sentHint =
+		word.sentenceCount === 0
+			? "No sentences linked yet."
+			: `${word.sentenceCount.toLocaleString()} sentence${word.sentenceCount === 1 ? "" : "s"} linked.`
+
+	return clozeHuman != null
+		? `Testable (${posLabel}) — ${sentHint} Stale cloze flag on file: ${clozeHuman}`
+		: `Testable (${posLabel}) — eligible for vocabulary tests and cloze selection; ${sentHint}`
 }
 
 function AdminWordsPage() {
@@ -457,7 +545,43 @@ function AdminWordsPage() {
 			},
 		})
 			.then((data) => {
-				if (!cancelled) setResults(data)
+				if (!cancelled) {
+					// #region agent log
+					const nt = data.words.filter((w) => !w.isTestable)
+					if (nt.length > 0) {
+						const withR = nt.filter((w) => w.clozeUnusableReason != null && w.clozeUnusableReason !== "")
+						fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
+							method: "POST",
+							headers: {
+								"Content-Type": "application/json",
+								"X-Debug-Session-Id": "9f8a80",
+							},
+							body: JSON.stringify({
+								sessionId: "9f8a80",
+								runId: "post-fix",
+								hypothesisId: "D",
+								location: "words.tsx:useEffect(searchWords)",
+								message: "admin words client received non-testable rows",
+								data: {
+									mode: data.mode,
+									nonTestableCount: nt.length,
+									withStructuredClozeReasonCount: withR.length,
+									sample: nt.slice(0, 5).map((w) => ({
+										lemma: w.lemma,
+										pos: w.pos,
+										isAbbreviation: w.isAbbreviation,
+										clozeUnusableReason: w.clozeUnusableReason,
+										reasonJsType: typeof w.clozeUnusableReason,
+										inferredHint: nonTestableNoClozeTooltip(w),
+									})),
+								},
+								timestamp: Date.now(),
+							}),
+						}).catch(() => {})
+					}
+					// #endregion
+					setResults(data)
+				}
 			})
 			.catch((e: unknown) => {
 				if (!cancelled) {
@@ -680,6 +804,42 @@ function AdminWordsPage() {
 					page: nextPage,
 				},
 			})
+			// #region agent log
+			{
+				const nt = data.words.filter((w) => !w.isTestable)
+				if (nt.length > 0) {
+					const withR = nt.filter((w) => w.clozeUnusableReason != null && w.clozeUnusableReason !== "")
+					fetch("http://127.0.0.1:7758/ingest/99baccff-1168-49a3-aecb-775311639d96", {
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							"X-Debug-Session-Id": "9f8a80",
+						},
+						body: JSON.stringify({
+							sessionId: "9f8a80",
+							runId: "post-fix",
+							hypothesisId: "D",
+							location: "words.tsx:runWordQuery",
+							message: "admin words client received non-testable rows",
+							data: {
+								mode: data.mode,
+								nonTestableCount: nt.length,
+								withStructuredClozeReasonCount: withR.length,
+								sample: nt.slice(0, 5).map((w) => ({
+									lemma: w.lemma,
+									pos: w.pos,
+									isAbbreviation: w.isAbbreviation,
+									clozeUnusableReason: w.clozeUnusableReason,
+									reasonJsType: typeof w.clozeUnusableReason,
+									inferredHint: nonTestableNoClozeTooltip(w),
+								})),
+							},
+							timestamp: Date.now(),
+						}),
+					}).catch(() => {})
+				}
+			}
+			// #endregion
 			setResults(data)
 		} catch (e) {
 			setResults(null)
@@ -1044,11 +1204,7 @@ function AdminWordsPage() {
 										<span className="min-w-0 flex items-center gap-2">
 											<span
 												className="text-sm font-medium font-mono group-hover:underline underline-offset-2 decoration-foreground/60 truncate text-left"
-												title={
-													word.clozeUnusableReason
-														? `Cloze: ${word.clozeUnusableReason}${word.clozeUnusableDetail ? ` — ${word.clozeUnusableDetail}` : ""}`
-														: undefined
-												}
+												title={adminWordLemmaTooltip(word)}
 											>
 												{word.lemma}
 											</span>

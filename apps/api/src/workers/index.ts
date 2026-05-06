@@ -8,8 +8,14 @@ import type { CommonCurriculumKaikkiJobData } from "./common-curriculum-kaikki"
 import { processCommonCurriculumKaikkiJob } from "./common-curriculum-kaikki"
 import type { CommonWordsTopJobData } from "./common-words-top"
 import { processCommonWordsTopJob } from "./common-words-top"
-import type { CurriculumTestabilityTrimJobData } from "./curriculum-testability-trim"
-import { processCurriculumTestabilityTrimJob } from "./curriculum-testability-trim"
+import type {
+	CurriculumTestabilityTrimJobData,
+	CurriculumTestabilityTrimRetryJobData,
+} from "./curriculum-testability-trim"
+import {
+	processCurriculumTestabilityTrimJob,
+	processCurriculumTestabilityTrimRetryJob,
+} from "./curriculum-testability-trim"
 import type { FixedExpressionsJobData } from "./fixed-expressions"
 import { processFixedExpressionsJob } from "./fixed-expressions"
 import type { FrequencyJobData } from "./frequency"
@@ -86,8 +92,13 @@ export async function registerIngestWorkers(boss: PgBoss) {
 	await boss.work(INGEST_QUEUE.CURRICULUM_TESTABILITY_TRIM, opts, async ([job]) =>
 		processCurriculumTestabilityTrimJob(job as PgBoss.Job<CurriculumTestabilityTrimJobData>),
 	)
+	await boss.work(INGEST_QUEUE.CURRICULUM_TESTABILITY_TRIM_RETRY, opts, async ([job]) =>
+		processCurriculumTestabilityTrimRetryJob(
+			job as PgBoss.Job<CurriculumTestabilityTrimRetryJobData>,
+		),
+	)
 
 	console.log(
-		"[workers] Registered: kaikki, frequency, tatoeba, word-forms, fixed-expressions, cloze-quality, cloze-generation, common-words-top, hermit-dave-common-lemmas, common-curriculum-kaikki, vocab-units-llm, vocab-cleanup, words-gloss-cleanup, curriculum-testability-trim",
+		"[workers] Registered: kaikki, frequency, tatoeba, word-forms, fixed-expressions, cloze-quality, cloze-generation, common-words-top, hermit-dave-common-lemmas, common-curriculum-kaikki, vocab-units-llm, vocab-cleanup, words-gloss-cleanup, curriculum-testability-trim, curriculum-testability-trim-retry",
 	)
 }

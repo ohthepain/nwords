@@ -613,6 +613,8 @@ enum IngestionType {
   WORDS_GLOSS_CLEANUP
   /// LLM trim: scoped curriculum rows → mark peripheral senses/forms untestable (batch LLM; manual step).
   CURRICULUM_TESTABILITY_TRIM
+  /// Same LLM rules as trim, but only rows with isTestable=false; promotes rows the model keeps.
+  CURRICULUM_TESTABILITY_TRIM_RETRY
 }
 
 enum IngestionStatus {

@@ -50,6 +50,7 @@ const TYPE_TO_QUEUE: Record<string, string> = {
 	VOCAB_CLEANUP: INGEST_QUEUE.VOCAB_CLEANUP,
 	WORDS_GLOSS_CLEANUP: INGEST_QUEUE.WORDS_GLOSS_CLEANUP,
 	CURRICULUM_TESTABILITY_TRIM: INGEST_QUEUE.CURRICULUM_TESTABILITY_TRIM,
+	CURRICULUM_TESTABILITY_TRIM_RETRY: INGEST_QUEUE.CURRICULUM_TESTABILITY_TRIM_RETRY,
 	HERMIT_DAVE_COMMON_LEMMAS: INGEST_QUEUE.HERMIT_DAVE_COMMON_LEMMAS,
 }
 
@@ -374,6 +375,17 @@ async function planRetryFromJob(job: {
 				},
 			}
 		}
+		case "CURRICULUM_TESTABILITY_TRIM_RETRY": {
+			return {
+				ok: true,
+				queue: INGEST_QUEUE.CURRICULUM_TESTABILITY_TRIM_RETRY,
+				payload: {
+					languageId: job.languageId,
+					dryRun: meta.dryRun === true,
+					...(typeof meta.batchSize === "number" ? { batchSize: meta.batchSize } : {}),
+				},
+			}
+		}
 		default:
 			return { ok: false, error: "This job type cannot be retried from the admin UI" }
 	}
@@ -507,6 +519,7 @@ export const adminJobsRoute = new Hono()
 						"VOCAB_CLEANUP",
 						"WORDS_GLOSS_CLEANUP",
 						"CURRICULUM_TESTABILITY_TRIM",
+						"CURRICULUM_TESTABILITY_TRIM_RETRY",
 					])
 					.optional(),
 				limit: z.coerce.number().min(1).max(100).default(20),
@@ -1035,6 +1048,48 @@ export const adminJobsRoute = new Hono()
 			})
 
 			await sendIngestJob(INGEST_QUEUE.CURRICULUM_TESTABILITY_TRIM, {
+				jobId: job.id,
+				languageId: body.languageId,
+				dryRun,
+				...(body.batchSize !== undefined ? { batchSize: body.batchSize } : {}),
+			})
+
+			return c.json(serializeJob(job), 201)
+		},
+	)
+
+	.post(
+		"/curriculum-testability-trim-retry",
+		zValidator(
+			"json",
+			z.object({
+				languageId: z.string().uuid(),
+				dryRun: z.boolean().optional(),
+				batchSize: z.number().int().min(10).max(200).optional(),
+			}),
+		),
+		async (c) => {
+			const body = c.req.valid("json")
+			const language = await prisma.language.findUnique({ where: { id: body.languageId } })
+			if (!language) {
+				return c.json({ error: "Language not found" }, 404)
+			}
+
+			const dryRun = body.dryRun === true
+			const job = await prisma.ingestionJob.create({
+				data: {
+					type: "CURRICULUM_TESTABILITY_TRIM_RETRY",
+					languageId: body.languageId,
+					metadata: {
+						dryRun,
+						languageCode: language.code,
+						languageName: language.name,
+						...(body.batchSize !== undefined ? { batchSize: body.batchSize } : {}),
+					},
+				},
+			})
+
+			await sendIngestJob(INGEST_QUEUE.CURRICULUM_TESTABILITY_TRIM_RETRY, {
 				jobId: job.id,
 				languageId: body.languageId,
 				dryRun,
