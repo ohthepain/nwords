@@ -72,7 +72,7 @@ jobs:
     runs-on: ubuntu-22.04-arm
     timeout-minutes: 25
     env:
-      TF_VAR_network_state_bucket: ${{ secrets.AWS_TF_STATE_BUCKET }}
+      TF_VAR_shared_state_bucket: ${{ secrets.AWS_SHARED_TF_STATE_BUCKET }}
       TF_VAR_environment: staging
     permissions:
       id-token: write
@@ -146,7 +146,7 @@ jobs:
     runs-on: ubuntu-22.04-arm
     timeout-minutes: 25
     env:
-      TF_VAR_network_state_bucket: ${{ secrets.AWS_TF_STATE_BUCKET }}
+      TF_VAR_shared_state_bucket: ${{ secrets.AWS_SHARED_TF_STATE_BUCKET }}
       TF_VAR_environment: production
     permissions:
       id-token: write

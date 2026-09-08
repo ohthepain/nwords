@@ -1,6 +1,6 @@
 output "ecr_repository_url" {
-  description = "Shared ECR repository URL (image tag = environment name)."
-  value       = data.terraform_remote_state.network.outputs.ecr_repository_url
+  description = "ECR repository URL (image tag = environment name)."
+  value       = aws_ecr_repository.app.repository_url
 }
 
 output "ecs_cluster_name" {
@@ -11,13 +11,14 @@ output "ecs_service_name" {
   value = aws_ecs_service.app.name
 }
 
-output "alb_dns_name" {
-  value = aws_lb.main.dns_name
+output "shared_alb_dns_name" {
+  description = "Shared ALB DNS name — point tenant hostname CNAME here."
+  value       = data.terraform_remote_state.shared.outputs.alb_dns_name
 }
 
 output "app_url" {
-  description = "HTTPS URL via ALB."
-  value       = "https://${aws_lb.main.dns_name}"
+  description = "Public HTTPS URL for this tenant."
+  value       = local.better_auth_url
 }
 
 output "better_auth_url" {
@@ -29,6 +30,10 @@ output "database_url" {
   description = "PostgreSQL URL (same value as Secrets Manager DATABASE_URL)."
   value       = local.database_url
   sensitive   = true
+}
+
+output "tenant_database_name" {
+  value = local.tenant_database_name
 }
 
 output "database_secret_arn" {
@@ -47,8 +52,13 @@ output "name_prefix" {
   value = local.name_prefix
 }
 
-output "rds_identifier" {
-  value = aws_db_instance.main.identifier
+output "listener_rule_arn" {
+  value = aws_lb_listener_rule.app.arn
+}
+
+output "shared_rds_master_secret_arn" {
+  description = "Shared RDS master secret ARN (for DB provisioning scripts)."
+  value       = data.terraform_remote_state.shared.outputs.rds_master_secret_arn
 }
 
 output "google_auth_enabled_ui" {

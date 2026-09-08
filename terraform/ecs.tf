@@ -29,7 +29,7 @@ resource "aws_ecs_task_definition" "app" {
   container_definitions = jsonencode([
     {
       name  = "app"
-      image = "${data.terraform_remote_state.network.outputs.ecr_repository_url}:${var.environment}"
+      image = "${aws_ecr_repository.app.repository_url}:${var.environment}"
 
       portMappings = [
         {
@@ -113,7 +113,7 @@ resource "aws_ecs_service" "app" {
   health_check_grace_period_seconds = 300
 
   network_configuration {
-    subnets          = data.terraform_remote_state.network.outputs.public_subnet_ids
+    subnets          = data.terraform_remote_state.shared.outputs.public_subnet_ids
     security_groups  = [aws_security_group.ecs_tasks.id]
     assign_public_ip = true
   }
@@ -124,5 +124,5 @@ resource "aws_ecs_service" "app" {
     container_port   = var.app_port
   }
 
-  depends_on = [aws_lb_listener.https]
+  depends_on = [aws_lb_listener_rule.app]
 }
