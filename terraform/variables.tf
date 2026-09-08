@@ -13,14 +13,19 @@ variable "aws_region" {
   default = "eu-central-1"
 }
 
-variable "network_state_bucket" {
+variable "shared_state_bucket" {
   type        = string
-  description = "S3 bucket holding the network stack state (same as bootstrap output)."
+  description = "S3 bucket holding the shared-aws stack state (shared-aws bootstrap output)."
 }
 
-variable "network_state_key" {
+variable "shared_state_key" {
   type    = string
-  default = "network/terraform.tfstate"
+  default = "shared/terraform.tfstate"
+}
+
+variable "alb_listener_rule_priority" {
+  type        = number
+  description = "Unique priority on the shared ALB HTTPS listener (nwords staging=200, production=210)."
 }
 
 variable "ecs_desired_count" {
@@ -46,46 +51,6 @@ variable "app_port" {
 variable "health_check_path" {
   type    = string
   default = "/api/health"
-}
-
-variable "db_name" {
-  type    = string
-  default = "nwords"
-}
-
-variable "db_username" {
-  type    = string
-  default = "nwords"
-}
-
-variable "db_instance_class" {
-  type    = string
-  default = "db.t4g.micro"
-}
-
-variable "db_allocated_storage" {
-  type    = number
-  default = 20
-}
-
-variable "db_backup_retention_days" {
-  type    = number
-  default = 1
-}
-
-variable "db_multi_az" {
-  type    = bool
-  default = false
-}
-
-variable "db_skip_final_snapshot" {
-  type    = bool
-  default = true
-}
-
-variable "db_deletion_protection" {
-  type    = bool
-  default = false
 }
 
 variable "uploads_bucket_force_destroy" {

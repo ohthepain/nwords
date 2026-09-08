@@ -1,23 +1,32 @@
 # AWS infrastructure (Terraform)
 
-Layout:
+Uses **[shared-aws](https://github.com/ohthepain/shared-aws)** for VPC, RDS, and ALB. This stack owns ECS, tenant DB/role, target group, and listener rules.
 
-1. **`bootstrap/`** — run once locally with the **local** backend. Creates versioned S3 state bucket (`{project}-tf-state-{account_id}`) and DynamoDB table `{project}-terraform-locks`.
-2. **`network/`** — shared VPC (2 public AZs, IGW, no NAT), plus a **shared** ECR repository `{project}-app`. Remote state in S3 key `network/terraform.tfstate`.
-3. **`/` (this directory)** — application stack per **workspace** `staging` and `production`. Single S3 key `app/terraform.tfstate` with workspace isolation. Reads VPC + ECR from the network state.
+See [MIGRATION.md](./MIGRATION.md) for cutover from legacy per-app RDS/ALB.
+
+| Environment | Domain | ALB rule priority |
+|-------------|--------|-------------------|
+| staging | https://staging.nwords.live | 200 |
+| production | https://nwords.live | 210 |
+
+Add GitHub secret **`AWS_SHARED_TF_STATE_BUCKET`** (shared-aws bootstrap bucket) alongside existing `AWS_TF_STATE_BUCKET`.
 
 ## Order of operations
 
-1. `cd terraform/bootstrap && terraform init && terraform apply`
-2. Copy `terraform/network/backend.hcl.example` → `terraform/network/backend.hcl` and set `bucket` / `dynamodb_table` from bootstrap outputs.
-3. `cd terraform/network && terraform init -backend-config=backend.hcl && terraform apply`
-4. In `terraform/environments/staging/terraform.tfvars` and `production/terraform.tfvars`, set `network_state_bucket` to the same bucket as bootstrap (not a secret).
-   Also set `alb_certificate_arn` to an ACM certificate in `eu-central-1` for each environment.
-5. Copy `terraform/backend.hcl.example` → `terraform/backend.hcl` with the same bucket and lock table.
-6. `./scripts/tf-init.sh`
-7. `./scripts/tf-plan.sh staging` then `./scripts/tf-apply.sh staging` (repeat for `production` after `terraform workspace new production` or `select`).
+1. Apply **shared-aws** (`bootstrap` → `network` → `shared`)
+2. Set `shared_state_bucket` in `environments/*/terraform.tfvars`
+3. `./scripts/tf-init.sh` && `./scripts/tf-apply.sh staging`
 
-The selected workspace **must** match `environment` in the tfvars file (enforced by a `check` block).
+---
+
+# AWS infrastructure (Terraform) — app stack details
+
+Layout (historical reference):
+
+1. **`bootstrap/`** — nwords Terraform state bucket
+2. **`network/`** — **deprecated** — replaced by shared-aws VPC
+3. **`/` (this directory)** — application stack per workspace `staging` and `production`
+
 
 ## GitHub Actions / OIDC
 
