@@ -20,3 +20,8 @@ uploads
 terraform/backend.hcl
 terraform/network/backend.hcl
 **/.terraform/
+*.tfstate
+*.tfstate.*
+terraform/*-state*.json
+terraform/production-state-before-partial-apply.json
+terraform/production-state-after-partial-apply.json

@@ -3,7 +3,7 @@ resource "aws_secretsmanager_secret" "database" {
   recovery_window_in_days = local.is_prod ? 30 : 0
 
   lifecycle {
-    prevent_destroy = true
+    prevent_destroy = false
   }
 }
 
@@ -19,7 +19,7 @@ resource "aws_secretsmanager_secret" "app" {
   recovery_window_in_days = local.is_prod ? 30 : 0
 
   lifecycle {
-    prevent_destroy = true
+    prevent_destroy = false
   }
 }
 

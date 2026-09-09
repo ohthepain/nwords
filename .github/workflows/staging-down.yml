@@ -2,9 +2,9 @@ name: Staging down
 
 on:
   workflow_dispatch: {}
-  schedule:
-    # Twice daily UTC — adjust for your timezone (e.g. end of CET workday).
-    - cron: "0 19,22 * * *"
+  # schedule:
+  # Twice daily UTC — adjust for your timezone (e.g. end of CET workday).
+  # - cron: "0 19,22 * * *"
 
 concurrency:
   group: staging-ops

@@ -1377,91 +1377,6 @@ function AdminLanguagesPage() {
 											>
 												Sentences
 											</Link>
-											<span className="text-border select-none">·</span>
-											<button
-												type="button"
-												disabled={
-													clearingLinksId === lang.id ||
-													clearingCorpusId === lang.id ||
-													clearingClozesId === lang.id ||
-													clearingVocabId === lang.id ||
-													toggling === lang.id ||
-													runningPipeline === lang.id ||
-													runningAiVocab === lang.id ||
-													runningLlmVocab === lang.id ||
-													runningHermitDaveLemmas === lang.id ||
-													runningCommonCurriculum === lang.id ||
-													runningCurriculumTrim === lang.id ||
-													runningVocabCleanup?.langId === lang.id ||
-													lang.sentenceCount === 0
-												}
-												className="text-destructive/90 hover:text-destructive hover:underline underline-offset-2 disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed"
-												onClick={() => handleClearSentenceLinks(lang.id, lang.name)}
-											>
-												{clearingLinksId === lang.id ? "Clearing…" : "Clear sentence links"}
-											</button>
-											<span className="text-border select-none">·</span>
-											<button
-												type="button"
-												disabled={
-													clearingLinksId === lang.id ||
-													clearingCorpusId === lang.id ||
-													clearingClozesId === lang.id ||
-													clearingVocabId === lang.id ||
-													toggling === lang.id ||
-													runningPipeline === lang.id ||
-													runningAiVocab === lang.id ||
-													runningLlmVocab === lang.id ||
-													runningHermitDaveLemmas === lang.id ||
-													runningCommonCurriculum === lang.id ||
-													runningCurriculumTrim === lang.id ||
-													runningVocabCleanup?.langId === lang.id ||
-													generatingClozes === lang.id ||
-													lang.sentenceCount === 0
-												}
-												className="text-destructive/90 hover:text-destructive hover:underline underline-offset-2 disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed"
-												onClick={() => handleClearSentenceCorpus(lang.id, lang.name)}
-											>
-												{clearingCorpusId === lang.id ? "Clearing…" : "Delete sentences"}
-											</button>
-											<span className="text-border select-none">·</span>
-											<button
-												type="button"
-												disabled={
-													clearingLinksId === lang.id ||
-													clearingCorpusId === lang.id ||
-													clearingClozesId === lang.id ||
-													clearingVocabId === lang.id ||
-													generatingClozes === lang.id ||
-													toggling === lang.id
-												}
-												className="text-destructive/90 hover:text-destructive hover:underline underline-offset-2 disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed"
-												onClick={() => handleClearGeneratedClozes(lang.id, lang.name)}
-											>
-												{clearingClozesId === lang.id ? "Clearing…" : "Clear clozes"}
-											</button>
-											<span className="text-border select-none">·</span>
-											<button
-												type="button"
-												disabled={
-													clearingLinksId === lang.id ||
-													clearingCorpusId === lang.id ||
-													clearingClozesId === lang.id ||
-													clearingVocabId === lang.id ||
-													runningAiVocab === lang.id ||
-													runningLlmVocab === lang.id ||
-													runningHermitDaveLemmas === lang.id ||
-													runningCommonCurriculum === lang.id ||
-													runningCurriculumTrim === lang.id ||
-													runningVocabCleanup?.langId === lang.id ||
-													generatingClozes === lang.id ||
-													toggling === lang.id
-												}
-												className="text-destructive/90 hover:text-destructive hover:underline underline-offset-2 disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed"
-												onClick={() => handleClearVocabulary(lang.id, lang.name)}
-											>
-												{clearingVocabId === lang.id ? "Clearing…" : "Clear vocab"}
-											</button>
 										</div>
 									</div>
 									<span className="text-right tabular-nums">
@@ -1507,185 +1422,311 @@ function AdminLanguagesPage() {
 											{lang.enabled ? "On" : "Off"}
 										</Button>
 									</div>
-									<div className="flex flex-col gap-1 items-end">
-										<Button
-											variant="secondary"
-											size="sm"
-											className="h-7 text-xs px-2 font-mono w-full max-w-[11rem]"
-											disabled={
-												runningPipeline === lang.id ||
-												runningAiVocab === lang.id ||
-												runningLlmVocab === lang.id ||
-												runningHermitDaveLemmas === lang.id ||
-												runningCommonCurriculum === lang.id ||
-												runningCurriculumTrim === lang.id ||
-												runningVocabCleanup?.langId === lang.id ||
-												toggling === lang.id
-											}
-											onClick={() => handleRunAiVocab(lang.id)}
-										>
-											{runningAiVocab === lang.id ? "…" : "Common words"}
-										</Button>
-										<Button
-											variant="secondary"
-											size="sm"
-											className="h-7 text-xs px-2 font-mono w-full max-w-[11rem]"
-											disabled={
-												runningPipeline === lang.id ||
-												runningAiVocab === lang.id ||
-												runningLlmVocab === lang.id ||
-												runningHermitDaveLemmas === lang.id ||
-												runningCommonCurriculum === lang.id ||
-												runningCurriculumTrim === lang.id ||
-												runningVocabCleanup?.langId === lang.id ||
-												toggling === lang.id
-											}
-											title="HermitDave only: reads top 2000 ranked lines from hermitdave/FrequencyWords (no BNPD fold-in). Adds lemmas not already present in Common lemmas."
-											onClick={() => void handleRunHermitDaveCommonLemmas(lang.id)}
-										>
-											{runningHermitDaveLemmas === lang.id ? "…" : "Hermit Dave lemmas"}
-										</Button>
-										<Button
-											variant="secondary"
-											size="sm"
-											className="h-7 text-xs px-2 font-mono w-full max-w-[11rem]"
-											disabled={
-												runningPipeline === lang.id ||
-												runningAiVocab === lang.id ||
-												runningLlmVocab === lang.id ||
-												runningHermitDaveLemmas === lang.id ||
-												runningCommonCurriculum === lang.id ||
-												runningCurriculumTrim === lang.id ||
-												runningVocabCleanup?.langId === lang.id ||
-												toggling === lang.id
-											}
-											title="Needs curated common lemmas (editor) or a completed Common words job, then streams Kaikki and writes COMMON curriculum rows."
-											onClick={() => handleRunCommonCurriculum(lang.id)}
-										>
-											{runningCommonCurriculum === lang.id ? "…" : "Kaikki vocab"}
-										</Button>
-										<Button
-											variant="secondary"
-											size="sm"
-											className="h-7 text-xs px-2 font-mono w-full max-w-[11rem]"
-											disabled={
-												runningPipeline === lang.id ||
-												runningAiVocab === lang.id ||
-												runningLlmVocab === lang.id ||
-												runningHermitDaveLemmas === lang.id ||
-												runningCommonCurriculum === lang.id ||
-												runningCurriculumTrim === lang.id ||
-												runningVocabCleanup?.langId === lang.id ||
-												toggling === lang.id
-											}
-											title="After gloss cleanup: LLM reads batches of scoped curriculum rows (same scope as cloze generation: AI + frequency + common-tagged Kaikki; ~100 per request by default). After each run, isTestable is set true or false for every row in that scope from the LLM result. Uses CURRICULUM_TESTABILITY_TRIM_LLM_CONCURRENCY parallel batches."
-											onClick={() => void handleCurriculumTestabilityTrim(lang.id)}
-										>
-											{runningCurriculumTrim === lang.id ? "…" : "Trim testability"}
-										</Button>
-										<Button
-											variant="secondary"
-											size="sm"
-											className="h-7 text-xs px-2 font-mono w-full max-w-[11rem]"
-											disabled={
-												runningPipeline === lang.id ||
-												runningAiVocab === lang.id ||
-												runningLlmVocab === lang.id ||
-												runningHermitDaveLemmas === lang.id ||
-												runningCommonCurriculum === lang.id ||
-												runningCurriculumTrim === lang.id ||
-												runningVocabCleanup?.langId === lang.id ||
-												toggling === lang.id
-											}
-											title="Re-runs the same cloze job as Generate clozes on curriculum-scoped rows with isTestable=false (clears stored clozes for those units first). Only rows that pass generator + validator become testable. Summary: metadata.curriculumTestabilityTrimRetry when mode is cloze_reverify."
-											onClick={() => void handleCurriculumTestabilityTrimRetry(lang.id)}
-										>
-											{runningCurriculumTrim === lang.id ? "…" : "Re-check non-testable"}
-										</Button>
-										<Button
-											variant="secondary"
-											size="sm"
-											className="h-7 text-xs px-2 font-mono w-full max-w-[11rem]"
-											disabled={
-												runningPipeline === lang.id ||
-												runningAiVocab === lang.id ||
-												runningLlmVocab === lang.id ||
-												runningHermitDaveLemmas === lang.id ||
-												runningCommonCurriculum === lang.id ||
-												runningCurriculumTrim === lang.id ||
-												runningVocabCleanup?.langId === lang.id ||
-												toggling === lang.id
-											}
-											onClick={() => handleRunLlmVocab(lang.id)}
-										>
-											{runningLlmVocab === lang.id ? "…" : "LLM vocabulary"}
-										</Button>
-										<Button
-											variant="secondary"
-											size="sm"
-											className="h-7 text-xs px-2 font-mono w-full max-w-[11rem]"
-											disabled={
-												runningPipeline === lang.id ||
-												runningAiVocab === lang.id ||
-												runningLlmVocab === lang.id ||
-												runningHermitDaveLemmas === lang.id ||
-												runningCommonCurriculum === lang.id ||
-												runningCurriculumTrim === lang.id ||
-												runningVocabCleanup?.langId === lang.id ||
-												toggling === lang.id
-											}
-											onClick={() => handleRunPipeline(lang.id)}
-										>
-											{runningPipeline === lang.id ? "…" : "Legacy"}
-										</Button>
-										<Button
-											variant="outline"
-											size="sm"
-											className="h-7 text-xs px-2 font-mono w-full max-w-[11rem]"
-											disabled={
-												runningPipeline === lang.id ||
-												runningAiVocab === lang.id ||
-												runningLlmVocab === lang.id ||
-												runningHermitDaveLemmas === lang.id ||
-												runningCommonCurriculum === lang.id ||
-												runningCurriculumTrim === lang.id ||
-												runningVocabCleanup?.langId === lang.id ||
-												toggling === lang.id
-											}
-											onClick={() => void handleVocabCleanup(lang.id, true)}
-										>
-											{runningVocabCleanup?.langId === lang.id && runningVocabCleanup.dryRun
-												? "…"
-												: "Cleanup preview"}
-										</Button>
-										<Button
-											variant="secondary"
-											size="sm"
-											className="h-7 text-xs px-2 font-mono w-full max-w-[11rem]"
-											disabled={
-												runningPipeline === lang.id ||
-												runningAiVocab === lang.id ||
-												runningLlmVocab === lang.id ||
-												runningHermitDaveLemmas === lang.id ||
-												runningCommonCurriculum === lang.id ||
-												runningCurriculumTrim === lang.id ||
-												runningVocabCleanup?.langId === lang.id ||
-												toggling === lang.id
-											}
-											onClick={() => {
-												if (
-													!window.confirm(
-														"Apply vocabulary cleanup? This updates word ranks in the database.",
+									<div className="w-full">
+										<div className="flex gap-2 overflow-x-auto pb-1 pr-1">
+											<div className="min-w-52 flex-1 rounded-md border border-border/60 bg-muted/35 p-2.5 space-y-2">
+												<div>
+													<p className="text-xs font-semibold tracking-wide text-foreground">Vocab</p>
+													<p className="text-[10px] text-muted-foreground">Build and shape vocabulary</p>
+												</div>
+											<Button
+												variant="secondary"
+												size="sm"
+												className="h-7 text-[11px] px-2 font-mono w-full"
+												disabled={
+													runningPipeline === lang.id ||
+													runningAiVocab === lang.id ||
+													runningLlmVocab === lang.id ||
+													runningHermitDaveLemmas === lang.id ||
+													runningCommonCurriculum === lang.id ||
+													runningCurriculumTrim === lang.id ||
+													runningVocabCleanup?.langId === lang.id ||
+													toggling === lang.id
+												}
+												onClick={() => handleRunAiVocab(lang.id)}
+											>
+												{runningAiVocab === lang.id ? "…" : "Common words"}
+											</Button>
+											<Button
+												variant="secondary"
+												size="sm"
+												className="h-7 text-[11px] px-2 font-mono w-full"
+												disabled={
+													runningPipeline === lang.id ||
+													runningAiVocab === lang.id ||
+													runningLlmVocab === lang.id ||
+													runningHermitDaveLemmas === lang.id ||
+													runningCommonCurriculum === lang.id ||
+													runningCurriculumTrim === lang.id ||
+													runningVocabCleanup?.langId === lang.id ||
+													toggling === lang.id
+												}
+												title="HermitDave only: reads top 2000 ranked lines from hermitdave/FrequencyWords (no BNPD fold-in). Adds lemmas not already present in Common lemmas."
+												onClick={() => void handleRunHermitDaveCommonLemmas(lang.id)}
+											>
+												{runningHermitDaveLemmas === lang.id ? "…" : "Hermit Dave lemmas"}
+											</Button>
+											<Button
+												variant="secondary"
+												size="sm"
+												className="h-7 text-[11px] px-2 font-mono w-full"
+												disabled={
+													runningPipeline === lang.id ||
+													runningAiVocab === lang.id ||
+													runningLlmVocab === lang.id ||
+													runningHermitDaveLemmas === lang.id ||
+													runningCommonCurriculum === lang.id ||
+													runningCurriculumTrim === lang.id ||
+													runningVocabCleanup?.langId === lang.id ||
+													toggling === lang.id
+												}
+												title="Needs curated common lemmas (editor) or a completed Common words job, then streams Kaikki and writes COMMON curriculum rows."
+												onClick={() => handleRunCommonCurriculum(lang.id)}
+											>
+												{runningCommonCurriculum === lang.id ? "…" : "Kaikki vocab"}
+											</Button>
+											<Button
+												variant="outline"
+												size="sm"
+												className="h-7 text-[11px] px-2 font-mono w-full"
+												disabled={generatingFixedExpr === lang.id || !lang.enabled}
+												onClick={() => handleGenerateFixedExpressions(lang.id)}
+											>
+												{generatingFixedExpr === lang.id
+													? "Generating…"
+													: "Generate fixed expressions"}
+											</Button>
+											<Button
+												variant="secondary"
+												size="sm"
+												className="h-7 text-[11px] px-2 font-mono w-full"
+												disabled={
+													runningPipeline === lang.id ||
+													runningAiVocab === lang.id ||
+													runningLlmVocab === lang.id ||
+													runningHermitDaveLemmas === lang.id ||
+													runningCommonCurriculum === lang.id ||
+													runningCurriculumTrim === lang.id ||
+													runningVocabCleanup?.langId === lang.id ||
+													toggling === lang.id
+												}
+												title="After gloss cleanup: LLM reads batches of scoped curriculum rows (same scope as cloze generation: AI + frequency + common-tagged Kaikki; ~100 per request by default). After each run, isTestable is set true or false for every row in that scope from the LLM result. Uses CURRICULUM_TESTABILITY_TRIM_LLM_CONCURRENCY parallel batches."
+												onClick={() => void handleCurriculumTestabilityTrim(lang.id)}
+											>
+												{runningCurriculumTrim === lang.id ? "…" : "Trim testability"}
+											</Button>
+											<button
+												type="button"
+												disabled={
+													clearingLinksId === lang.id ||
+													clearingCorpusId === lang.id ||
+													clearingClozesId === lang.id ||
+													clearingVocabId === lang.id ||
+													runningAiVocab === lang.id ||
+													runningLlmVocab === lang.id ||
+													runningHermitDaveLemmas === lang.id ||
+													runningCommonCurriculum === lang.id ||
+													runningCurriculumTrim === lang.id ||
+													runningVocabCleanup?.langId === lang.id ||
+													generatingClozes === lang.id ||
+													toggling === lang.id
+												}
+												className="w-full h-7 text-[11px] px-2 font-mono text-destructive/90 hover:text-destructive hover:underline underline-offset-2 disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed"
+												onClick={() => handleClearVocabulary(lang.id, lang.name)}
+											>
+												{clearingVocabId === lang.id ? "Clearing…" : "Clear vocab"}
+											</button>
+											</div>
+											<div className="min-w-52 flex-1 rounded-md border border-border/60 bg-muted/35 p-2.5 space-y-2">
+												<div>
+													<p className="text-xs font-semibold tracking-wide text-foreground">Clozes</p>
+													<p className="text-[10px] text-muted-foreground">
+														Generate, inspect, and reset cloze data
+													</p>
+												</div>
+											<Button
+												variant="outline"
+												size="sm"
+												className="h-7 text-[11px] px-2 font-mono w-full"
+												disabled={generatingClozes === lang.id || !lang.enabled}
+												onClick={() => handleGenerateClozes(lang.id)}
+											>
+												{generatingClozes === lang.id ? "Queuing…" : "Generate clozes"}
+											</Button>
+											<p className="text-[10px] text-muted-foreground leading-tight">
+												Prompt review below (re-test individual lemma)
+											</p>
+											<Button
+												variant="secondary"
+												size="sm"
+												className="h-7 text-[11px] px-2 font-mono w-full"
+												disabled={
+													runningPipeline === lang.id ||
+													runningAiVocab === lang.id ||
+													runningLlmVocab === lang.id ||
+													runningHermitDaveLemmas === lang.id ||
+													runningCommonCurriculum === lang.id ||
+													runningCurriculumTrim === lang.id ||
+													runningVocabCleanup?.langId === lang.id ||
+													toggling === lang.id
+												}
+												title="Re-runs the same cloze job as Generate clozes on curriculum-scoped rows with isTestable=false (clears stored clozes for those units first). Only rows that pass generator + validator become testable. Summary: metadata.curriculumTestabilityTrimRetry when mode is cloze_reverify."
+												onClick={() => void handleCurriculumTestabilityTrimRetry(lang.id)}
+											>
+												{runningCurriculumTrim === lang.id ? "…" : "Re-check non-testable"}
+											</Button>
+											<button
+												type="button"
+												disabled={
+													clearingLinksId === lang.id ||
+													clearingCorpusId === lang.id ||
+													clearingClozesId === lang.id ||
+													clearingVocabId === lang.id ||
+													generatingClozes === lang.id ||
+													toggling === lang.id
+												}
+												className="w-full h-7 text-[11px] px-2 font-mono text-destructive/90 hover:text-destructive hover:underline underline-offset-2 disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed"
+												onClick={() => handleClearGeneratedClozes(lang.id, lang.name)}
+											>
+												{clearingClozesId === lang.id ? "Clearing…" : "Clear clozes"}
+											</button>
+											<button
+												type="button"
+												disabled={
+													clearingLinksId === lang.id ||
+													clearingCorpusId === lang.id ||
+													clearingClozesId === lang.id ||
+													clearingVocabId === lang.id ||
+													toggling === lang.id ||
+													runningPipeline === lang.id ||
+													runningAiVocab === lang.id ||
+													runningLlmVocab === lang.id ||
+													runningHermitDaveLemmas === lang.id ||
+													runningCommonCurriculum === lang.id ||
+													runningCurriculumTrim === lang.id ||
+													runningVocabCleanup?.langId === lang.id ||
+													lang.sentenceCount === 0
+												}
+												className="w-full h-7 text-[11px] px-2 font-mono text-destructive/90 hover:text-destructive hover:underline underline-offset-2 disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed"
+												onClick={() => handleClearSentenceLinks(lang.id, lang.name)}
+											>
+												{clearingLinksId === lang.id ? "Clearing…" : "Clear sentence links"}
+											</button>
+											<button
+												type="button"
+												disabled={
+													clearingLinksId === lang.id ||
+													clearingCorpusId === lang.id ||
+													clearingClozesId === lang.id ||
+													clearingVocabId === lang.id ||
+													toggling === lang.id ||
+													runningPipeline === lang.id ||
+													runningAiVocab === lang.id ||
+													runningLlmVocab === lang.id ||
+													runningHermitDaveLemmas === lang.id ||
+													runningCommonCurriculum === lang.id ||
+													runningCurriculumTrim === lang.id ||
+													runningVocabCleanup?.langId === lang.id ||
+													generatingClozes === lang.id ||
+													lang.sentenceCount === 0
+												}
+												className="w-full h-7 text-[11px] px-2 font-mono text-destructive/90 hover:text-destructive hover:underline underline-offset-2 disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed"
+												onClick={() => handleClearSentenceCorpus(lang.id, lang.name)}
+											>
+												{clearingCorpusId === lang.id ? "Clearing…" : "Delete sentences"}
+											</button>
+											</div>
+											<div className="min-w-52 flex-1 rounded-md border border-border/60 bg-muted/35 p-2.5 space-y-2">
+												<div>
+													<p className="text-xs font-semibold tracking-wide text-foreground">Unused?</p>
+													<p className="text-[10px] text-muted-foreground">Legacy and cleanup tools</p>
+												</div>
+											<Button
+												variant="secondary"
+												size="sm"
+												className="h-7 text-[11px] px-2 font-mono w-full"
+												disabled={
+													runningPipeline === lang.id ||
+													runningAiVocab === lang.id ||
+													runningLlmVocab === lang.id ||
+													runningHermitDaveLemmas === lang.id ||
+													runningCommonCurriculum === lang.id ||
+													runningCurriculumTrim === lang.id ||
+													runningVocabCleanup?.langId === lang.id ||
+													toggling === lang.id
+												}
+												onClick={() => handleRunLlmVocab(lang.id)}
+											>
+												{runningLlmVocab === lang.id ? "…" : "LLM vocabulary"}
+											</Button>
+											<Button
+												variant="secondary"
+												size="sm"
+												className="h-7 text-[11px] px-2 font-mono w-full"
+												disabled={
+													runningPipeline === lang.id ||
+													runningAiVocab === lang.id ||
+													runningLlmVocab === lang.id ||
+													runningHermitDaveLemmas === lang.id ||
+													runningCommonCurriculum === lang.id ||
+													runningCurriculumTrim === lang.id ||
+													runningVocabCleanup?.langId === lang.id ||
+													toggling === lang.id
+												}
+												onClick={() => handleRunPipeline(lang.id)}
+											>
+												{runningPipeline === lang.id ? "…" : "Legacy"}
+											</Button>
+											<Button
+												variant="outline"
+												size="sm"
+												className="h-7 text-[11px] px-2 font-mono w-full"
+												disabled={
+													runningPipeline === lang.id ||
+													runningAiVocab === lang.id ||
+													runningLlmVocab === lang.id ||
+													runningHermitDaveLemmas === lang.id ||
+													runningCommonCurriculum === lang.id ||
+													runningCurriculumTrim === lang.id ||
+													runningVocabCleanup?.langId === lang.id ||
+													toggling === lang.id
+												}
+												onClick={() => void handleVocabCleanup(lang.id, true)}
+											>
+												{runningVocabCleanup?.langId === lang.id && runningVocabCleanup.dryRun
+													? "…"
+													: "Cleanup preview"}
+											</Button>
+											<Button
+												variant="secondary"
+												size="sm"
+												className="h-7 text-[11px] px-2 font-mono w-full"
+												disabled={
+													runningPipeline === lang.id ||
+													runningAiVocab === lang.id ||
+													runningLlmVocab === lang.id ||
+													runningHermitDaveLemmas === lang.id ||
+													runningCommonCurriculum === lang.id ||
+													runningCurriculumTrim === lang.id ||
+													runningVocabCleanup?.langId === lang.id ||
+													toggling === lang.id
+												}
+												onClick={() => {
+													if (
+														!window.confirm(
+															"Apply vocabulary cleanup? This updates word ranks in the database.",
+														)
 													)
-												)
-													return
-												void handleVocabCleanup(lang.id, false)
-											}}
-										>
-											{runningVocabCleanup?.langId === lang.id && !runningVocabCleanup.dryRun
-												? "…"
-												: "Cleanup apply"}
-										</Button>
+														return
+													void handleVocabCleanup(lang.id, false)
+												}}
+											>
+												{runningVocabCleanup?.langId === lang.id && !runningVocabCleanup.dryRun
+													? "…"
+													: "Cleanup apply"}
+											</Button>
+											</div>
+										</div>
 									</div>
 								</div>
 
@@ -1695,28 +1736,7 @@ function AdminLanguagesPage() {
 											<p className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.15em]">
 												Ingestion jobs (latest {JOBS_PER_LANGUAGE})
 											</p>
-											<div className="flex items-center gap-2">
-												<Button
-													variant="outline"
-													size="sm"
-													className="h-6 text-[11px] px-2 font-mono"
-													disabled={generatingFixedExpr === lang.id}
-													onClick={() => handleGenerateFixedExpressions(lang.id)}
-												>
-													{generatingFixedExpr === lang.id
-														? "Generating…"
-														: "Generate fixed expressions"}
-												</Button>
-												<Button
-													variant="outline"
-													size="sm"
-													className="h-6 text-[11px] px-2 font-mono"
-													disabled={generatingClozes === lang.id}
-													onClick={() => handleGenerateClozes(lang.id)}
-												>
-													{generatingClozes === lang.id ? "Queuing…" : "Generate clozes"}
-												</Button>
-											</div>
+											<div />
 										</div>
 										<div className="px-4 pb-3 bg-muted/20 border-t border-border/40">
 											<div className="flex items-start gap-3 pt-3">
