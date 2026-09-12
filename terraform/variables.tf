@@ -68,7 +68,7 @@ variable "uploads_cors_allowed_origins" {
 variable "ses_from_email" {
   type        = string
   default     = "no-reply@nwords.live"
-  description = "From address stored in Secrets Manager (must be on a verified SES identity for this account/region)."
+  description = "From address stored in SSM Parameter Store (must be on a verified SES identity for this account/region)."
 }
 
 variable "ses_configuration_set" {
@@ -103,21 +103,36 @@ variable "google_auth_enabled" {
   default = true
 }
 
-variable "openai_api_key_secret_arn" {
-  type        = string
-  description = "arn:aws:secretsmanager:eu-central-1:320205321328:secret:nwords_openai_api_key-eoQgrp"
-  default     = ""
+variable "manage_shared_parameters" {
+  type        = bool
+  description = "When true, this workspace creates account-wide SSM parameters (OpenAI + Google). Use true in production only."
+  default     = false
 }
 
-variable "google_client_id_secret_arn" {
-  type        = string
-  description = "arn:aws:secretsmanager:eu-central-1:320205321328:secret:nwords_google_client_id-RWj3Cm"
-  default     = ""
+variable "seed_shared_parameters_from_secrets_manager" {
+  type        = bool
+  description = "When creating shared SSM parameters, copy values from existing Secrets Manager secrets of the same name if sensitive vars are unset. Set false after cutover."
+  default     = false
 }
 
-variable "google_client_secret_secret_arn" {
+variable "openai_api_key" {
   type        = string
-  description = "arn:aws:secretsmanager:eu-central-1:320205321328:secret:nwords_google_client_secret-ifjWcg"
+  sensitive   = true
   default     = ""
+  description = "OpenAI API key for shared SSM parameter nwords_openai_api_key (production workspace with manage_shared_parameters). Prefer TF_VAR_openai_api_key or secrets.auto.tfvars."
+}
+
+variable "google_client_id" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "Google OAuth client ID for shared SSM parameter nwords_google_client_id."
+}
+
+variable "google_client_secret" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "Google OAuth client secret for shared SSM parameter nwords_google_client_secret."
 }
 

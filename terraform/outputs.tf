@@ -27,7 +27,7 @@ output "better_auth_url" {
 }
 
 output "database_url" {
-  description = "PostgreSQL URL (same value as Secrets Manager DATABASE_URL)."
+  description = "PostgreSQL URL (same value as SSM parameter DATABASE_URL)."
   value       = local.database_url
   sensitive   = true
 }
@@ -36,12 +36,9 @@ output "tenant_database_name" {
   value = local.tenant_database_name
 }
 
-output "database_secret_arn" {
-  value = aws_secretsmanager_secret.database.arn
-}
-
-output "app_secret_arn" {
-  value = aws_secretsmanager_secret.app.arn
+output "database_url_parameter_name" {
+  description = "SSM Parameter Store name for DATABASE_URL (SecureString)."
+  value       = aws_ssm_parameter.database_url.name
 }
 
 output "uploads_bucket" {

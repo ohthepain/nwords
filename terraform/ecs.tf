@@ -12,6 +12,39 @@ resource "aws_cloudwatch_log_group" "app" {
   retention_in_days = local.is_prod ? 30 : 7
 }
 
+locals {
+  ecs_app_environment = concat(
+    [
+      { name = "NODE_ENV", value = "production" },
+      { name = "PORT", value = tostring(var.app_port) },
+      { name = "AWS_REGION", value = var.aws_region },
+      { name = "S3_UPLOADS_BUCKET", value = aws_s3_bucket.uploads.bucket },
+      { name = "S3_BUCKET", value = aws_s3_bucket.uploads.bucket },
+      { name = "BETTER_AUTH_URL", value = local.better_auth_url },
+      { name = "SES_CONFIGURATION_SET", value = var.ses_configuration_set },
+    ],
+    var.google_auth_enabled ? [] : [
+      { name = "GOOGLE_CLIENT_ID", value = "" },
+      { name = "GOOGLE_CLIENT_SECRET", value = "" },
+    ],
+  )
+
+  ecs_app_secrets = concat(
+    [
+      { name = "DATABASE_URL", valueFrom = aws_ssm_parameter.database_url.arn },
+      { name = "BETTER_AUTH_SECRET", valueFrom = aws_ssm_parameter.better_auth_secret.arn },
+      { name = "OPENAI_API_KEY", valueFrom = local.ssm_openai_api_key_arn },
+      { name = "AUTH_SUPERADMIN_EMAILS", valueFrom = aws_ssm_parameter.auth_superadmin_emails.arn },
+      { name = "SEED_ADMIN_PASSWORD", valueFrom = aws_ssm_parameter.seed_admin_password.arn },
+      { name = "SES_FROM_EMAIL", valueFrom = aws_ssm_parameter.ses_from_email.arn },
+    ],
+    var.google_auth_enabled ? [
+      { name = "GOOGLE_CLIENT_ID", valueFrom = local.ssm_google_client_id_arn },
+      { name = "GOOGLE_CLIENT_SECRET", valueFrom = local.ssm_google_client_secret_arn },
+    ] : [],
+  )
+}
+
 resource "aws_ecs_task_definition" "app" {
   family                   = "${local.name_prefix}-task"
   network_mode             = "awsvpc"
@@ -41,52 +74,8 @@ resource "aws_ecs_task_definition" "app" {
 
       essential = true
 
-      environment = [
-        { name = "NODE_ENV", value = "production" },
-        { name = "PORT", value = tostring(var.app_port) },
-        { name = "AWS_REGION", value = var.aws_region },
-        { name = "S3_UPLOADS_BUCKET", value = aws_s3_bucket.uploads.bucket },
-        # API's Tatoeba audio hydration checks S3_BUCKET.
-        { name = "S3_BUCKET", value = aws_s3_bucket.uploads.bucket },
-        # Better Auth needs the public base URL for trusted origins/callback generation.
-        { name = "BETTER_AUTH_URL", value = local.better_auth_url },
-        { name = "SES_CONFIGURATION_SET", value = var.ses_configuration_set },
-      ]
-
-      secrets = [
-        {
-          name      = "DATABASE_URL"
-          valueFrom = "${aws_secretsmanager_secret.database.arn}:DATABASE_URL::"
-        },
-        {
-          name      = "BETTER_AUTH_SECRET"
-          valueFrom = "${aws_secretsmanager_secret.app.arn}:BETTER_AUTH_SECRET::"
-        },
-        {
-          name      = "OPENAI_API_KEY"
-          valueFrom = "${aws_secretsmanager_secret.app.arn}:OPENAI_API_KEY::"
-        },
-        {
-          name      = "GOOGLE_CLIENT_ID"
-          valueFrom = "${aws_secretsmanager_secret.app.arn}:GOOGLE_CLIENT_ID::"
-        },
-        {
-          name      = "GOOGLE_CLIENT_SECRET"
-          valueFrom = "${aws_secretsmanager_secret.app.arn}:GOOGLE_CLIENT_SECRET::"
-        },
-        {
-          name      = "AUTH_SUPERADMIN_EMAILS"
-          valueFrom = "${aws_secretsmanager_secret.app.arn}:AUTH_SUPERADMIN_EMAILS::"
-        },
-        {
-          name      = "SEED_ADMIN_PASSWORD"
-          valueFrom = "${aws_secretsmanager_secret.app.arn}:SEED_ADMIN_PASSWORD::"
-        },
-        {
-          name      = "SES_FROM_EMAIL"
-          valueFrom = "${aws_secretsmanager_secret.app.arn}:SES_FROM_EMAIL::"
-        }
-      ]
+      environment = local.ecs_app_environment
+      secrets     = local.ecs_app_secrets
 
       logConfiguration = {
         logDriver = "awslogs"

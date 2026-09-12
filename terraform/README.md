@@ -44,9 +44,22 @@ The deploy role needs at least: ECR push/pull to the shared repo, `ecs:UpdateSer
 
 Deploy jobs set `TF_VAR_network_state_bucket` and `TF_VAR_environment` so `terraform output` works without committing secrets.
 
-### Application database URL (not a GitHub secret)
+### Application secrets (SSM Parameter Store, not GitHub)
 
-`DATABASE_URL` for **running** the app in ECS is created by Terraform in **AWS Secrets Manager** (`terraform/secrets.tf`) and injected into the task definition (`terraform/ecs.tf`). You do **not** add `DATABASE_URL` to GitHub for deploy.
+Runtime secrets for ECS are **SecureString** parameters in **AWS Systems Manager Parameter Store** (`terraform/parameters.tf`), injected via the task definition (`terraform/ecs.tf`). You do **not** add `DATABASE_URL` or API keys to GitHub for deploy.
+
+| Parameter | Scope |
+|-----------|--------|
+| `nwords_openai_api_key`, `nwords_google_client_id`, `nwords_google_client_secret` | Account-wide; Terraform **creates** these only when `manage_shared_parameters = true` (**production** tfvars). **Staging** reads them via data sources. |
+| `nwords-{staging\|production}-DATABASE_URL`, `…-BETTER_AUTH_SECRET`, `…-AUTH_SUPERADMIN_EMAILS`, `…-SEED_ADMIN_PASSWORD`, `…-SES_FROM_EMAIL` | Per environment |
+
+Shared OpenAI / Google values can be set at apply time with `TF_VAR_openai_api_key`, `TF_VAR_google_client_id`, and `TF_VAR_google_client_secret`, or a **gitignored** `environments/<env>/secrets.auto.tfvars`. On first cutover, production can copy from legacy Secrets Manager when `seed_shared_parameters_from_secrets_manager = true` (default) and those vars are unset.
+
+**Apply order:** run **`production`** apply before **staging** so shared parameters exist.
+
+The **shared-aws RDS master** password remains in **Secrets Manager** (read by Terraform for DB provisioning only, not injected into ECS).
+
+Your Terraform apply principal needs `ssm:PutParameter`, `ssm:GetParameter*`, and (for SecureString) KMS decrypt via SSM. The ECS **execution** role reads only the parameters referenced in the task definition.
 
 The **`build-and-test`** job in CI uses a **dummy** `DATABASE_URL` in the workflow so `pnpm run build` can load `@nwords/db` (Prisma is initialized at import time). That is unrelated to Terraform secrets.
 
@@ -68,7 +81,7 @@ The **`build-and-test`** job in CI uses a **dummy** `DATABASE_URL` in the workfl
 
 Each ECS task runs **`prisma migrate deploy`** on startup (see `scripts/docker-entrypoint.sh` in the repo) so the schema stays in sync with the image. RDS is not publicly reachable, so migrations are not run from GitHub Actions.
 
-For a **local** or emergency run against the real URL, use `terraform output -raw database_url` (sensitive) or the `DATABASE_URL` key in Secrets Manager, then from the repo: `pnpm db:migrate:deploy`. Stopping RDS does not change Terraform state.
+For a **local** or emergency run against the real URL, use `terraform output -raw database_url` (sensitive) or read the `nwords-{env}-DATABASE_URL` SSM parameter, then from the repo: `pnpm db:migrate:deploy`. Stopping RDS does not change Terraform state.
 
 ### Initial seed (languages + default admin)
 
@@ -79,7 +92,7 @@ Seeding is **not** automatic on deploy. After the first successful migration, ru
 
 ### Prisma P1010 (“denied access on the database `nwords`”)
 
-That usually means the DB user in `DATABASE_URL` cannot `CONNECT` to `nwords`, or lacks privileges on `public` objects (for example after a restore or a manually created role). Align Secrets Manager with Terraform (`terraform apply` updates the database secret), confirm the URL user matches the RDS master user from Terraform (`db_username`), then run `scripts/fix-rds-db-permissions.sql` as the master user (Part A against `postgres`, Part B against `nwords`). The app `DATABASE_URL` includes `sslmode=require` for RDS.
+That usually means the DB user in `DATABASE_URL` cannot `CONNECT` to `nwords`, or lacks privileges on `public` objects (for example after a restore or a manually created role). Align the SSM `DATABASE_URL` parameter with Terraform (`terraform apply` updates it), confirm the URL user matches the tenant role from Terraform, then run `scripts/fix-rds-db-permissions.sql` as the master user (Part A against `postgres`, Part B against `nwords`). The app `DATABASE_URL` includes `sslmode=require` for RDS.
 
 ## Staging cost control (`scripts/staging-down.sh` / `staging-up.sh`)
 
@@ -96,13 +109,13 @@ GitHub Actions: **Staging down** (scheduled + manual) and **Staging up** (manual
 
 ## Amazon SES (password reset and email verification)
 
-The app sends mail via **SES API v2** when `SES_FROM_EMAIL` is set (injected from Secrets Manager as `ses_from_email` in Terraform). The ECS task role includes `ses:SendEmail` and `ses:SendRawEmail` on `*` (same shape as OctaCard).
+The app sends mail via **SES API v2** when `SES_FROM_EMAIL` is set (injected from SSM as `ses_from_email` in Terraform). The ECS task role includes `ses:SendEmail` and `ses:SendRawEmail` on `*` (same shape as OctaCard).
 
 ### Variables
 
 | Variable | Purpose |
 |----------|---------|
-| `ses_from_email` | Stored in the app secret; must be an address or domain you verified in SES for **eu-central-1**. Use environment-specific senders when useful (e.g. `no-reply@staging.nwords.live` vs `no-reply@nwords.live`). |
+| `ses_from_email` | Stored in SSM (`nwords-{env}-SES_FROM_EMAIL`); must be an address or domain you verified in SES for **eu-central-1**. Use environment-specific senders when useful (e.g. `no-reply@staging.nwords.live` vs `no-reply@nwords.live`). |
 | `ses_configuration_set` | If non-empty, Terraform creates `aws_sesv2_configuration_set` (reputation metrics on, TLS **REQUIRE**) and sets ECS env `SES_CONFIGURATION_SET`. Leave empty to skip the resource and send without a configuration set. |
 | `ses_domain_name` | If non-empty, Terraform creates `aws_sesv2_email_identity` with Easy DKIM (`RSA_2048_BIT`). Add the **DKIM CNAME** records SES shows (console or `terraform show`) to Route 53 for that zone before expecting good deliverability. |
 
@@ -111,7 +124,7 @@ The app sends mail via **SES API v2** when `SES_FROM_EMAIL` is set (injected fro
 1. **Verify the sending domain or address** in SES (same region as the app, `eu-central-1`). `ses_from_email` must sit on that verified identity.
 2. **DKIM**: After `aws_sesv2_email_identity` (if used), publish the three CNAME records; wait for SES to show the identity as healthy.
 3. **Sandbox**: New accounts can only mail verified recipients until you request **production access** in SES.
-4. **Cutover**: Set `ses_from_email` in tfvars / Secrets Manager, apply Terraform so ECS receives `SES_FROM_EMAIL` and optional `SES_CONFIGURATION_SET`, then redeploy. Without `SES_FROM_EMAIL`, the app logs the intended message instead of calling SES (local dev).
+4. **Cutover**: Set `ses_from_email` in tfvars, apply Terraform so ECS receives `SES_FROM_EMAIL` and optional `SES_CONFIGURATION_SET`, then redeploy. Without `SES_FROM_EMAIL`, the app logs the intended message instead of calling SES (local dev).
 
 ### Troubleshooting
 
@@ -122,7 +135,7 @@ The app sends mail via **SES API v2** when `SES_FROM_EMAIL` is set (injected fro
 
 ## Terraform destroy
 
-Secrets use `lifecycle { prevent_destroy = true }`. To destroy an environment, remove those blocks (or `terraform state rm` the secrets) if you accept losing secret metadata, then `terraform workspace select <env> && terraform destroy -var-file=environments/<env>/terraform.tfvars`.
+SSM parameters for the app are managed by this stack. To destroy an environment, `terraform workspace select <env> && terraform destroy -var-file=environments/<env>/terraform.tfvars`. Account-wide parameters (`nwords_openai_api_key`, etc.) are owned by the **production** workspace only; do not destroy production until you have moved or removed those parameters if other envs still need them.
 
 ## State lock issues
 
